@@ -4,6 +4,7 @@ import sendEmail from '../utils/sendEmail.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import User from '../models/User.js';
 import getPasswordResetEmail from '../templates/emails/passwordReset.js';
+import logger from '../utils/logger.js';
 
 /** Issues the JWT. Kept in one place so claims stay consistent. */
 const sendTokenResponse = (user, statusCode, res) => {
@@ -154,7 +155,7 @@ export const forgotPassword = asyncHandler(async (req, res, next) => {
       html: getPasswordResetEmail(user.name, resetUrl)
     });
   } catch (err) {
-    console.error('Password reset email failed:', err.message);
+    logger.error({ err }, 'password reset email failed');
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
     await user.save({ validateBeforeSave: false });

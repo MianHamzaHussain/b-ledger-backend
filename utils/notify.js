@@ -1,6 +1,7 @@
 import Notification from '../models/Notification.js';
 import { emitToBusiness } from './socket.js';
 import { dispatchWebPushNotification } from './pushHelper.js';
+import logger from './logger.js';
 
 /**
  * Raise an in-app notification. This is a **side effect** of a real action, so
@@ -20,7 +21,7 @@ export const notify = async ({ business, type, title, body, link }) => {
   try {
     doc = await Notification.create({ business, type, title, body, link });
   } catch (err) {
-    console.error('notify failed:', err.message);
+    logger.error({ err, business, type }, 'notify failed');
     return null;
   }
 
@@ -37,7 +38,7 @@ export const notify = async ({ business, type, title, body, link }) => {
       isRead: false
     });
   } catch (err) {
-    console.error('notify emit failed:', err.message);
+    logger.error({ err, business }, 'notify emit failed');
   }
 
   // Fire-and-forget: web push fans out over the network to every device, so it

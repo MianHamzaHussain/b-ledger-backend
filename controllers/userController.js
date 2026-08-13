@@ -5,6 +5,7 @@ import User from '../models/User.js';
 import Role from '../models/Role.js';
 import sendEmail from '../utils/sendEmail.js';
 import { getInvitationEmail } from '../templates/emails/invitation.js';
+import logger from '../utils/logger.js';
 
 /** Invite links live for 24h — long enough for a new hire to act, short enough to expire. */
 const INVITE_EXPIRY_MS = 24 * 60 * 60 * 1000;
@@ -29,7 +30,7 @@ const sendInvite = async user => {
     });
     return true;
   } catch (err) {
-    console.error('Failed to send invitation email:', err.message);
+    logger.error({ err }, 'failed to send invitation email');
     return false;
   }
 };
