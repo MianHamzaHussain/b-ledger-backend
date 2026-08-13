@@ -1,5 +1,7 @@
 import nodemailer from 'nodemailer';
 
+import logger from './logger.js';
+
 /**
  * SMTP mailer. Works against a real provider AND a local catcher like Mailpit
  * (host `localhost`, port `1025`, no auth) — which is why two things are
@@ -37,7 +39,7 @@ const sendEmail = async options => {
 
   const info = await transporter.sendMail(message);
 
-  console.log('Message sent: %s', info.messageId);
+  logger.info({ messageId: info.messageId, to: options.email }, 'email sent');
 };
 
 export default sendEmail;

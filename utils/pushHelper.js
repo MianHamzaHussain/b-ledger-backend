@@ -1,6 +1,7 @@
 import webpush from 'web-push';
 import User from '../models/User.js';
 import Role from '../models/Role.js';
+import logger from './logger.js';
 
 let isVapidInitialized = false;
 
@@ -72,6 +73,6 @@ export const dispatchWebPushNotification = async (businessId, payload, excludeUs
     );
   } catch (error) {
     // Notifications are never allowed to fail the request that triggered them.
-    console.error('Push notification dispatch error:', error.message);
+    logger.error({ err: error }, 'push notification dispatch error');
   }
 };

@@ -16,6 +16,7 @@ import {
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
+import logger from '../utils/logger.js';
 import {
   ORDER_STATUS,
   ORDER_TRANSITIONS,
@@ -55,7 +56,7 @@ const notifyLowStock = async (business, lineItems) => {
       }
     }
   } catch (err) {
-    console.error('low-stock alert failed:', err.message);
+    logger.warn({ err }, 'low-stock alert failed');
   }
 };
 

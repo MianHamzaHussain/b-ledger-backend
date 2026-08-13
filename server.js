@@ -8,11 +8,12 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import hpp from 'hpp';
-import morgan from 'morgan';
+import { pinoHttp } from 'pino-http';
 import rateLimit from 'express-rate-limit';
 import { xss } from 'express-xss-sanitizer';
 import swaggerUi from 'swagger-ui-express';
 
+import logger from './utils/logger.js';
 import connectDB from './config/db.js';
 import swaggerSpec from './config/swagger.js';
 import routes from './routes/index.js';
@@ -62,9 +63,21 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(xss());
 app.use(hpp());
 
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-}
+// Structured request logging in every environment (JSON in prod, pretty in
+// dev). Each request gets a child logger on `req.log` with a correlation id;
+// 4xx log at warn, 5xx at error, everything else at info. The health probe is
+// silenced so uptime pings do not drown the log.
+app.use(
+  pinoHttp({
+    logger,
+    customLogLevel(_req, res, err) {
+      if (res.statusCode >= 500 || err) return 'error';
+      if (res.statusCode >= 400) return 'warn';
+      return 'info';
+    },
+    autoLogging: { ignore: req => req.url === '/api/v1/health' }
+  })
+);
 
 // Broad backstop. Credential endpoints apply their own far tighter limit.
 app.use(
@@ -100,12 +113,11 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () =>
-  console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`)
+  logger.info(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`)
 );
 
 process.on('unhandledRejection', err => {
-  console.error(`Unhandled rejection: ${err.message}`);
-  console.error(err.stack);
+  logger.error({ err }, 'unhandled rejection');
 });
 
 export default app;

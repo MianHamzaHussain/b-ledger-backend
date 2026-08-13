@@ -22,6 +22,7 @@ that tracks orders, payments, expenses and per-business profit/loss.
 | Push      | `web-push` (VAPID) for PWA background notifications                        |
 | Docs      | `swagger-jsdoc` + `swagger-ui-express` at `/api-docs`                      |
 | Mail      | Nodemailer (SMTP)                                                          |
+| Logging   | `pino` + `pino-http` — JSON in prod, pretty in dev, request ids, redaction |
 | Hardening | `helmet`, `hpp`, `express-rate-limit`, `express-xss-sanitizer`, `cors`     |
 
 Env is loaded by Node itself (`node --env-file=.env`) — **no `dotenv`**.
@@ -173,7 +174,7 @@ const ThingSchema = new mongoose.Schema(
 
 ```
 helmet → cors → swagger → json/urlencoded → xss → hpp
-→ morgan(dev) → rateLimit → static → /api/v1/health
+→ pino-http → rateLimit → static → /api/v1/health
 → /api/v1 routes → 404 → errorHandler
 ```
 
@@ -445,13 +446,13 @@ cost more the longer it waits.
 
 ### Should do next
 
-| Gap                          | Why it matters                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Request validation (Zod)** | Started: `middlewares/validate.js` + `schemas/` runs Zod after `protect`/`can`, before the controller — it 400s with the field-error array (§4.1), strips unknown keys, and preserves the JWT-stamped `createdBy`/`updatedBy`. Wired on the **money routes** (`finance/*`, `partners/*`). **Still to do:** extend the same `validate(schema)` to orders and consignments. |
-| **Tests**                    | Done (initial, risk-based): `node:test` accounting + permission suite in `test/` (ledger invariants, order/walk-in/courier posting, partner distribution, resolver matrix), run against a throwaway Mongo (`MONGO_TEST_URI`). Run via `npm test`, enforced in CI. Expand to more controllers over time.                                                                   |
-| **ESLint + Prettier**        | Done: oxlint + Prettier configured (`.oxlintrc.json`, `.prettierrc.json`), a composite `npm run check`, a CI workflow, and a husky/lint-staged pre-commit that blocks unformatted / lint-broken commits.                                                                                                                                                                  |
-| **Structured logging**       | `console.log`/`console.error` only — no levels, no request ids, no redaction. `pino` + `pino-http`.                                                                                                                                                                                                                                                                       |
-| **Env validation at boot**   | Done: `config/env.js` (imported first in `server.js`) fails fast on a missing `MONGODB_URI`/`JWT_SECRET` instead of surfacing it at first login.                                                                                                                                                                                                                          |
+| Gap                          | Why it matters                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Request validation (Zod)** | Started: `middlewares/validate.js` + `schemas/` runs Zod after `protect`/`can`, before the controller — it 400s with the field-error array (§4.1), strips unknown keys, and preserves the JWT-stamped `createdBy`/`updatedBy`. Wired on the **money routes** (`finance/*`, `partners/*`). **Still to do:** extend the same `validate(schema)` to orders and consignments.          |
+| **Tests**                    | Done (initial, risk-based): `node:test` accounting + permission suite in `test/` (ledger invariants, order/walk-in/courier posting, partner distribution, resolver matrix), run against a throwaway Mongo (`MONGO_TEST_URI`). Run via `npm test`, enforced in CI. Expand to more controllers over time.                                                                            |
+| **ESLint + Prettier**        | Done: oxlint + Prettier configured (`.oxlintrc.json`, `.prettierrc.json`), a composite `npm run check`, a CI workflow, and a husky/lint-staged pre-commit that blocks unformatted / lint-broken commits.                                                                                                                                                                           |
+| **Structured logging**       | Done: `pino` + `pino-http` route every runtime log through one logger (`utils/logger.js`) — JSON in prod, pretty in dev, `silent` under test; per-request correlation ids; redacts the `authorization`/`cookie` headers and any `password`. Mounted where morgan was (§5). The seeder (a CLI) and `config/env.js` (runs before the logger exists) intentionally stay on `console`. |
+| **Env validation at boot**   | Done: `config/env.js` (imported first in `server.js`) fails fast on a missing `MONGODB_URI`/`JWT_SECRET` instead of surfacing it at first login.                                                                                                                                                                                                                                   |
 
 ### Deferred deliberately
 

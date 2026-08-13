@@ -1,4 +1,5 @@
 import ErrorResponse from '../utils/errorResponse.js';
+import logger from '../utils/logger.js';
 
 /**
  * Terminal error middleware. Translates Mongoose failures into clean 4xx
@@ -38,10 +39,11 @@ const errorHandler = (err, req, res, next) => {
 
   const statusCode = error.statusCode || 500;
 
-  // A 500 is a bug, not a user mistake — log the stack so it is diagnosable.
-  // 4xx responses are expected traffic and stay quiet.
+  // A 500 is a bug, not a user mistake — log the stack (with the request's
+  // correlation id, via req.log when pino-http attached it) so it is
+  // diagnosable. 4xx responses are expected traffic and stay quiet.
   if (statusCode >= 500) {
-    console.error(`${req.method} ${req.originalUrl} →`, err.stack || err);
+    (req.log || logger).error({ err }, `${req.method} ${req.originalUrl} failed`);
   }
 
   res.status(statusCode).json({
