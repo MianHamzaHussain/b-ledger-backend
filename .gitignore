@@ -1,0 +1,36 @@
+# Dependencies
+/node_modules
+
+# Production
+/build
+/dist
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables — NEVER commit these
+.env
+.env.*
+!example.env
+
+# Secrets / keys
+vapid.json
+vapid.txt
+*.pem
+*.key
+
+# Uploads (runtime-generated)
+/public/images/uploads
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel

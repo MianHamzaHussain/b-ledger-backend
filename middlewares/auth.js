@@ -1,0 +1,49 @@
+import jwt from 'jsonwebtoken';
+import asyncHandler from './asyncHandler.js';
+import ErrorResponse from '../utils/errorResponse.js';
+import User from '../models/User.js';
+
+/**
+ * Verifies the Bearer token and loads the user WITH their role populated —
+ * `can()` needs role.permissions and role.fullAccess on every request.
+ */
+const protect = asyncHandler(async (req, res, next) => {
+  let token;
+
+  if (req.headers.authorization?.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (!token) {
+    return next(new ErrorResponse('Not authorized to access this route', 401));
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
+    return next(new ErrorResponse('Not authorized to access this route', 401));
+  }
+
+  req.user = await User.findById(decoded.id).populate('role');
+
+  if (!req.user) {
+    return next(new ErrorResponse('Not authorized to access this route', 401));
+  }
+
+  if (req.user.status === 'inactive') {
+    return next(new ErrorResponse('Your account is inactive. Please contact administrator.', 401));
+  }
+
+  // Audit fields are stamped here so no controller has to remember to.
+  // Assigning after auth also means a client cannot forge them via the body.
+  if (req.method === 'POST') {
+    req.body.createdBy = req.user.id;
+  } else if (req.method === 'PUT' || req.method === 'PATCH') {
+    req.body.updatedBy = req.user.id;
+  }
+
+  next();
+});
+
+export { protect };

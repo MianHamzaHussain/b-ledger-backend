@@ -1,0 +1,54 @@
+{
+  "name": "b-ledger-backend",
+  "version": "1.0.0",
+  "description": "B Ledger REST API — Express + MongoDB",
+  "main": "server.js",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "nodemon --env-file=.env server.js",
+    "start": "node --env-file=.env server.js",
+    "seed": "node --env-file=.env seeder.js -i",
+    "seed:destroy": "node --env-file=.env seeder.js -d",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
+    "lint": "oxlint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run format:check && npm test",
+    "prepare": "husky || true"
+  },
+  "lint-staged": {
+    "*.js": [
+      "oxlint",
+      "prettier --write"
+    ]
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.2.1",
+    "express-xss-sanitizer": "^2.0.1",
+    "helmet": "^8.1.0",
+    "hpp": "^0.2.3",
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^7.0.0",
+    "morgan": "^1.10.0",
+    "nodemailer": "^7.0.10",
+    "socket.io": "^4.8.3",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "web-push": "^3.6.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.3.0",
+    "nodemon": "^2.0.22",
+    "oxlint": "^1.78.0",
+    "prettier": "^3.9.6"
+  }
+}

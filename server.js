@@ -1,0 +1,111 @@
+import './config/env.js'; // fail fast on missing required env, before anything boots
+
+import path from 'path';
+import http from 'http';
+import { fileURLToPath } from 'url';
+
+import express from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
+import hpp from 'hpp';
+import morgan from 'morgan';
+import rateLimit from 'express-rate-limit';
+import { xss } from 'express-xss-sanitizer';
+import swaggerUi from 'swagger-ui-express';
+
+import connectDB from './config/db.js';
+import swaggerSpec from './config/swagger.js';
+import routes from './routes/index.js';
+import errorHandler from './middlewares/errorHandler.js';
+import ErrorResponse from './utils/errorResponse.js';
+import { getAllowedOrigins } from './utils/cors.js';
+import { initSocket } from './utils/socket.js';
+
+const dirName = path.dirname(fileURLToPath(import.meta.url));
+
+await connectDB();
+
+const app = express();
+const server = http.createServer(app);
+
+initSocket(server);
+
+// Security headers first, so everything below is covered.
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+
+app.use(
+  cors({
+    origin: getAllowedOrigins(),
+    credentials: true,
+    optionsSuccessStatus: 200
+  })
+);
+
+// Swagger is mounted before the sanitizers, which rewrite the request object
+// in ways the UI does not expect. Assets come from a CDN because serving them
+// from disk does not work on Vercel.
+app.use(
+  '/api-docs',
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customCssUrl: 'https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui.css',
+    customJs: [
+      'https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js',
+      'https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-standalone-preset.js'
+    ]
+  })
+);
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+app.use(xss());
+app.use(hpp());
+
+if (process.env.NODE_ENV === 'development') {
+  app.use(morgan('dev'));
+}
+
+// Broad backstop. Credential endpoints apply their own far tighter limit.
+app.use(
+  rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 1000,
+    standardHeaders: true,
+    legacyHeaders: false
+  })
+);
+
+app.use(express.static(path.join(dirName, 'public')));
+
+/** Liveness probe for uptime checks and load balancers. */
+app.get('/api/v1/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    status: 'ok',
+    uptime: process.uptime(),
+    env: process.env.NODE_ENV
+  });
+});
+
+app.use('/api/v1', routes);
+
+// Unmatched routes become a proper 404 instead of falling through to static.
+app.use((req, res, next) => {
+  next(new ErrorResponse(`Route not found: ${req.method} ${req.originalUrl}`, 404));
+});
+
+app.use(errorHandler);
+
+const PORT = process.env.PORT || 5000;
+
+server.listen(PORT, () =>
+  console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`)
+);
+
+process.on('unhandledRejection', err => {
+  console.error(`Unhandled rejection: ${err.message}`);
+  console.error(err.stack);
+});
+
+export default app;
