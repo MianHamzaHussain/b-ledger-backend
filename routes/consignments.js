@@ -2,6 +2,14 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { validate } from '../middlewares/validate.js';
+import {
+  consignmentCreateSchema,
+  consignmentUpdateSchema,
+  consignmentReturnSchema,
+  consignmentSellSchema,
+  consignmentPaymentSchema
+} from '../schemas/consignments.js';
 import Consignment from '../models/Consignment.js';
 import {
   getConsignments,
@@ -78,7 +86,12 @@ router
     ),
     getConsignments
   )
-  .post(can('consignments', 'create'), restrictBusinessToScope(), createConsignment);
+  .post(
+    can('consignments', 'create'),
+    restrictBusinessToScope(),
+    validate(consignmentCreateSchema),
+    createConsignment
+  );
 
 /**
  * @swagger
@@ -93,7 +106,13 @@ router
  *     responses:
  *       200: { description: Returned }
  */
-router.post('/:id/return', can('consignments', 'update'), loadScoped(Consignment), returnLine);
+router.post(
+  '/:id/return',
+  can('consignments', 'update'),
+  loadScoped(Consignment),
+  validate(consignmentReturnSchema),
+  returnLine
+);
 
 /**
  * @swagger
@@ -108,7 +127,13 @@ router.post('/:id/return', can('consignments', 'update'), loadScoped(Consignment
  *     responses:
  *       200: { description: Sold }
  */
-router.post('/:id/sell', can('consignments', 'update'), loadScoped(Consignment), sellLine);
+router.post(
+  '/:id/sell',
+  can('consignments', 'update'),
+  loadScoped(Consignment),
+  validate(consignmentSellSchema),
+  sellLine
+);
 
 /**
  * @swagger
@@ -123,7 +148,13 @@ router.post('/:id/sell', can('consignments', 'update'), loadScoped(Consignment),
  *     responses:
  *       200: { description: Payment recorded }
  */
-router.post('/:id/payment', can('consignments', 'update'), loadScoped(Consignment), recordPayment);
+router.post(
+  '/:id/payment',
+  can('consignments', 'update'),
+  loadScoped(Consignment),
+  validate(consignmentPaymentSchema),
+  recordPayment
+);
 
 /**
  * @swagger
@@ -135,7 +166,12 @@ router.post('/:id/payment', can('consignments', 'update'), loadScoped(Consignmen
 router
   .route('/:id')
   .get(can('consignments', 'read'), loadScoped(Consignment), getConsignment)
-  .put(can('consignments', 'update'), loadScoped(Consignment), updateConsignment)
+  .put(
+    can('consignments', 'update'),
+    loadScoped(Consignment),
+    validate(consignmentUpdateSchema),
+    updateConsignment
+  )
   .delete(can('consignments', 'delete'), loadScoped(Consignment), deleteConsignment);
 
 export default router;

@@ -2,6 +2,15 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { validate } from '../middlewares/validate.js';
+import {
+  orderCreateSchema,
+  orderUpdateSchema,
+  orderStatusSchema,
+  orderPaymentSchema,
+  orderExchangeSchema,
+  orderTrackingSchema
+} from '../schemas/orders.js';
 import Order from '../models/Order.js';
 import {
   getOrders,
@@ -96,7 +105,12 @@ router
     ),
     getOrders
   )
-  .post(can('orders', 'create'), restrictBusinessToScope(), createOrder);
+  .post(
+    can('orders', 'create'),
+    restrictBusinessToScope(),
+    validate(orderCreateSchema),
+    createOrder
+  );
 
 /**
  * @swagger
@@ -126,7 +140,7 @@ router
 router
   .route('/:id')
   .get(can('orders', 'read'), loadScoped(Order), getOrder)
-  .put(can('orders', 'update'), loadScoped(Order), updateOrder);
+  .put(can('orders', 'update'), loadScoped(Order), validate(orderUpdateSchema), updateOrder);
 
 /**
  * @swagger
@@ -176,9 +190,21 @@ router
  *       400: { description: Not delivered, already exchanged, or not enough stock }
  *       404: { description: Not found, or outside your businesses }
  */
-router.post('/:id/exchange', can('orders', 'update'), loadScoped(Order), exchangeOrder);
+router.post(
+  '/:id/exchange',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderExchangeSchema),
+  exchangeOrder
+);
 
-router.put('/:id/status', can('orders', 'update'), loadScoped(Order), updateOrderStatus);
+router.put(
+  '/:id/status',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderStatusSchema),
+  updateOrderStatus
+);
 
 /**
  * @swagger
@@ -199,7 +225,13 @@ router.put('/:id/status', can('orders', 'update'), loadScoped(Order), updateOrde
  *       200: { description: Updated }
  *       400: { description: Only delivered orders can be marked paid }
  */
-router.put('/:id/payment', can('orders', 'update'), loadScoped(Order), updateOrderPayment);
+router.put(
+  '/:id/payment',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderPaymentSchema),
+  updateOrderPayment
+);
 
 /**
  * @swagger
@@ -219,6 +251,12 @@ router.put('/:id/payment', can('orders', 'update'), loadScoped(Order), updateOrd
  *     responses:
  *       200: { description: Updated }
  */
-router.put('/:id/tracking', can('orders', 'update'), loadScoped(Order), updateOrderTracking);
+router.put(
+  '/:id/tracking',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderTrackingSchema),
+  updateOrderTracking
+);
 
 export default router;
