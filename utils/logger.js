@@ -22,7 +22,14 @@ const transport =
   process.env.NODE_ENV === 'development'
     ? {
         target: 'pino-pretty',
-        options: { colorize: true, translateTime: 'SYS:HH:MM:ss', ignore: 'pid,hostname' }
+        options: {
+          colorize: true,
+          translateTime: 'SYS:HH:MM:ss',
+          // Hide the verbose per-request bindings in the terminal — the concise
+          // message (set by pino-http below) carries method/url/status/time.
+          // Production keeps the full req/res in the raw JSON for aggregators.
+          ignore: 'pid,hostname,req,res,responseTime'
+        }
       }
     : undefined;
 

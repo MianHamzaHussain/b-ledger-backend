@@ -75,6 +75,12 @@ app.use(
       if (res.statusCode >= 400) return 'warn';
       return 'info';
     },
+    // One concise line per request (morgan-style). The structured req/res are
+    // still attached for the JSON logs; only the terminal hides them (logger.js).
+    customSuccessMessage: (req, res, responseTime) =>
+      `${req.method} ${req.url} ${res.statusCode} (${responseTime}ms)`,
+    customErrorMessage: (req, res, err) =>
+      `${req.method} ${req.url} ${res.statusCode} - ${err.message}`,
     autoLogging: { ignore: req => req.url === '/api/v1/health' }
   })
 );
