@@ -14,8 +14,8 @@ that tracks orders, payments, expenses and per-business profit/loss.
 | Concern   | Choice                                                                     |
 | --------- | -------------------------------------------------------------------------- |
 | Runtime   | Node ≥ 22, ESM (`"type": "module"` — `.js` extensions required in imports) |
-| Framework | Express 4                                                                  |
-| Database  | MongoDB / Mongoose 7                                                       |
+| Framework | Express 5                                                                  |
+| Database  | MongoDB / Mongoose 8                                                       |
 | Auth      | JWT, `Authorization: Bearer <token>`                                       |
 | Authz     | Role permission grid + per-user overrides (§6)                             |
 | Realtime  | Socket.io, JWT handshake, room per business                                |
@@ -180,6 +180,10 @@ helmet → cors → swagger → json/urlencoded → xss → hpp
 
 Helmet is first so everything below is covered. Swagger sits before the
 sanitizers, which rewrite the request in ways its UI does not expect.
+
+`server.js` also sets `query parser: extended` — Express 5's default parser is
+"simple" (flat `qty[gte]` keys), so this pins Express 4's qs behaviour that
+`advancedResults` (§5.3) and the `$`-operator stripping rely on.
 
 ### 5.1 `auth.js` — `protect`
 
@@ -456,9 +460,6 @@ cost more the longer it waits.
 
 ### Deferred deliberately
 
-- **Express 5 / Mongoose 8.** Worth doing, but Express 5 changes `req.query` to
-  a getter, which affects `advancedResults`' `{ ...req.query }` copy. Do it as
-  its own change with the list endpoints tested, not mixed into feature work.
 - **TypeScript.** Do Zod first — `z.infer` writes most of the types for you.
 - **Refresh tokens / token revocation.** `logout` cannot invalidate a JWT
   today; the client discards it and the token stays valid until expiry.

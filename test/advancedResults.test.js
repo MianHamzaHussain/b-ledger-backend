@@ -29,6 +29,7 @@ function mockModel() {
     populate() {
       return this;
     },
+    // eslint-disable-next-line unicorn/no-thenable -- intentional: advancedResults does `await query`
     then(resolve) {
       return resolve([]);
     }

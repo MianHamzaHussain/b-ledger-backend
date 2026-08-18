@@ -27,6 +27,13 @@ const dirName = path.dirname(fileURLToPath(import.meta.url));
 await connectDB();
 
 const app = express();
+
+// Express 5's default query parser is "simple" (flat `qty[gte]` keys); Express 4
+// used qs. Pin "extended" so nested-bracket queries keep parsing to real objects
+// — advancedResults' operator mapping (?qty[gte]=20 → $gte) and the client `$`
+// operator stripping both depend on it.
+app.set('query parser', 'extended');
+
 const server = http.createServer(app);
 
 initSocket(server);
