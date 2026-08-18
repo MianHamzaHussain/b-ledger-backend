@@ -11,19 +11,19 @@ that tracks orders, payments, expenses and per-business profit/loss.
 
 ## 1. Stack & Runtime
 
-| Concern   | Choice                                                                     |
-| --------- | -------------------------------------------------------------------------- |
-| Runtime   | Node ≥ 22, ESM (`"type": "module"` — `.js` extensions required in imports) |
-| Framework | Express 5                                                                  |
-| Database  | MongoDB / Mongoose 8                                                       |
-| Auth      | JWT, `Authorization: Bearer <token>`                                       |
-| Authz     | Role permission grid + per-user overrides (§6)                             |
-| Realtime  | Socket.io, JWT handshake, room per business                                |
-| Push      | `web-push` (VAPID) for PWA background notifications                        |
-| Docs      | `swagger-jsdoc` + `swagger-ui-express` at `/api-docs`                      |
-| Mail      | Nodemailer (SMTP)                                                          |
-| Logging   | `pino` + `pino-http` — JSON in prod, pretty in dev, request ids, redaction |
-| Hardening | `helmet`, `hpp`, `express-rate-limit`, `express-xss-sanitizer`, `cors`     |
+| Concern   | Choice                                                                       |
+| --------- | ---------------------------------------------------------------------------- |
+| Runtime   | Node 24 LTS, ESM (`"type": "module"` — `.js` extensions required in imports) |
+| Framework | Express 5                                                                    |
+| Database  | MongoDB / Mongoose 8                                                         |
+| Auth      | JWT, `Authorization: Bearer <token>`                                         |
+| Authz     | Role permission grid + per-user overrides (§6)                               |
+| Realtime  | Socket.io, JWT handshake, room per business                                  |
+| Push      | `web-push` (VAPID) for PWA background notifications                          |
+| Docs      | `swagger-jsdoc` + `swagger-ui-express` at `/api-docs`                        |
+| Mail      | Nodemailer (SMTP)                                                            |
+| Logging   | `pino` + `pino-http` — JSON in prod, pretty in dev, request ids, redaction   |
+| Hardening | `helmet`, `hpp`, `express-rate-limit`, `express-xss-sanitizer`, `cors`       |
 
 Env is loaded by Node itself (`node --env-file=.env`) — **no `dotenv`**.
 
@@ -450,13 +450,13 @@ cost more the longer it waits.
 
 ### Should do next
 
-| Gap                          | Why it matters                                                                                                                                                                                                                                                                                                                                                                     |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Request validation (Zod)** | Done (core routes): `middlewares/validate.js` + `schemas/` runs Zod after `protect`/`can`, before the controller — it 400s with the field-error array (§4.1), strips unknown keys, and preserves the JWT-stamped `createdBy`/`updatedBy`. Wired on the **money routes** (`finance/*`, `partners/*`) and the **order and consignment** routes. **Still to do:** extend the same `validate(schema)` to the remaining CRUD routes.          |
-| **Tests**                    | Done (initial, risk-based): `node:test` accounting + permission suite in `test/` (ledger invariants, order/walk-in/courier posting, partner distribution, resolver matrix), run against a throwaway Mongo (`MONGO_TEST_URI`). Run via `npm test`, enforced in CI. Expand to more controllers over time.                                                                            |
-| **ESLint + Prettier**        | Done: oxlint + Prettier configured (`.oxlintrc.json`, `.prettierrc.json`), a composite `npm run check`, a CI workflow, and a husky/lint-staged pre-commit that blocks unformatted / lint-broken commits.                                                                                                                                                                           |
-| **Structured logging**       | Done: `pino` + `pino-http` route every runtime log through one logger (`utils/logger.js`) — JSON in prod, pretty in dev, `silent` under test; per-request correlation ids; redacts the `authorization`/`cookie` headers and any `password`. Mounted where morgan was (§5). The seeder (a CLI) and `config/env.js` (runs before the logger exists) intentionally stay on `console`. |
-| **Env validation at boot**   | Done: `config/env.js` (imported first in `server.js`) fails fast on a missing `MONGODB_URI`/`JWT_SECRET` instead of surfacing it at first login.                                                                                                                                                                                                                                   |
+| Gap                          | Why it matters                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Request validation (Zod)** | Done (core routes): `middlewares/validate.js` + `schemas/` runs Zod after `protect`/`can`, before the controller — it 400s with the field-error array (§4.1), strips unknown keys, and preserves the JWT-stamped `createdBy`/`updatedBy`. Wired on the **money routes** (`finance/*`, `partners/*`) and the **order and consignment** routes. **Still to do:** extend the same `validate(schema)` to the remaining CRUD routes. |
+| **Tests**                    | Done (initial, risk-based): `node:test` accounting + permission suite in `test/` (ledger invariants, order/walk-in/courier posting, partner distribution, resolver matrix), run against a throwaway Mongo (`MONGO_TEST_URI`). Run via `npm test`, enforced in CI. Expand to more controllers over time.                                                                                                                         |
+| **ESLint + Prettier**        | Done: oxlint + Prettier configured (`.oxlintrc.json`, `.prettierrc.json`), a composite `npm run check`, a CI workflow, and a husky/lint-staged pre-commit that blocks unformatted / lint-broken commits.                                                                                                                                                                                                                        |
+| **Structured logging**       | Done: `pino` + `pino-http` route every runtime log through one logger (`utils/logger.js`) — JSON in prod, pretty in dev, `silent` under test; per-request correlation ids; redacts the `authorization`/`cookie` headers and any `password`. Mounted where morgan was (§5). The seeder (a CLI) and `config/env.js` (runs before the logger exists) intentionally stay on `console`.                                              |
+| **Env validation at boot**   | Done: `config/env.js` (imported first in `server.js`) fails fast on a missing `MONGODB_URI`/`JWT_SECRET` instead of surfacing it at first login.                                                                                                                                                                                                                                                                                |
 
 ### Deferred deliberately
 

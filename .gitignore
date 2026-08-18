@@ -16,6 +16,7 @@ yarn-error.log*
 .env
 .env.*
 !example.env
+!.env.example
 
 # Secrets / keys
 vapid.json
