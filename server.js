@@ -29,11 +29,16 @@ await connectDB();
 
 const app = express();
 
-// Behind a reverse proxy (nginx / Cloudflare) in production: trust the first hop
-// so `req.ip` is the real client, not the proxy. Without it express-rate-limit
-// buckets every user under the proxy's IP (one login limiter for everyone) and
-// warns. `1` = trust one proxy; safe locally too (there is no proxy to spoof it).
-app.set('trust proxy', 1);
+// Behind reverse proxies in production, so `req.ip` (used by express-rate-limit)
+// reads the real client from X-Forwarded-For instead of the proxy — otherwise
+// rate limiting buckets everyone together and Express 5's express-rate-limit
+// throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR. The value is the number of proxy
+// hops to trust, counted from the server outward:
+//   Cloudflare → nginx → node  ⇒  2  (this deploy)
+//   nginx only (no Cloudflare)  ⇒  1
+// Set via TRUST_PROXY_HOPS so a different topology needs no code change; 0 (its
+// default) disables it, which is correct for local dev with no proxy.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS) || 0);
 
 // Express 5's default query parser is "simple" (flat `qty[gte]` keys); Express 4
 // used qs. Pin "extended" so nested-bracket queries keep parsing to real objects
