@@ -2,7 +2,9 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { validate } from '../middlewares/validate.js';
 import Customer from '../models/Customer.js';
+import { customerUpdateSchema } from '../schemas/customers.js';
 import { getCustomers, getCustomer, updateCustomer } from '../controllers/customerController.js';
 
 const router = express.Router();
@@ -48,6 +50,11 @@ router
 router
   .route('/:id')
   .get(can('customers', 'read'), loadScoped(Customer), getCustomer)
-  .put(can('customers', 'update'), loadScoped(Customer), updateCustomer);
+  .put(
+    can('customers', 'update'),
+    loadScoped(Customer),
+    validate(customerUpdateSchema),
+    updateCustomer
+  );
 
 export default router;

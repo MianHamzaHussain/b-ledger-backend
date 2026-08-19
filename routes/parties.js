@@ -2,7 +2,9 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { validate } from '../middlewares/validate.js';
 import Party from '../models/Party.js';
+import { partyCreateSchema, partyUpdateSchema } from '../schemas/parties.js';
 import {
   getParties,
   getParty,
@@ -49,7 +51,12 @@ router.use(protect);
 router
   .route('/')
   .get(can('parties', 'read'), advancedResults(Party, null, ['name', 'phone']), getParties)
-  .post(can('parties', 'create'), restrictBusinessToScope(), createParty);
+  .post(
+    can('parties', 'create'),
+    restrictBusinessToScope(),
+    validate(partyCreateSchema),
+    createParty
+  );
 
 /**
  * @swagger
@@ -85,7 +92,7 @@ router.get('/:id/statement', can('parties', 'read'), loadScoped(Party), getParty
 router
   .route('/:id')
   .get(can('parties', 'read'), loadScoped(Party), getParty)
-  .put(can('parties', 'update'), loadScoped(Party), updateParty)
+  .put(can('parties', 'update'), loadScoped(Party), validate(partyUpdateSchema), updateParty)
   .delete(can('parties', 'delete'), loadScoped(Party), deleteParty);
 
 export default router;

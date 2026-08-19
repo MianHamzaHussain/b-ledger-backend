@@ -2,7 +2,9 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { validate } from '../middlewares/validate.js';
 import Business from '../models/Business.js';
+import { businessCreateSchema, businessUpdateSchema } from '../schemas/businesses.js';
 import {
   getBusinesses,
   getBusiness,
@@ -69,7 +71,7 @@ router
     ),
     getBusinesses
   )
-  .post(can('businesses', 'create'), createBusiness);
+  .post(can('businesses', 'create'), validate(businessCreateSchema), createBusiness);
 
 /**
  * @swagger
@@ -104,7 +106,12 @@ router
 router
   .route('/:id')
   .get(can('businesses', 'read'), loadScoped(Business), getBusiness)
-  .put(can('businesses', 'update'), loadScoped(Business), updateBusiness)
+  .put(
+    can('businesses', 'update'),
+    loadScoped(Business),
+    validate(businessUpdateSchema),
+    updateBusiness
+  )
   .delete(can('businesses', 'delete'), loadScoped(Business), deleteBusiness);
 
 export default router;

@@ -2,7 +2,9 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { validate } from '../middlewares/validate.js';
 import Category from '../models/Category.js';
+import { categoryCreateSchema, categoryUpdateSchema } from '../schemas/categories.js';
 import {
   getCategories,
   getCategory,
@@ -55,7 +57,7 @@ router
     advancedResults(Category, null, ['name', 'description'], 'name status variantCount'),
     getCategories
   )
-  .post(can('categories', 'create'), createCategory);
+  .post(can('categories', 'create'), validate(categoryCreateSchema), createCategory);
 
 /**
  * @swagger
@@ -93,7 +95,12 @@ router
 router
   .route('/:id')
   .get(can('categories', 'read'), loadScoped(Category), getCategory)
-  .put(can('categories', 'update'), loadScoped(Category), updateCategory)
+  .put(
+    can('categories', 'update'),
+    loadScoped(Category),
+    validate(categoryUpdateSchema),
+    updateCategory
+  )
   .delete(can('categories', 'delete'), loadScoped(Category), deleteCategory);
 
 export default router;
