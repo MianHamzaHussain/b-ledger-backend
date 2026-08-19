@@ -105,11 +105,21 @@ have no safe default; the rest fall back sensibly for local dev.
 
 ### Database & auth
 
-| Variable      | Required | Example                             | Purpose                                         |
-| ------------- | :------: | ----------------------------------- | ----------------------------------------------- |
-| `MONGODB_URI` | **yes**  | `mongodb://localhost:27017/bledger` | The database. Atlas URI in production.          |
-| `JWT_SECRET`  | **yes**  | _(48-byte random hex)_              | Signs and verifies auth tokens. Keep it secret. |
-| `JWT_EXPIRE`  |    –     | `7d`                                | Token lifetime.                                 |
+| Variable                    | Required | Example                             | Purpose                                                                    |
+| --------------------------- | :------: | ----------------------------------- | -------------------------------------------------------------------------- |
+| `MONGODB_URI`               | **yes**  | `mongodb://localhost:27017/bledger` | The database. Atlas / VPS URI in production.                               |
+| `JWT_SECRET`                | **yes**  | _(48-byte random hex)_              | Signs the access token. Keep it secret.                                    |
+| `JWT_ACCESS_EXPIRE`         |    –     | `15m`                               | Short access-token lifetime (the client refreshes it from the cookie).     |
+| `REFRESH_TOKEN_EXPIRE_DAYS` |    –     | `30`                                | Refresh-token (httpOnly cookie) lifetime, in days.                         |
+| `COOKIE_SAMESITE`           |    –     | `lax`                               | Refresh-cookie SameSite. `lax` same-origin; `none` (HTTPS) cross-origin.   |
+| `COOKIE_SECURE`             |    –     | _(auto in prod)_                    | Force `Secure` on the cookie outside production (e.g. behind a TLS proxy). |
+
+**Auth model.** Login returns a short **access** JWT in the body (sent as
+`Authorization: Bearer`) and sets a long-lived **refresh** token as an
+**httpOnly** cookie. The client trades the cookie for a new access token at
+`POST /auth/refresh` (rotated on every call — a replay is rejected). Logout,
+password change and reset bump a per-user `tokenVersion` that `protect`
+re-checks, so a token can be revoked server-side.
 
 ### URLs & CORS
 

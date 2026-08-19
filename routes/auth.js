@@ -7,7 +7,8 @@ import {
   forgotPassword,
   resetPassword,
   updateDetails,
-  updatePassword
+  updatePassword,
+  refreshAccessToken
 } from '../controllers/authController.js';
 import { protect } from '../middlewares/auth.js';
 import { validate } from '../middlewares/validate.js';
@@ -63,6 +64,27 @@ const credentialLimiter = rateLimit({
  *       429: { description: Too many attempts }
  */
 router.post('/login', credentialLimiter, validate(loginSchema), login);
+
+/**
+ * @swagger
+ * /auth/refresh:
+ *   post:
+ *     summary: Exchange the httpOnly refresh cookie for a new access token
+ *     tags: [Auth]
+ *     description: The refresh token is read from the cookie and rotated on every call.
+ *     responses:
+ *       200: { description: New access token issued }
+ *       401: { description: Missing, expired, or reused refresh token }
+ */
+// Own limiter: refresh runs on a timer + on 401, so it needs more headroom than
+// the login limiter, but still bounded against refresh-token brute force.
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+router.post('/refresh', refreshLimiter, refreshAccessToken);
 
 /**
  * @swagger

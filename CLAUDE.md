@@ -461,11 +461,13 @@ cost more the longer it waits.
 ### Deferred deliberately
 
 - **TypeScript.** Do Zod first — `z.infer` writes most of the types for you.
-- **Refresh tokens.** Revocation is done — every JWT carries a `tokenVersion`
-  that `protect` re-checks, and logout / password change / reset bump it, so a
-  token is dead server-side immediately (one counter per user ⇒ signs out every
-  device). Still deferred: short access token + long refresh token in an
-  httpOnly cookie, to get the JWT out of `localStorage`.
+- **Auth token model (done).** Short-lived **access** JWT (`JWT_ACCESS_EXPIRE`,
+  ~15m, carries `tokenVersion`) traded via `POST /auth/refresh` for a rotating
+  **refresh** token — a random secret stored only as a SHA-256 hash
+  (`models/RefreshToken.js`, TTL-swept) and delivered as an **httpOnly** cookie
+  (`utils/refreshTokens.js`). Rotation consumes each token so a replay 401s
+  (reuse defence). Logout revokes the token, clears the cookie, and bumps
+  `tokenVersion`. Cross-origin deploys set `COOKIE_SAMESITE=none` (HTTPS).
 - **File uploads.** Removed. If added back, note that writing to `public/` does
   **not** work on Vercel serverless — use S3, Cloudinary or Vercel Blob.
 

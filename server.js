@@ -8,6 +8,7 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import hpp from 'hpp';
+import cookieParser from 'cookie-parser';
 import { pinoHttp } from 'pino-http';
 import rateLimit from 'express-rate-limit';
 import { xss } from 'express-xss-sanitizer';
@@ -66,6 +67,7 @@ app.use(
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+app.use(cookieParser()); // populates req.cookies for the refresh-token flow
 
 app.use(xss());
 app.use(hpp());
