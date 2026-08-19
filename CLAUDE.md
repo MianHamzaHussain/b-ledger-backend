@@ -461,8 +461,11 @@ cost more the longer it waits.
 ### Deferred deliberately
 
 - **TypeScript.** Do Zod first — `z.infer` writes most of the types for you.
-- **Refresh tokens / token revocation.** `logout` cannot invalidate a JWT
-  today; the client discards it and the token stays valid until expiry.
+- **Refresh tokens.** Revocation is done — every JWT carries a `tokenVersion`
+  that `protect` re-checks, and logout / password change / reset bump it, so a
+  token is dead server-side immediately (one counter per user ⇒ signs out every
+  device). Still deferred: short access token + long refresh token in an
+  httpOnly cookie, to get the JWT out of `localStorage`.
 - **File uploads.** Removed. If added back, note that writing to `public/` does
   **not** work on Vercel serverless — use S3, Cloudinary or Vercel Blob.
 

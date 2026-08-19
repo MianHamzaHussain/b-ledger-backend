@@ -25,9 +25,16 @@ const protect = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Not authorized to access this route', 401));
   }
 
-  req.user = await User.findById(decoded.id).populate('role');
+  req.user = await User.findById(decoded.id).select('+tokenVersion').populate('role');
 
   if (!req.user) {
+    return next(new ErrorResponse('Not authorized to access this route', 401));
+  }
+
+  // Revocation check: a token minted before the user's tokenVersion was bumped
+  // (logout, password change, forced sign-out) is dead. Nullish-coalesce to 0 so
+  // tokens issued before this field existed still validate against the default.
+  if ((decoded.tokenVersion ?? 0) !== (req.user.tokenVersion ?? 0)) {
     return next(new ErrorResponse('Not authorized to access this route', 401));
   }
 
