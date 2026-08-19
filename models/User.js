@@ -146,10 +146,11 @@ UserSchema.pre('save', async function () {
 });
 
 UserSchema.methods.getSignedJwtToken = function () {
-  // tokenVersion travels in the token so `protect` can reject a stale one after
-  // a logout / password change / forced sign-out.
+  // Short-lived ACCESS token — the client refreshes it from the httpOnly refresh
+  // cookie (POST /auth/refresh). tokenVersion travels in it so `protect` can
+  // reject a stale one after a logout / password change / forced sign-out.
   return jwt.sign({ id: this._id, tokenVersion: this.tokenVersion ?? 0 }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE
+    expiresIn: process.env.JWT_ACCESS_EXPIRE || '15m'
   });
 };
 

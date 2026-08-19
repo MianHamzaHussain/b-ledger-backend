@@ -5,9 +5,24 @@ import asyncHandler from '../middlewares/asyncHandler.js';
 import User from '../models/User.js';
 import getPasswordResetEmail from '../templates/emails/passwordReset.js';
 import logger from '../utils/logger.js';
+import {
+  REFRESH_COOKIE,
+  issueRefreshToken,
+  rotateRefreshToken,
+  revokeRefreshToken,
+  refreshCookieOptions,
+  clearCookieOptions
+} from '../utils/refreshTokens.js';
 
-/** Issues the JWT. Kept in one place so claims stay consistent. */
-const sendTokenResponse = (user, statusCode, res) => {
+/**
+ * Issues the short-lived access token in the body AND a long-lived refresh token
+ * as an httpOnly cookie. The access token lives in memory on the client; the
+ * refresh cookie — which JS can't read — is what survives a reload and is traded
+ * for a new access token at /auth/refresh. Async because it persists the token.
+ */
+const sendTokenResponse = async (user, statusCode, res) => {
+  const { token, expiresAt } = await issueRefreshToken(user._id);
+  res.cookie(REFRESH_COOKIE, token, refreshCookieOptions(expiresAt));
   res.status(statusCode).json({
     success: true,
     token: user.getSignedJwtToken(),
@@ -46,7 +61,7 @@ export const login = asyncHandler(async (req, res, next) => {
   // rather than save() to skip the password-hash hook on an unchanged password.
   await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
 
-  sendTokenResponse(user, 200, res);
+  await sendTokenResponse(user, 200, res);
 });
 
 /**
@@ -126,7 +141,7 @@ export const updatePassword = asyncHandler(async (req, res, next) => {
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 
-  sendTokenResponse(user, 200, res);
+  await sendTokenResponse(user, 200, res);
 });
 
 /**
@@ -206,7 +221,36 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
   user.lastLogin = new Date();
   await user.save();
 
-  sendTokenResponse(user, 200, res);
+  await sendTokenResponse(user, 200, res);
+});
+
+/**
+ * @desc      Exchange the refresh cookie for a fresh access token
+ * @route     POST /api/v1/auth/refresh
+ * @access    Public (authenticated by the httpOnly cookie, not a Bearer token)
+ *
+ * Rotates the refresh token on every call: the presented one is consumed and a
+ * new cookie is set, so a stolen-and-replayed token fails once the real client
+ * has rotated. Also re-checks account status and tokenVersion, so a revoked or
+ * inactive user can't refresh their way back in.
+ */
+export const refreshAccessToken = asyncHandler(async (req, res, next) => {
+  const rotated = await rotateRefreshToken(req.cookies?.[REFRESH_COOKIE]);
+
+  if (!rotated) {
+    res.clearCookie(REFRESH_COOKIE, clearCookieOptions());
+    return next(new ErrorResponse('Not authorized to access this route', 401));
+  }
+
+  const user = await User.findById(rotated.userId).select('+tokenVersion').populate('role');
+
+  if (!user || user.status === 'inactive') {
+    res.clearCookie(REFRESH_COOKIE, clearCookieOptions());
+    return next(new ErrorResponse('Not authorized to access this route', 401));
+  }
+
+  res.cookie(REFRESH_COOKIE, rotated.token, refreshCookieOptions(rotated.expiresAt));
+  res.status(200).json({ success: true, token: user.getSignedJwtToken() });
 });
 
 /**
@@ -214,12 +258,14 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
  * @route     GET /api/v1/auth/logout
  * @access    Private
  *
- * Bumps `tokenVersion`, which `protect` re-checks — so the discarded JWT is dead
- * server-side immediately, not just forgotten by the client. One counter per
- * user means this signs out every device; without per-session tokens that is the
- * honest, safe behaviour.
+ * Revokes this device's refresh token, clears the cookie, and bumps
+ * `tokenVersion` (which `protect` re-checks) so the short access token is dead
+ * server-side immediately too. One counter per user means this signs out every
+ * device — the honest behaviour without per-session tracking.
  */
 export const logout = asyncHandler(async (req, res, next) => {
+  await revokeRefreshToken(req.cookies?.[REFRESH_COOKIE]);
+  res.clearCookie(REFRESH_COOKIE, clearCookieOptions());
   await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } });
   res.status(200).json({ success: true, data: {} });
 });
