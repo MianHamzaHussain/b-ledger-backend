@@ -29,6 +29,12 @@ await connectDB();
 
 const app = express();
 
+// Behind a reverse proxy (nginx / Cloudflare) in production: trust the first hop
+// so `req.ip` is the real client, not the proxy. Without it express-rate-limit
+// buckets every user under the proxy's IP (one login limiter for everyone) and
+// warns. `1` = trust one proxy; safe locally too (there is no proxy to spoof it).
+app.set('trust proxy', 1);
+
 // Express 5's default query parser is "simple" (flat `qty[gte]` keys); Express 4
 // used qs. Pin "extended" so nested-bracket queries keep parsing to real objects
 // — advancedResults' operator mapping (?qty[gte]=20 → $gte) and the client `$`
