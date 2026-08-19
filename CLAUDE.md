@@ -15,7 +15,7 @@ that tracks orders, payments, expenses and per-business profit/loss.
 | --------- | ---------------------------------------------------------------------------- |
 | Runtime   | Node 24 LTS, ESM (`"type": "module"` — `.js` extensions required in imports) |
 | Framework | Express 5                                                                    |
-| Database  | MongoDB / Mongoose 8                                                         |
+| Database  | MongoDB / Mongoose 9                                                         |
 | Auth      | JWT, `Authorization: Bearer <token>`                                         |
 | Authz     | Role permission grid + per-user overrides (§6)                               |
 | Realtime  | Socket.io, JWT handshake, room per business                                  |
@@ -465,13 +465,9 @@ cost more the longer it waits.
   today; the client discards it and the token stays valid until expiry.
 - **File uploads.** Removed. If added back, note that writing to `public/` does
   **not** work on Vercel serverless — use S3, Cloudinary or Vercel Blob.
-- **DB connection hardening.** `config/db.js` has no pool/timeout options and no
-  cached connection for serverless reuse.
 
 ### Operational
 
-- **Rotate the VAPID keypair** before enabling push — the inherited one was
-  committed to the old repository and must be considered public.
+- **Rotate the VAPID keypair per environment.** A fresh pair is in the local
+  envs; the one committed to the old repository is public — never reuse it.
   `npx web-push generate-vapid-keys`.
-- **`npm install`** — 12 dependencies were removed from `package.json`;
-  `package-lock.json` still needs pruning.

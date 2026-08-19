@@ -179,7 +179,7 @@ const upsertCustomerParty = async (business, name, phone, userId) => {
       $set: { name: label },
       $setOnInsert: { business, type: PARTY_TYPES.CUSTOMER, phone, createdBy: userId }
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
   return party._id;
 };
@@ -277,7 +277,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
         $set: { name: customerName, city },
         $setOnInsert: { business, phone: contactNumber, createdBy: req.user.id }
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
     const order = await Order.create({
@@ -388,7 +388,7 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
       $set: { name: customerName, city },
       $setOnInsert: { business, phone: contactNumber, createdBy: req.user.id }
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
 
   order.customer = customer._id;
