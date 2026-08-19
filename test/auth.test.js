@@ -62,6 +62,16 @@ test('a token re-issued after the bump is accepted again', async () => {
   assert.equal(err, undefined);
 });
 
+test('protect stamps createdBy on a bodiless POST without crashing (Express 5)', async () => {
+  const user = await makeUser();
+  // No `body` key at all — Express 5 leaves it undefined on a bodiless request
+  // (e.g. POST /users/:id/reinvite). protect must default it, not throw.
+  const req = { headers: { authorization: `Bearer ${user.getSignedJwtToken()}` }, method: 'POST' };
+  const err = await new Promise(resolve => protect(req, {}, resolve));
+  assert.equal(err, undefined);
+  assert.equal(String(req.body.createdBy), String(user._id));
+});
+
 test('refresh tokens are stored only as a hash, never in plaintext', async () => {
   const user = await makeUser();
   const { token } = await issueRefreshToken(user._id);

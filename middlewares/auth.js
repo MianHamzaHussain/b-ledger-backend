@@ -44,9 +44,13 @@ const protect = asyncHandler(async (req, res, next) => {
 
   // Audit fields are stamped here so no controller has to remember to.
   // Assigning after auth also means a client cannot forge them via the body.
+  // Express 5 leaves req.body undefined on a bodiless request (e.g. the
+  // POST /users/:id/reinvite action), so default it before stamping.
   if (req.method === 'POST') {
+    if (!req.body) req.body = {};
     req.body.createdBy = req.user.id;
   } else if (req.method === 'PUT' || req.method === 'PATCH') {
+    if (!req.body) req.body = {};
     req.body.updatedBy = req.user.id;
   }
 
