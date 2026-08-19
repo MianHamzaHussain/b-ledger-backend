@@ -111,7 +111,9 @@ export const updatePassword = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Please provide the current and new password', 400));
   }
 
-  const user = await User.findById(req.user.id).select('+password +mustChangePassword');
+  const user = await User.findById(req.user.id).select(
+    '+password +mustChangePassword +tokenVersion'
+  );
 
   if (!(await user.matchPassword(currentPassword))) {
     return next(new ErrorResponse('Password is incorrect', 401));
@@ -119,6 +121,9 @@ export const updatePassword = asyncHandler(async (req, res, next) => {
 
   user.password = newPassword;
   user.mustChangePassword = false;
+  // Revoke every other session minted under the old password; the token issued
+  // just below carries the new version, so the current device stays signed in.
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 
   sendTokenResponse(user, 200, res);
@@ -183,7 +188,7 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
   const user = await User.findOne({
     resetPasswordToken,
     resetPasswordExpire: { $gt: Date.now() }
-  }).select('+mustChangePassword');
+  }).select('+mustChangePassword +tokenVersion');
 
   if (!user || user.status === 'inactive') {
     return next(new ErrorResponse('Invalid or expired token', 400));
@@ -193,6 +198,9 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
   user.resetPasswordToken = undefined;
   user.resetPasswordExpire = undefined;
   user.mustChangePassword = false;
+  // A reset kills any session that survived on the old password (e.g. after a
+  // "forgot password" on a compromised account).
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   // Setting a password from the emailed link signs the user in — so it counts
   // as a login and marks the account verified.
   user.lastLogin = new Date();
@@ -206,9 +214,12 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
  * @route     GET /api/v1/auth/logout
  * @access    Private
  *
- * JWTs are stateless, so this cannot revoke the token — the client must
- * discard it. Kept as an endpoint for client symmetry and future denylisting.
+ * Bumps `tokenVersion`, which `protect` re-checks — so the discarded JWT is dead
+ * server-side immediately, not just forgotten by the client. One counter per
+ * user means this signs out every device; without per-session tokens that is the
+ * honest, safe behaviour.
  */
 export const logout = asyncHandler(async (req, res, next) => {
+  await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } });
   res.status(200).json({ success: true, data: {} });
 });

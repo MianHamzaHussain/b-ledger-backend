@@ -110,6 +110,14 @@ const UserSchema = new mongoose.Schema(
     },
     resetPasswordToken: { type: String, select: false },
     resetPasswordExpire: { type: Date, select: false },
+    /**
+     * Baked into every JWT and re-checked by `protect`. Bumping it invalidates
+     * every token issued before the bump — this is how logout, a password
+     * change, and an admin "sign out everywhere" actually revoke sessions, since
+     * a stateless JWT can't otherwise be recalled. `select: false` keeps it out
+     * of API responses; `protect` re-requests it explicitly.
+     */
+    tokenVersion: { type: Number, default: 0, select: false },
     /** Web Push endpoints for PWA background notifications. */
     pushSubscriptions: [
       {
@@ -138,7 +146,9 @@ UserSchema.pre('save', async function () {
 });
 
 UserSchema.methods.getSignedJwtToken = function () {
-  return jwt.sign({ id: this._id }, process.env.JWT_SECRET, {
+  // tokenVersion travels in the token so `protect` can reject a stale one after
+  // a logout / password change / forced sign-out.
+  return jwt.sign({ id: this._id, tokenVersion: this.tokenVersion ?? 0 }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRE
   });
 };

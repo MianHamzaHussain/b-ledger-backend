@@ -10,6 +10,14 @@ import {
   updatePassword
 } from '../controllers/authController.js';
 import { protect } from '../middlewares/auth.js';
+import { validate } from '../middlewares/validate.js';
+import {
+  loginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+  updateDetailsSchema,
+  updatePasswordSchema
+} from '../schemas/auth.js';
 
 const router = express.Router();
 
@@ -54,7 +62,7 @@ const credentialLimiter = rateLimit({
  *       401: { description: Invalid credentials or inactive account }
  *       429: { description: Too many attempts }
  */
-router.post('/login', credentialLimiter, login);
+router.post('/login', credentialLimiter, validate(loginSchema), login);
 
 /**
  * @swagger
@@ -100,7 +108,7 @@ router.get('/logout', protect, logout);
  *       200: { description: Updated }
  *       400: { description: Phone number already in use }
  */
-router.put('/updatedetails', protect, updateDetails);
+router.put('/updatedetails', protect, validate(updateDetailsSchema), updateDetails);
 
 /**
  * @swagger
@@ -123,7 +131,13 @@ router.put('/updatedetails', protect, updateDetails);
  *       200: { description: Password changed, new token issued }
  *       401: { description: Current password incorrect }
  */
-router.put('/updatepassword', protect, credentialLimiter, updatePassword);
+router.put(
+  '/updatepassword',
+  protect,
+  credentialLimiter,
+  validate(updatePasswordSchema),
+  updatePassword
+);
 
 /**
  * @swagger
@@ -147,7 +161,7 @@ router.put('/updatepassword', protect, credentialLimiter, updatePassword);
  *       200: { description: Reset link sent if the account exists }
  *       429: { description: Too many attempts }
  */
-router.post('/forgotpassword', credentialLimiter, forgotPassword);
+router.post('/forgotpassword', credentialLimiter, validate(forgotPasswordSchema), forgotPassword);
 
 /**
  * @swagger
@@ -170,6 +184,11 @@ router.post('/forgotpassword', credentialLimiter, forgotPassword);
  *       200: { description: Password set, token issued }
  *       400: { description: Invalid or expired token }
  */
-router.put('/resetpassword/:resettoken', credentialLimiter, resetPassword);
+router.put(
+  '/resetpassword/:resettoken',
+  credentialLimiter,
+  validate(resetPasswordSchema),
+  resetPassword
+);
 
 export default router;
