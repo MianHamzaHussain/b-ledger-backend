@@ -2,7 +2,9 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { validate } from '../middlewares/validate.js';
 import Role from '../models/Role.js';
+import { roleCreateSchema, roleUpdateSchema } from '../schemas/roles.js';
 import {
   getRegistry,
   getRoles,
@@ -86,7 +88,7 @@ router.get('/registry', can('roles', 'read'), getRegistry);
 router
   .route('/')
   .get(can('roles', 'read'), advancedResults(Role, null, ['name', 'description']), getRoles)
-  .post(can('roles', 'create'), createRole);
+  .post(can('roles', 'create'), validate(roleCreateSchema), createRole);
 
 /**
  * @swagger
@@ -123,7 +125,7 @@ router
 router
   .route('/:id')
   .get(can('roles', 'read'), loadScoped(Role), getRole)
-  .put(can('roles', 'update'), loadScoped(Role), updateRole)
+  .put(can('roles', 'update'), loadScoped(Role), validate(roleUpdateSchema), updateRole)
   .delete(can('roles', 'delete'), loadScoped(Role), deleteRole);
 
 export default router;

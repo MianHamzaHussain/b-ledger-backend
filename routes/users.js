@@ -2,7 +2,9 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { validate } from '../middlewares/validate.js';
 import User from '../models/User.js';
+import { userCreateSchema, userUpdateSchema } from '../schemas/users.js';
 import {
   getUsers,
   getUser,
@@ -95,7 +97,7 @@ router.post('/:id/reinvite', can('users', 'create'), reinviteUser);
 router
   .route('/')
   .get(can('users', 'read'), advancedResults(User, 'role', ['name', 'email', 'phone']), getUsers)
-  .post(can('users', 'create'), createUser);
+  .post(can('users', 'create'), validate(userCreateSchema), createUser);
 
 /**
  * @swagger
@@ -132,7 +134,7 @@ router
 router
   .route('/:id')
   .get(can('users', 'read'), getUser)
-  .put(can('users', 'update'), updateUser)
+  .put(can('users', 'update'), validate(userUpdateSchema), updateUser)
   .delete(can('users', 'delete'), deleteUser);
 
 export default router;

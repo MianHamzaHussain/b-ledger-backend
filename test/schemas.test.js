@@ -7,6 +7,8 @@ import { categoryCreateSchema } from '../schemas/categories.js';
 import { partyCreateSchema } from '../schemas/parties.js';
 import { customerUpdateSchema } from '../schemas/customers.js';
 import { pushSubscribeSchema } from '../schemas/push.js';
+import { roleCreateSchema } from '../schemas/roles.js';
+import { userCreateSchema } from '../schemas/users.js';
 
 /**
  * These guard the new route schemas against the two ways a schema can be wrong:
@@ -94,4 +96,48 @@ test('push subscribe requires the full endpoint + keys shape', () => {
     pushSubscribeSchema.safeParse({ subscription: { endpoint: 'https://push' } }).success,
     false
   );
+});
+
+test('role create keeps the permission grid, rejects an unknown resource', () => {
+  const r = roleCreateSchema.safeParse({
+    name: 'Dispatcher',
+    permissions: [{ resource: 'businesses', actions: ['read'], scope: 'own' }]
+  });
+  assert.equal(r.success, true);
+  assert.equal(r.data.permissions[0].resource, 'businesses'); // grid survives
+  assert.equal(
+    roleCreateSchema.safeParse({ name: 'X', permissions: [{ resource: 'not-real' }] }).success,
+    false
+  );
+  assert.equal(roleCreateSchema.safeParse({ permissions: [] }).success, false); // no name
+});
+
+test('user create keeps role/businesses/overrides, requires role, checks override effect', () => {
+  const r = userCreateSchema.safeParse({
+    name: 'Ali',
+    email: 'ali@b-ledger.pk',
+    phone: '+923001234567',
+    role: 'r1',
+    assignedBusinesses: ['b1', 'b2'],
+    permissionOverrides: [
+      { resource: 'businesses', actions: ['read'], effect: 'grant', scope: 'own' }
+    ]
+  });
+  assert.equal(r.success, true);
+  assert.deepEqual(r.data.assignedBusinesses, ['b1', 'b2']);
+  assert.equal(r.data.permissionOverrides[0].effect, 'grant');
+  assert.equal(
+    userCreateSchema.safeParse({ name: 'Ali', email: 'a@b.pk', phone: '+92300' }).success,
+    false
+  ); // no role
+  assert.equal(
+    userCreateSchema.safeParse({
+      name: 'Ali',
+      email: 'a@b.pk',
+      phone: '+92300',
+      role: 'r1',
+      permissionOverrides: [{ resource: 'businesses', effect: 'sideways' }]
+    }).success,
+    false
+  ); // bad effect
 });
