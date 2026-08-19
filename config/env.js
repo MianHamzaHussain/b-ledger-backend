@@ -12,7 +12,7 @@
 const REQUIRED = ['MONGODB_URI', 'JWT_SECRET'];
 
 /** Nice to have; we fall back to sensible defaults, so only a note. */
-const RECOMMENDED = ['ALLOWED_ORIGINS', 'JWT_EXPIRE'];
+const RECOMMENDED = ['ALLOWED_ORIGINS'];
 
 const isBlank = key => !process.env[key] || !String(process.env[key]).trim();
 

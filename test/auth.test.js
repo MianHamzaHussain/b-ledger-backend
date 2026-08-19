@@ -12,9 +12,9 @@ import {
   revokeRefreshToken
 } from '../utils/refreshTokens.js';
 
-// getSignedJwtToken signs with these; the test run doesn't load an .env.
+// getSignedJwtToken signs with this; the test run doesn't load an .env.
+// (JWT_ACCESS_EXPIRE defaults to 15m in the method, so no need to set it here.)
 process.env.JWT_SECRET ??= 'test-secret';
-process.env.JWT_EXPIRE ??= '1h';
 
 before(connect);
 after(disconnect);
