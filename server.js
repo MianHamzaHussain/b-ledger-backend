@@ -80,6 +80,16 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(cookieParser()); // populates req.cookies for the refresh-token flow
 
+// Express 5 leaves `req.body` UNDEFINED on a request with no body (a bodiless
+// POST/PUT action like /users/:id/reinvite, /production/:id/close). Normalise it
+// to {} once, here, so `protect`'s audit stamping and every controller can read,
+// write or delete `req.body.*` without a "Cannot ... properties of undefined"
+// 500. Runs before the sanitizers so they operate on a consistent object.
+app.use((req, res, next) => {
+  if (req.body == null) req.body = {};
+  next();
+});
+
 app.use(xss());
 app.use(hpp());
 
