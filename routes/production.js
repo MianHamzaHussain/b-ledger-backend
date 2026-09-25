@@ -109,7 +109,20 @@ router.post('/:id/close', can('production', 'update'), loadScoped(ProductionBatc
  * @swagger
  * /production/{id}:
  *   get: { summary: Get a batch, tags: [Production], security: [{ bearerAuth: [] }], responses: { 200: { description: Batch } } }
- *   put: { summary: Edit a draft batch (open only), tags: [Production], security: [{ bearerAuth: [] }], responses: { 200: { description: Updated }, 400: { description: Closed } } }
+ *   put:
+ *     summary: Edit a draft batch, or correct a closed batch's costs (admin only)
+ *     description: >
+ *       An open batch is edited freely. A closed batch accepts only changed cost
+ *       lines (same variants and quantities) and only from a full-access admin:
+ *       its close entry is reversed and the corrected one posted, the variants'
+ *       costs re-averaged over remaining stock, and the share on units already
+ *       sold trued up in COGS.
+ *     tags: [Production]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Updated }
+ *       400: { description: Closed batch with changed variants or quantities }
+ *       403: { description: Closed batch and the user is not an admin }
  *   delete: { summary: Delete a draft batch, tags: [Production], security: [{ bearerAuth: [] }], responses: { 200: { description: Deleted }, 400: { description: Closed } } }
  */
 router
