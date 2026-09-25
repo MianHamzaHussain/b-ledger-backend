@@ -213,19 +213,20 @@ export const postOrderRemittance = async (order, deliveryChargeRupees, userId) =
   });
 };
 
-/** A return's courier charge: Dr Return charges  Cr Cash. */
-export const postReturnCharge = async (order, returnChargeRupees, userId) => {
+/** A courier charge on a parcel whose sale did not stand: Dr <expense>  Cr Cash. */
+const postCourierCost = async (order, chargeRupees, expenseCode, memo, userId) => {
   await ensureChart(order.business);
-  const chargePaisa = toPaisa(Number(returnChargeRupees) || 0);
+  const chargePaisa = toPaisa(Number(chargeRupees) || 0);
   if (chargePaisa <= 0) return null;
 
   return postEntry({
     business: order.business,
-    memo: `Return charge — order ${order.orderNumber}`,
+    memo: `${memo} — order ${order.orderNumber}`,
     source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
     lines: [
       {
-        account: (await accountByCode(order.business, CODES.RETURN_CHARGES))._id,
+        account: (await accountByCode(order.business, expenseCode))._id,
+        label: orderLabel(order),
         debitPaisa: chargePaisa
       },
       { account: (await accountByCode(order.business, CODES.CASH))._id, creditPaisa: chargePaisa }
@@ -233,3 +234,15 @@ export const postReturnCharge = async (order, returnChargeRupees, userId) => {
     userId
   });
 };
+
+/** A return's (or an exchange pickup's) courier charge: Dr Return charges  Cr Cash. */
+export const postReturnCharge = (order, returnChargeRupees, userId) =>
+  postCourierCost(order, returnChargeRupees, CODES.RETURN_CHARGES, 'Return charge', userId);
+
+/**
+ * The forward delivery fee of an order whose sale was reversed (an exchange).
+ * The reversal takes the fee out with the sale, but the courier still charged
+ * it — so it is booked again on its own: Dr Delivery charges  Cr Cash.
+ */
+export const postDeliveryCharge = (order, deliveryChargeRupees, userId) =>
+  postCourierCost(order, deliveryChargeRupees, CODES.DELIVERY_CHARGES, 'Delivery charge', userId);

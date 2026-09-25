@@ -12,6 +12,7 @@ import {
   postOrderSale,
   postOrderRemittance,
   postReturnCharge,
+  postDeliveryCharge,
   computeRemittance
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
@@ -77,9 +78,9 @@ export const getOrders = base.getAll;
 /**
  * @desc   One order, with a remittance preview: what the merchant actually
  *         banks once the courier deducts its fee and withholds FBR taxes. The
- *         figure is state-aware — before dispatch the delivery fee is not yet
- *         known (`deliveryKnown: false`), so it reads as an estimate; after
- *         dispatch it is exact. It uses the same math the ledger posts, so the
+ *         figure is state-aware — before delivery the courier has not billed its
+ *         fee (`deliveryKnown: false`), so it reads as an estimate; after
+ *         delivery it is exact. It uses the same math the ledger posts, so the
  *         number on the detail is the number that will hit the books.
  * @route  GET /api/v1/orders/:id  (orders:read — scoped)
  */
@@ -124,7 +125,7 @@ export const getOrder = asyncHandler(async (req, res) => {
       netReceivable: fromPaisa(parts.bankPaisa),
       // Registered ⇒ the WHT is a reclaimable asset, not a permanent cost.
       whtIsAsset: parts.whtIsAsset,
-      // Before dispatch the courier has not yet quoted the fee, so the net is an
+      // Before delivery the courier has not billed the fee, so the net is an
       // estimate; once paid the remittance is settled and the number is final.
       deliveryKnown: order.deliveryChargePaisa != null,
       settled: order.paymentStatus === PAYMENT_STATUS.PAID,
@@ -132,7 +133,11 @@ export const getOrder = asyncHandler(async (req, res) => {
     };
   }
 
-  res.status(200).json({ success: true, data: { ...order.toObject(), remittance } });
+  // The courier's bill for bringing the parcel back (return / exchange pickup).
+  const returnCharge =
+    order.returnChargePaisa != null ? fromPaisa(order.returnChargePaisa) : undefined;
+
+  res.status(200).json({ success: true, data: { ...order.toObject(), remittance, returnCharge } });
 });
 
 /**
@@ -407,9 +412,10 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
 
 /**
  * @desc   Exchange a delivered order: put its goods back and reverse its sale
- *         (refunding any COD), then create a linked replacement order for the
- *         new items. The price difference is simply the replacement's COD —
- *         more if the new items cost more, less (a refund) if they cost less.
+ *         (refunding any COD), book the courier's pickup charge, then create a
+ *         linked replacement order for the new items. The price difference is
+ *         simply the replacement's COD — more if the new items cost more, less
+ *         (a refund) if they cost less.
  * @route  POST /api/v1/orders/:id/exchange  (orders:update — scoped)
  */
 export const exchangeOrder = asyncHandler(async (req, res, next) => {
@@ -449,12 +455,23 @@ export const exchangeOrder = asyncHandler(async (req, res, next) => {
         userId: req.user.id,
         memo: `Exchange of order ${original.orderNumber}`
       });
+      // The reversal took the forward delivery fee out with the sale, but the
+      // courier did deliver the parcel — that cost stands, so re-book it.
+      if (original.courier && original.deliveryChargePaisa > 0) {
+        await postDeliveryCharge(original, fromPaisa(original.deliveryChargePaisa), req.user.id);
+      }
     }
     if (original.paymentEntry) {
       await reverseEntry(original.paymentEntry, {
         userId: req.user.id,
         memo: `Refund on exchange — order ${original.orderNumber}`
       });
+    }
+    // Collecting the original parcel is a courier leg of its own, billed now.
+    const returnChargePaisa = toPaisa(req.body.returnCharge);
+    original.returnChargePaisa = returnChargePaisa;
+    if (returnChargePaisa > 0) {
+      await postReturnCharge(original, fromPaisa(returnChargePaisa), req.user.id);
     }
 
     // The replacement — same customer, new items, linked back to the original.
@@ -488,8 +505,10 @@ export const exchangeOrder = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc   Advance the fulfillment status. Cancelling or returning restocks the
- *         items; a return also books the return delivery charge as an expense.
+ * @desc   Advance the fulfillment status. Dispatch takes the courier and its
+ *         tracking number; delivered/returned take the courier's final charge.
+ *         Cancelling or returning restocks the items; a return also books its
+ *         charge as an expense.
  * @route  PUT /api/v1/orders/:id/status  (orders:update — scoped)
  */
 export const updateOrderStatus = asyncHandler(async (req, res, next) => {
@@ -515,18 +534,31 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // Dispatch is where the courier is chosen (a courier-type party) and quotes the
-  // delivery charge. Both are captured here and reused when the remittance is
-  // booked on payment; COD is sub-ledgered to this courier.
+  // Dispatch hands the parcel to a courier (a courier-type party, which COD is
+  // sub-ledgered to) and gets back a tracking number — both known right now.
+  // The charge is NOT: the courier bills by weight, city and outcome, so it is
+  // taken when the parcel lands (delivered / returned / exchanged) instead.
   if (status === ORDER_STATUS.DISPATCHED) {
     order.courier = await resolveCourier(order.business, req.body.courier);
-    const deliveryCharge = Number(req.body.deliveryCharge) || 0;
-    if (deliveryCharge < 0)
-      return next(new ErrorResponse('Delivery charge can not be negative', 400));
-    if (toPaisa(deliveryCharge) > toPaisa(order.codAmount)) {
+    const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+    if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
+    order.trackingId = trackingId;
+  }
+
+  // The outcome is where the courier's bill is final, so it is required — an
+  // explicit 0 means "no charge", a missing value means the step was skipped.
+  const isOutcome = status === ORDER_STATUS.DELIVERED || status === ORDER_STATUS.RETURNED;
+  if (isOutcome && req.body.deliveryCharge === undefined) {
+    return next(new ErrorResponse("Enter the courier's charge for this parcel (0 if none)", 400));
+  }
+  const chargePaisa = isOutcome ? toPaisa(req.body.deliveryCharge) : 0;
+
+  if (status === ORDER_STATUS.DELIVERED) {
+    // The fee comes out of the COD remittance, so it can not exceed it.
+    if (chargePaisa > toPaisa(order.codAmount)) {
       return next(new ErrorResponse('Delivery charge can not exceed the COD amount', 400));
     }
-    order.deliveryChargePaisa = toPaisa(deliveryCharge);
+    order.deliveryChargePaisa = chargePaisa;
   }
 
   // Leaving the flow into a terminal state returns the reserved stock.
@@ -540,10 +572,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     if (entry) order.saleEntry = entry._id;
   }
 
-  // A return unwinds whatever was booked. The courier's forward delivery charge
-  // was already captured at dispatch (a return is only reachable from
-  // dispatched), so it is a sunk cost — book it as an expense automatically
-  // rather than asking for it again.
+  // A return unwinds whatever was booked, and what the courier billed for the
+  // refused parcel is a sunk cost — booked as an expense.
   if (status === ORDER_STATUS.RETURNED) {
     if (order.saleEntry) {
       await reverseEntry(order.saleEntry, {
@@ -551,14 +581,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
         memo: `Return of order ${order.orderNumber}`
       });
     }
-    const chargePaisa = order.deliveryChargePaisa || 0;
+    order.returnChargePaisa = chargePaisa;
     if (chargePaisa > 0) await postReturnCharge(order, fromPaisa(chargePaisa), req.user.id);
-  }
-
-  // The courier assigns a tracking number at dispatch — capture it in the same
-  // step so a parcel can be scanned back to this order later.
-  if (typeof req.body.trackingId === 'string') {
-    order.trackingId = req.body.trackingId.trim();
   }
 
   order.status = status;
@@ -601,7 +625,7 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     }
 
     // Post the courier's remittance once — Bank in, delivery fee expensed. The
-    // delivery charge was already captured at dispatch, so we reuse it here
+    // delivery charge was already captured at delivery, so we reuse it here
     // rather than asking again.
     if (!order.paymentEntry) {
       const deliveryCharge = fromPaisa(order.deliveryChargePaisa || 0);
@@ -610,7 +634,7 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     }
   } else if (order.paymentEntry) {
     // Reversing to unpaid unwinds the remittance, but the delivery charge stays
-    // — it belongs to the dispatch, not the payment.
+    // — it belongs to the delivery, not the payment.
     await reverseEntry(order.paymentEntry, {
       userId: req.user.id,
       memo: `Reverse COD — order ${order.orderNumber}`

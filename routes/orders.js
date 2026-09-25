@@ -157,8 +157,8 @@ router
  *             type: object
  *             properties:
  *               status: { type: string, enum: [confirmed, dispatched, delivered, cancelled, returned] }
- *               trackingId: { type: string, description: "Set at dispatch — the courier consignment number" }
- *               deliveryCharge: { type: number, description: "Captured at dispatch; reused on payment and booked as the return expense on a refusal" }
+ *               trackingId: { type: string, description: "Required on dispatched — the courier consignment number" }
+ *               deliveryCharge: { type: number, description: "Required on delivered (the delivery fee, at most the COD) and returned (the return fee, booked as an expense). 0 if none." }
  *     responses:
  *       200: { description: Updated }
  *       400: { description: Illegal transition }
@@ -181,10 +181,11 @@ router
  *         application/json:
  *           schema:
  *             type: object
- *             required: [items]
+ *             required: [items, returnCharge]
  *             properties:
  *               items: { type: array, items: { $ref: '#/components/schemas/OrderItem' } }
  *               courier: { type: string }
+ *               returnCharge: { type: number, description: "What the courier billed to collect the original parcel (0 if none) — booked as an expense" }
  *     responses:
  *       201: { description: Replacement order created; original marked exchanged }
  *       400: { description: Not delivered, already exchanged, or not enough stock }

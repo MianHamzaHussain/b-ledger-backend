@@ -4,7 +4,7 @@ import Party from '../models/Party.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { postEntry } from '../utils/ledger.js';
+import { postEntry, reverseEntry } from '../utils/ledger.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { weightedAverageCost } from '../utils/inventory.js';
 import { JOURNAL_SOURCES } from '../utils/constants.js';
@@ -81,6 +81,63 @@ const validateCostParties = async (business, batchLines) => {
     throw new ErrorResponse('A cost supplier is not a party of this business', 400);
 };
 
+/** "Kurta (A1B2)" — how a batch's article reads in ledger memos. */
+const articleOf = prod => (prod ? `${prod.name} (${prod.articleNumber})` : 'production');
+
+/**
+ * Post a batch's cost to the ledger: Dr Inventory / Cr cash|bank|payable.
+ *
+ * Each cost posts its OWN labelled inventory debit under the article, so the
+ * ledger shows exactly what the batch was made of ("Cloth · Default", …). The
+ * credit side is grouped by funding: one payable per supplier — so they see it
+ * owed — plus cash / bank for what was paid. Shared by close and correction.
+ */
+const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') => {
+  const acc = code => accountByCode(batch.business, code);
+  const inventory = await acc(CODES.INVENTORY);
+  const payable = await acc(CODES.ACCOUNTS_PAYABLE);
+  const cash = await acc(CODES.CASH);
+  const bank = await acc(CODES.BANK);
+
+  const debits = [];
+  const groups = new Map();
+  for (const line of batch.lines) {
+    for (const c of line.costLines || []) {
+      const amt = c.amountPaisa || 0;
+      if (amt <= 0) continue;
+      debits.push({
+        account: inventory._id,
+        product: batch.product,
+        batch: batch._id,
+        label: `${c.label} · ${line.variantLabel}`,
+        debitPaisa: amt
+      });
+      let key, cl;
+      if (c.onCredit) {
+        key = `payable:${c.party}`;
+        cl = { account: payable._id, party: c.party, creditPaisa: 0 };
+      } else if (c.method === 'bank') {
+        key = 'bank';
+        cl = { account: bank._id, creditPaisa: 0 };
+      } else {
+        key = 'cash';
+        cl = { account: cash._id, creditPaisa: 0 };
+      }
+      const ex = groups.get(key) || cl;
+      ex.creditPaisa += amt;
+      groups.set(key, ex);
+    }
+  }
+
+  return postEntry({
+    business: batch.business,
+    memo: `${memoPrefix} — ${articleOf(prod)}`,
+    source: { kind: JOURNAL_SOURCES.BATCH, ref: String(batch._id) },
+    lines: [...debits, ...groups.values()],
+    userId
+  });
+};
+
 /**
  * @desc   List production batches
  * @route  GET /api/v1/production  (production:read — scoped)
@@ -123,13 +180,13 @@ export const createBatch = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc   Edit a draft batch's lines / funding (open batches only)
+ * @desc   Edit a draft batch's lines / funding. A closed batch goes through
+ *         `correctClosedBatch` instead — admin only, costs only.
  * @route  PUT /api/v1/production/:id  (production:update — scoped)
  */
 export const updateBatch = asyncHandler(async (req, res, next) => {
   const batch = req.resource;
-  if (batch.status !== 'open')
-    return next(new ErrorResponse('A closed batch can not be edited', 400));
+  if (batch.status !== 'open') return correctClosedBatch(req, res, next);
 
   const prod = await Product.findOne({ _id: batch.product, business: batch.business });
   if (!prod) return next(new ErrorResponse('Product not found in this business', 404));
@@ -142,6 +199,107 @@ export const updateBatch = asyncHandler(async (req, res, next) => {
 
   res.status(200).json({ success: true, data: await batch.populate(DETAIL_POPULATE) });
 });
+
+/**
+ * Correct a closed batch's costs — a cost entered wrong only surfaces once the
+ * supplier's bill lands, often after the batch was closed. Admin only: it
+ * rewrites what inventory cost, which every margin since has been built on.
+ *
+ * Only the cost lines may change. Variants and quantities are fixed because the
+ * stock they added has already been sold from; sale prices were already applied
+ * to the product and are edited there.
+ *
+ * History is never edited in place — the close entry is REVERSED and the
+ * corrected one posted, so the ledger shows the correction. Each variant's cost
+ * difference is then split by what is left of the batch:
+ *   • the share on units still in stock is re-averaged into the variant's cost;
+ *   • the share on units already sold was expensed at the old cost, so it is
+ *     trued up in COGS — otherwise inventory would carry value for goods gone.
+ */
+const correctClosedBatch = async (req, res, next) => {
+  const batch = req.resource;
+  // Admin = the full-access role; roles are data, never matched by name.
+  if (!req.user.role?.fullAccess) {
+    return next(new ErrorResponse('Only an admin can correct a closed batch', 403));
+  }
+
+  const prod = await Product.findOne({ _id: batch.product, business: batch.business });
+  if (!prod) return next(new ErrorResponse('Product not found in this business', 404));
+
+  const corrected = buildBatchLines(prod, req.body.lines);
+  const sameShape =
+    corrected.length === batch.lines.length &&
+    corrected.every(c => {
+      const old = batch.lines.find(l => String(l.variantId) === String(c.variantId));
+      return old && old.quantity === c.quantity;
+    });
+  if (!sameShape) {
+    return next(
+      new ErrorResponse(
+        'Only the costs of a closed batch can be corrected — its variants and quantities are fixed',
+        400
+      )
+    );
+  }
+  await validateCostParties(batch.business, corrected);
+
+  // Per variant: old vs corrected total, split by how much of the batch is left.
+  const costOf = line => (line.costLines || []).reduce((s, c) => s + (c.amountPaisa || 0), 0);
+  let soldDeltaPaisa = 0;
+  for (const line of batch.lines) {
+    const fixed = corrected.find(c => String(c.variantId) === String(line.variantId));
+    const deltaPaisa = costOf(fixed) - costOf(line);
+    line.costLines = fixed.costLines;
+    if (!deltaPaisa) continue;
+
+    const variant = prod.variants.id(line.variantId);
+    const stock = Math.max(0, variant?.stock || 0);
+    const soldUnits = line.quantity - Math.min(stock, line.quantity);
+    const soldShare = Math.round((deltaPaisa * soldUnits) / line.quantity);
+    soldDeltaPaisa += soldShare;
+
+    if (variant && stock > 0) {
+      const valuePaisa = toPaisa(variant.costPrice) * stock + (deltaPaisa - soldShare);
+      variant.costPrice = fromPaisa(Math.max(0, Math.round(valuePaisa / stock)));
+    }
+  }
+
+  const article = articleOf(prod);
+  if (batch.closeEntry) {
+    await reverseEntry(batch.closeEntry, {
+      userId: req.user.id,
+      memo: `Correction (reversal) — ${article}`
+    });
+  }
+  const entry = await postBatchEntry(batch, prod, req.user.id, 'Production (corrected)');
+
+  if (soldDeltaPaisa) {
+    const inventory = (await accountByCode(batch.business, CODES.INVENTORY))._id;
+    const cogs = (await accountByCode(batch.business, CODES.COGS))._id;
+    const amt = Math.abs(soldDeltaPaisa);
+    // Cost went up ⇒ sold goods cost more (Dr COGS); down ⇒ they cost less.
+    const [dr, cr] = soldDeltaPaisa > 0 ? [cogs, inventory] : [inventory, cogs];
+    await postEntry({
+      business: batch.business,
+      memo: `Cost correction on units already sold — ${article}`,
+      source: { kind: JOURNAL_SOURCES.BATCH, ref: String(batch._id) },
+      lines: [
+        { account: dr, product: batch.product, batch: batch._id, debitPaisa: amt },
+        { account: cr, product: batch.product, batch: batch._id, creditPaisa: amt }
+      ],
+      userId: req.user.id
+    });
+  }
+
+  prod.updatedBy = req.user.id;
+  await prod.save();
+
+  batch.closeEntry = entry._id;
+  batch.updatedBy = req.user.id;
+  await batch.save();
+
+  res.status(200).json({ success: true, data: await batch.populate(DETAIL_POPULATE) });
+};
 
 /**
  * @desc   Close a batch: post Dr Inventory / Cr cash|bank|payable for the whole
@@ -170,55 +328,8 @@ export const closeBatch = asyncHandler(async (req, res, next) => {
   const totalPaisa = allCosts.reduce((s, c) => s + (c.amountPaisa || 0), 0);
   if (totalPaisa <= 0) return next(new ErrorResponse('Batch cost must be greater than zero', 400));
 
-  const acc = code => accountByCode(batch.business, code);
-  const inventory = await acc(CODES.INVENTORY);
-  const payable = await acc(CODES.ACCOUNTS_PAYABLE);
-  const cash = await acc(CODES.CASH);
-  const bank = await acc(CODES.BANK);
   const prod = await Product.findById(batch.product);
-  const article = prod ? `${prod.name} (${prod.articleNumber})` : 'production';
-
-  // Each cost posts its OWN labelled inventory debit under the article, so the
-  // ledger shows exactly what the batch was made of ("Cloth · Default", …). The
-  // credit side is grouped by funding: one payable per supplier — so they see it
-  // owed — plus cash / bank for what was paid.
-  const debits = [];
-  const groups = new Map();
-  for (const line of batch.lines) {
-    for (const c of line.costLines || []) {
-      const amt = c.amountPaisa || 0;
-      if (amt <= 0) continue;
-      debits.push({
-        account: inventory._id,
-        product: batch.product,
-        batch: batch._id,
-        label: `${c.label} · ${line.variantLabel}`,
-        debitPaisa: amt
-      });
-      let key, cl;
-      if (c.onCredit) {
-        key = `payable:${c.party}`;
-        cl = { account: payable._id, party: c.party, creditPaisa: 0 };
-      } else if (c.method === 'bank') {
-        key = 'bank';
-        cl = { account: bank._id, creditPaisa: 0 };
-      } else {
-        key = 'cash';
-        cl = { account: cash._id, creditPaisa: 0 };
-      }
-      const ex = groups.get(key) || cl;
-      ex.creditPaisa += amt;
-      groups.set(key, ex);
-    }
-  }
-
-  const entry = await postEntry({
-    business: batch.business,
-    memo: `Production — ${article}`,
-    source: { kind: JOURNAL_SOURCES.BATCH, ref: String(batch._id) },
-    lines: [...debits, ...groups.values()],
-    userId: req.user.id
-  });
+  const entry = await postBatchEntry(batch, prod, req.user.id);
 
   // Per variant: independent stock, moving-average cost, and sale price.
   if (prod) {
