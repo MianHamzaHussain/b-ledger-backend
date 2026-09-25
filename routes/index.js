@@ -15,6 +15,7 @@ import consignmentRoutes from './consignments.js';
 import partnerRoutes from './partners.js';
 import notificationRoutes from './notifications.js';
 import pushRoutes from './push.js';
+import systemRoutes from './system.js';
 
 const router = express.Router();
 
@@ -33,5 +34,6 @@ router.use('/consignments', consignmentRoutes);
 router.use('/partners', partnerRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/push', pushRoutes);
+router.use('/system', systemRoutes);
 
 export default router;
