@@ -12,6 +12,7 @@ import {
   postOrderSale,
   postOrderRemittance,
   postReturnCharge,
+  postDeliveryCharge,
   computeRemittance
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
@@ -454,6 +455,11 @@ export const exchangeOrder = asyncHandler(async (req, res, next) => {
         userId: req.user.id,
         memo: `Exchange of order ${original.orderNumber}`
       });
+      // The reversal took the forward delivery fee out with the sale, but the
+      // courier did deliver the parcel — that cost stands, so re-book it.
+      if (original.courier && original.deliveryChargePaisa > 0) {
+        await postDeliveryCharge(original, fromPaisa(original.deliveryChargePaisa), req.user.id);
+      }
     }
     if (original.paymentEntry) {
       await reverseEntry(original.paymentEntry, {

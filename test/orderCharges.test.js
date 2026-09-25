@@ -14,7 +14,8 @@ import {
 import Order from '../models/Order.js';
 import JournalEntry from '../models/JournalEntry.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { updateOrderStatus } from '../controllers/orderController.js';
+import { updateOrderStatus, exchangeOrder } from '../controllers/orderController.js';
+import { accountBalance } from '../utils/ledger.js';
 import { orderExchangeSchema, orderStatusSchema } from '../schemas/orders.js';
 import { toPaisa } from '../utils/money.js';
 
@@ -128,4 +129,32 @@ test('exchange schema requires the pickup charge', () => {
   const ok = orderExchangeSchema.safeParse({ items, returnCharge: 0 });
   assert.equal(ok.success, true);
   assert.equal(ok.data.returnCharge, 0);
+});
+
+test('exchange keeps the forward delivery fee and books the pickup charge', async () => {
+  const { biz, order } = await makeOrder('dispatched');
+  await setStatus(order, { status: 'delivered', deliveryCharge: 180 });
+
+  const delivered = await Order.findById(order._id);
+  const item = delivered.items[0];
+  await runHandler(exchangeOrder, {
+    resource: delivered,
+    body: orderExchangeSchema.parse({
+      items: [
+        {
+          product: String(item.product),
+          variantId: String(item.variantId),
+          quantity: 1,
+          unitPrice: 2000
+        }
+      ],
+      returnCharge: 120
+    })
+  });
+
+  const acc = async code => (await accountByCode(biz._id, code))._id;
+  // Sale reversed, but the courier did deliver: the fee still stands.
+  assert.equal(await accountBalance(biz._id, await acc(CODES.DELIVERY_CHARGES)), toPaisa(180));
+  assert.equal(await accountBalance(biz._id, await acc(CODES.RETURN_CHARGES)), toPaisa(120));
+  assert.equal(await accountBalance(biz._id, await acc(CODES.SALES)), 0, 'sale unwound');
 });
