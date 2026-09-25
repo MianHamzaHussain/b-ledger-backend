@@ -111,8 +111,18 @@ const OrderSchema = new mongoose.Schema(
     saleEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
     /** The COD-remittance entry, posted when the courier settles. */
     paymentEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
-    /** Courier's delivery fee, deducted from the remittance (paisa). */
+    /**
+     * Courier's delivery fee, deducted from the remittance (paisa). Captured at
+     * DELIVERY, not dispatch — the courier bills by weight, city and outcome, so
+     * the real figure is only known once the parcel has landed.
+     */
     deliveryChargePaisa: { type: Number },
+    /**
+     * What the courier billed to bring the parcel back (paisa) — a refused
+     * return, or the pickup leg of an exchange. Kept apart from the delivery fee
+     * so an exchanged order records both legs.
+     */
+    returnChargePaisa: { type: Number },
 
     // ── Exchange links ────────────────────────────────────────────────────
     /** On the replacement order: the original it replaces. */

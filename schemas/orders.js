@@ -46,7 +46,9 @@ export const orderUpdateSchema = z.object({
 export const orderStatusSchema = z.object({
   status: z.enum(['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled', 'returned']),
   courier: id.optional(),
-  deliveryCharge: z.coerce.number().min(0).optional(),
+  /** The courier's bill for the outcome — the delivery fee on `delivered`, the
+   *  return fee on `returned`. The controller requires it on those two. */
+  deliveryCharge: z.coerce.number().min(0, 'Delivery charge can not be negative').optional(),
   trackingId: z.string().optional()
 });
 
@@ -56,7 +58,11 @@ export const orderPaymentSchema = z.object({
 
 export const orderExchangeSchema = z.object({
   items: z.array(orderItem).min(1, 'Add at least one replacement item'),
-  courier: id.optional()
+  courier: id.optional(),
+  /** What the courier billed to collect the original parcel. */
+  returnCharge: z.coerce
+    .number({ error: "Enter the courier's return charge (0 if none)" })
+    .min(0, 'Return charge can not be negative')
 });
 
 export const orderTrackingSchema = z.object({
