@@ -9,6 +9,7 @@ import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledger.js';
 import { salaryLines, methodCode } from '../utils/partyPosting.js';
 import { cashbook, moneySummary } from '../utils/cashbook.js';
+import { unsettleCourier } from '../utils/courierSettlement.js';
 import {
   profitAndLoss,
   balanceSheet,
@@ -620,6 +621,11 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
     userId: req.user.id,
     memo: req.body.memo
   });
+  // Undoing a courier's lump sum un-pays the orders it paid, so the orders and
+  // the courier's balance keep telling the same story.
+  if (entry.source?.kind === JOURNAL_SOURCES.COURIER_SETTLEMENT) {
+    await unsettleCourier(entry._id);
+  }
   res.status(201).json({ success: true, data: reversal });
 });
 

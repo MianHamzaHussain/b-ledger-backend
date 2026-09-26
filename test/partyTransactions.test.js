@@ -87,10 +87,10 @@ test('lender: loan in, and a repayment can not exceed what is owed', async () =>
   assert.equal(await partyBalance(biz._id, lender._id), -toPaisa(60000));
 });
 
-test('courier: refused — couriers settle per order', async () => {
+test('courier: we never hand a courier money from here', async () => {
   const biz = await makeBusiness();
   const courier = await makeParty(biz._id, 'courier');
-  await assert.rejects(txn(courier, { direction: 'got', amount: 100 }), /per order/);
+  await assert.rejects(txn(courier, { direction: 'gave', amount: 100 }), /only pays you/);
 });
 
 /** A delivered, unpaid counter sale owing `owed` rupees to `customer`. */

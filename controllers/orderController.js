@@ -639,6 +639,15 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     // A counter sale is now paid in full — what the party page collected plus
     // whatever this entry just booked.
     if (!order.courier) order.paidPaisa = toPaisa(order.codAmount);
+  } else if (order.courierSettlement) {
+    // Paid as part of a courier's lump sum — unmarking one order would leave the
+    // money booked against the courier but the order unpaid.
+    return next(
+      new ErrorResponse(
+        'This order was paid in a courier settlement. Reverse that settlement instead.',
+        400
+      )
+    );
   } else if (!order.courier && !order.paymentEntry && order.paidPaisa > 0) {
     // Paid through the customer's own account, not this button — undoing it
     // here would leave that money booked but the order unpaid.

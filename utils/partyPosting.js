@@ -100,7 +100,7 @@ const moneyLines = async (business, party, paisa, direction, accountCode, method
  *   customer   gave → refund / credit given    got → their payment
  *   employee   gave → salary paid (clears owed first)   got → salary due
  *   lender     gave → loan repaid (principal)  got → loan taken
- *   courier    — settled per order (Mark paid), not here
+ *   courier    — handled by settleCourier (a lump-sum payment), not here
  */
 export const partyTransactionLines = async (party, direction, paisa, { method, category } = {}) => {
   const business = party.business;
@@ -170,7 +170,9 @@ export const partyTransactionLines = async (party, direction, paisa, { method, c
     }
 
     default:
-      throw new ErrorResponse('A courier is settled per order — mark its orders paid instead', 400);
+      // Couriers are handled before this (settleCourier) — only reachable if a
+      // new party type is added without a mapping.
+      throw new ErrorResponse('This kind of party can not be recorded here', 400);
   }
 };
 

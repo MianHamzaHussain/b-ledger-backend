@@ -118,6 +118,12 @@ const OrderSchema = new mongoose.Schema(
      */
     paidPaisa: { type: Number },
     /**
+     * Courier order paid by a lump-sum courier settlement rather than its own
+     * "Mark paid": the settlement's journal entry. Reversing that entry sets the
+     * order back to unpaid; the order itself can't be unmarked on its own.
+     */
+    courierSettlement: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
+    /**
      * Courier's delivery fee, deducted from the remittance (paisa). Captured at
      * DELIVERY, not dispatch — the courier bills by weight, city and outcome, so
      * the real figure is only known once the parcel has landed.

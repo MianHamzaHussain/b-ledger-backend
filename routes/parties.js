@@ -89,7 +89,9 @@ router.get('/summary', can('parties', 'read'), getPartySummary);
  *       payment is applied to their unpaid counter sales, oldest first).
  *       employee: gave = salary paid (clears owed salary first), got = salary due.
  *       lender: gave = principal repaid (at most what is owed), got = loan taken.
- *       Couriers are settled per order and are refused here.
+ *       courier: got = a lump-sum payment — settles its delivered orders oldest
+ *       first, as far as it covers (response adds settledOrders / unpaidOrders);
+ *       gave is refused.
  *     tags: [Finance]
  *     security: [{ bearerAuth: [] }]
  *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]

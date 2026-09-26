@@ -9,6 +9,7 @@ import { partyBalancesByIds, partyStatement, postEntry } from '../utils/ledger.j
 import { ensureChart } from '../utils/chartOfAccounts.js';
 import { partyLedgerReport } from '../utils/reports.js';
 import { partyTransactionLines, allocateCustomerPayment } from '../utils/partyPosting.js';
+import { settleCourier } from '../utils/courierSettlement.js';
 import { computeRemittance } from '../utils/orderPosting.js';
 import { fromPaisa, toPaisa } from '../utils/money.js';
 import { JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
@@ -182,13 +183,33 @@ export const getPartySummary = asyncHandler(async (req, res, next) => {
  * @desc   "You gave" / "You got" on a party — DigiKhata's one action, on top of
  *         the double-entry books. The party's type picks the account (see
  *         `partyTransactionLines`), so the user never chooses one. A credit
- *         customer's payment is also applied to their unpaid counter sales.
+ *         customer's payment is also applied to their unpaid counter sales; a
+ *         courier's payment settles its delivered orders (`settleCourier`).
  * @route  POST /api/v1/parties/:id/transactions  (journal:create — scoped)
  */
-export const recordPartyTransaction = asyncHandler(async (req, res) => {
+export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
   const party = req.resource;
   const { direction, method, category, date, memo } = req.body;
   const paisa = toPaisa(req.body.amount);
+
+  // A courier pays in one weekly lump sum; that settles its orders, oldest
+  // first. We never hand a courier money from here, so "gave" is refused.
+  if (party.type === PARTY_TYPES.COURIER) {
+    if (direction !== 'got') {
+      return next(
+        new ErrorResponse('A courier only pays you — record its payment with You got', 400)
+      );
+    }
+    const { entry, settledOrders, unpaidOrders } = await settleCourier(party, paisa, {
+      method,
+      date,
+      memo,
+      userId: req.user.id
+    });
+    return res
+      .status(201)
+      .json({ success: true, data: { ...entry.toObject(), settledOrders, unpaidOrders } });
+  }
 
   await ensureChart(party.business);
   const built = await partyTransactionLines(party, direction, paisa, { method, category });
