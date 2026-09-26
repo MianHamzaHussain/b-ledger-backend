@@ -5,6 +5,7 @@ import Product from '../models/Product.js';
 import Business from '../models/Business.js';
 import Customer from '../models/Customer.js';
 import Party from '../models/Party.js';
+import JournalEntry from '../models/JournalEntry.js';
 import { reserveStock, releaseStock } from '../utils/stock.js';
 import { createCrudHandlers } from '../utils/crudController.js';
 import { reverseEntry } from '../utils/ledger.js';
@@ -98,12 +99,15 @@ export const getOrder = asyncHandler(async (req, res) => {
   // buyer simply owes the full balance, so the net receivable is the balance.
   let remittance;
   if (!order.courier) {
+    // Part-payments made from the customer's party page come off what is owed.
+    const paidPaisa = order.paidPaisa || 0;
     remittance = {
       codAmount: order.codAmount,
       deliveryCharge: 0,
       withholdingTax: 0,
       salesTax: 0,
-      netReceivable: order.codAmount,
+      paidSoFar: fromPaisa(paidPaisa),
+      netReceivable: fromPaisa(Math.max(0, codPaisa - paidPaisa)),
       whtIsAsset: false,
       deliveryKnown: true,
       settled: order.paymentStatus === PAYMENT_STATUS.PAID,
@@ -554,10 +558,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   const chargePaisa = isOutcome ? toPaisa(req.body.deliveryCharge) : 0;
 
   if (status === ORDER_STATUS.DELIVERED) {
-    // The fee comes out of the COD remittance, so it can not exceed it.
-    if (chargePaisa > toPaisa(order.codAmount)) {
-      return next(new ErrorResponse('Delivery charge can not exceed the COD amount', 400));
-    }
+    // The fee may exceed the COD — a fully prepaid parcel still costs a fee,
+    // which the courier takes out of what it owes us on other orders.
     order.deliveryChargePaisa = chargePaisa;
   }
 
@@ -632,7 +634,34 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
       const entry = await postOrderRemittance(order, deliveryCharge, req.user.id);
       if (entry) order.paymentEntry = entry._id;
     }
+    // A counter sale is now paid in full — what the party page collected plus
+    // whatever this entry just booked.
+    if (!order.courier) order.paidPaisa = toPaisa(order.codAmount);
+  } else if (order.courierSettlement) {
+    // Paid as part of a courier's lump sum — unmarking one order would leave the
+    // money booked against the courier but the order unpaid.
+    return next(
+      new ErrorResponse(
+        'This order was paid in a courier settlement. Reverse that settlement instead.',
+        400
+      )
+    );
+  } else if (!order.courier && !order.paymentEntry && order.paidPaisa > 0) {
+    // Paid through the customer's own account, not this button — undoing it
+    // here would leave that money booked but the order unpaid.
+    return next(
+      new ErrorResponse(
+        "This order was paid from the customer's account. Record a refund on their page instead.",
+        400
+      )
+    );
   } else if (order.paymentEntry) {
+    // A counter sale: only the part this entry booked comes off what was paid.
+    if (!order.courier) {
+      const entry = await JournalEntry.findById(order.paymentEntry).select('lines');
+      const bookedPaisa = (entry?.lines || []).reduce((s, l) => s + (l.debitPaisa || 0), 0);
+      order.paidPaisa = Math.max(0, (order.paidPaisa || 0) - bookedPaisa);
+    }
     // Reversing to unpaid unwinds the remittance, but the delivery charge stays
     // — it belongs to the delivery, not the payment.
     await reverseEntry(order.paymentEntry, {

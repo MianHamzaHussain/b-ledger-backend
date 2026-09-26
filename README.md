@@ -23,6 +23,7 @@ Node.js · Express · MongoDB · Socket.io · JWT auth.
 - [Testing](#testing)
 - [Logging](#logging)
 - [The API](#the-api)
+- [How money is recorded](#how-money-is-recorded)
 - [Deploying to production](#deploying-to-production)
 - [Troubleshooting](#troubleshooting)
 
@@ -158,6 +159,16 @@ Generate a fresh pair (do this per environment):
 npx web-push generate-vapid-keys
 ```
 
+### Testing aids
+
+| Variable           | Required | Purpose                                                                                                                                                             |
+| ------------------ | :------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOW_DATA_RESET` |    –     | `true` enables `POST /system/reset` — an admin-only wipe of **all business data** (users and roles are kept). **Leave unset in production.** Anything else refuses. |
+
+> ⚠️ The reset is for testing. Before real business data goes in, remove this
+> variable and revert the reset feature, and set up `mongodump` backups — the
+> wipe can not be undone.
+
 ### Seeder (`npm run seed`)
 
 | Variable              | Required | Purpose                                         |
@@ -219,8 +230,10 @@ MONGO_TEST_URI="mongodb://127.0.0.1:27017/b_ledger_test" npm test
 ```
 
 They cover the accounting invariants (balanced double-entry, order/walk-in/
-courier posting, partner distribution, year-end close), the permission
-resolver, and the request-validation middleware. CI spins up a Mongo service
+courier posting, partner distribution, year-end close), the money flows
+(charges at delivery/return/exchange, courier lump-sum settlement, You gave /
+You got per party type, salary and advances, customer part-payments, the cash
+book), the permission resolver, and the request-validation middleware. CI spins up a Mongo service
 and runs `npm run check` on every push.
 
 ---
@@ -251,7 +264,7 @@ Control verbosity with `LOG_LEVEL` (`trace` `debug` `info` `warn` `error`
 
 Resources: `auth`, `users`, `roles`, `categories`, `products`, `orders`,
 `customers`, `businesses`, `parties`, `finance`, `production`, `consignments`,
-`partners`, `notifications`, `push`.
+`partners`, `notifications`, `push`, and `system` (the testing-only data reset).
 
 **Response envelope** — always `success` first, never a bare array:
 
@@ -267,10 +280,80 @@ Resources: `auth`, `users`, `roles`, `categories`, `products`, `orders`,
 **overrides** grant or deny on top — **deny always wins**. The **Admin** role
 has `fullAccess`, bypassing the grid; it can't be edited or deleted.
 `GET /api/v1/roles/registry` lists every permissionable resource.
+**"Accountant tools"** (`accounting`) is its own resource: the raw debit/credit
+entry, depreciation and year-end close need it, so only admins can reach them
+unless a role is granted it.
+
+---
+
+## How money is recorded
+
+The users are not accountants, so the API keeps **full double-entry books** but
+every write is a **named action** — nobody sends a debit, a credit or an account.
+The rules are in [`CLAUDE.md` §10](./CLAUDE.md); the endpoints:
+
+| What happens                             | Endpoint                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Order dispatched / delivered / returned  | `PUT /orders/:id/status` — tracking id at dispatch; the courier's charge at the outcome   |
+| Order exchanged                          | `POST /orders/:id/exchange` — with the courier's pickup charge                            |
+| "You gave" / "You got" on anyone         | `POST /parties/:id/transactions` — the party's type picks the account                     |
+| A courier's weekly payment               | the same, on a courier (`direction: got`) — marks its delivered orders paid, oldest first |
+| Shop expense, salary, loan, owner money… | `POST /finance/expenses`, `/salary`, `/loans`, `/capital`, `/assets`                      |
+| Cash book for a day                      | `GET /finance/cashbook?business&account=cash\|bank&from&to`                               |
+| Home numbers (cash, bank, to get/give)   | `GET /finance/summary?business`                                                           |
+| Totals owed each way                     | `GET /parties/summary?business`                                                           |
+
+Swagger (`/api-docs`) documents every field.
 
 ---
 
 ## Deploying to production
+
+### Auto-deploy to the VPS
+
+Merging to `master` deploys automatically: the **CI** workflow runs the check,
+and only if it passes does its `deploy` job SSH into the VPS and run `git pull --ff-only`, `npm ci --omit=dev` and `pm2 restart bledger-api` in `/var/www/sites/b-ledger-backend`, then waits for `/api/v1/health` to answer.
+Every PR runs the same check once — make it required so nothing merges red.
+
+**One-time setup** (do it once per repo — backend and frontend):
+
+1. **A deploy key.** On your own machine:
+
+   ```bash
+   ssh-keygen -t ed25519 -C "github-deploy" -f bledger_deploy -N ""
+   ```
+
+   Append `bledger_deploy.pub` to `~/.ssh/authorized_keys` on the VPS, for the
+   **same user that runs pm2** (pm2 processes are per-user). Both repos can
+   share this key.
+
+2. **The server's host key**, so the deploy refuses an impostor:
+
+   ```bash
+   ssh-keyscan -p 22 <vps-host> > known_hosts.txt
+   ```
+
+3. **GitHub → repo → Settings → Secrets and variables → Actions:**
+
+   | Kind     | Name              | Value                                  |
+   | -------- | ----------------- | -------------------------------------- |
+   | Secret   | `VPS_HOST`        | the VPS IP or hostname                 |
+   | Secret   | `VPS_USER`        | the SSH user that owns the app and pm2 |
+   | Secret   | `VPS_SSH_KEY`     | the whole contents of `bledger_deploy` |
+   | Secret   | `VPS_KNOWN_HOSTS` | the contents of `known_hosts.txt`      |
+   | Secret   | `VPS_PORT`        | only if SSH isn't on 22                |
+   | Variable | `DEPLOY_ENABLED`  | `true` — the switch; unset it to pause |
+
+4. **Require the check:** Settings → Branches → add a rule for `master` →
+   _Require status checks to pass_ → select **`check`**.
+
+5. The VPS must already be able to `git pull` this repo (as it does today).
+
+A failed deploy shows red on the commit in GitHub → Actions, with the server's
+output. If the API doesn't come up healthy the deploy fails — look at
+`pm2 logs bledger-api` on the server.
+
+### First-time server setup
 
 1. **Host:** deploy to a platform that runs a **persistent Node process** —
    Render, Railway, Fly, a VPS, a container. ⚠️ **Vercel/Lambda serverless
@@ -291,14 +374,16 @@ has `fullAccess`, bypassing the grid; it can't be edited or deleted.
 
 ## Troubleshooting
 
-| Symptom                                              | Cause & fix                                                                                |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Server exits at boot naming a variable               | A required env var is missing. Fill it in `.env` (see the table above).                    |
-| `MongooseServerSelectionError` / can't connect       | MongoDB isn't running or `MONGODB_URI` is wrong. Start Mongo or fix the URI.               |
-| `npm run seed` refuses                               | `SEED_ADMIN_PASSWORD` is unset or under 8 chars. Set it in `.env`.                         |
-| Login works but WebSocket fails in production        | The web app's origin isn't in `ALLOWED_ORIGINS`/`FRONTEND_URL`, or the host is serverless. |
-| Emails don't send in dev                             | Start Mailpit (SMTP `1025`, inbox `http://localhost:8025`), or leave SMTP blank to skip.   |
-| `[vite] ws proxy error` in the **frontend** terminal | Dev-proxy noise — usually this API being down/restarting. See the frontend README.         |
+| Symptom                                              | Cause & fix                                                                                  |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Server exits at boot naming a variable               | A required env var is missing. Fill it in `.env` (see the table above).                      |
+| `MongooseServerSelectionError` / can't connect       | MongoDB isn't running or `MONGODB_URI` is wrong. Start Mongo or fix the URI.                 |
+| `npm run seed` refuses                               | `SEED_ADMIN_PASSWORD` is unset or under 8 chars. Set it in `.env`.                           |
+| Login works but WebSocket fails in production        | The web app's origin isn't in `ALLOWED_ORIGINS`/`FRONTEND_URL`, or the host is serverless.   |
+| Emails don't send in dev                             | Start Mailpit (SMTP `1025`, inbox `http://localhost:8025`), or leave SMTP blank to skip.     |
+| `[vite] ws proxy error` in the **frontend** terminal | Dev-proxy noise — usually this API being down/restarting. See the frontend README.           |
+| "Data reset is disabled on this server"              | `ALLOW_DATA_RESET` isn't `true`. Intended in production — see [Testing aids](#testing-aids). |
+| A user gets 403 on General entry / year-end close    | Those need "Accountant tools" (`accounting`). Grant it on the role, or use an admin.         |
 
 > Never commit `.env`. `example.env` holds placeholders only. A leaked secret is
 > burned even after you delete the commit — **rotate it**.

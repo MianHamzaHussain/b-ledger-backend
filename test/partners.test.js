@@ -2,9 +2,11 @@ import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { connect, clear, disconnect, makeBusiness, runHandler } from './helpers/db.js';
 import Partner from '../models/Partner.js';
+import JournalEntry from '../models/JournalEntry.js';
 import {
   createPartner,
   investPartner,
+  withdrawPartner,
   distributeProfit
 } from '../controllers/partnerController.js';
 import { accountBalance } from '../utils/ledger.js';
@@ -59,4 +61,16 @@ test('distributeProfit refuses when active shares do not total 100%', async () =
     runHandler(distributeProfit, { body: { business: String(biz._id), amount: 1000 } }),
     /100%/
   );
+});
+
+test('a capital move keeps the date and note it was given', async () => {
+  const biz = await makeBusiness();
+  const ali = await addPartner(biz._id, 'Ali', 100);
+  await runHandler(withdrawPartner, {
+    resource: await Partner.findById(ali._id),
+    body: { amount: 1200, method: 'cash', date: '2026-09-01', memo: 'Eid shopping' }
+  });
+  const entry = await JournalEntry.findOne({ business: biz._id, memo: 'Eid shopping' });
+  assert.ok(entry, 'note kept as the memo');
+  assert.equal(entry.date.toISOString().slice(0, 10), '2026-09-01');
 });

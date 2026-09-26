@@ -6,13 +6,10 @@ import Party from '../models/Party.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import {
-  postEntry,
-  reverseEntry,
-  trialBalance,
-  latestLock,
-  partyAccountBalance
-} from '../utils/ledger.js';
+import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledger.js';
+import { salaryLines, methodCode } from '../utils/partyPosting.js';
+import { cashbook, moneySummary } from '../utils/cashbook.js';
+import { unsettleCourier } from '../utils/courierSettlement.js';
 import {
   profitAndLoss,
   balanceSheet,
@@ -31,9 +28,6 @@ const amountPaisa = raw => {
   }
   return toPaisa(value);
 };
-
-/** Cash or bank, defaulting to cash. */
-const methodCode = method => (method === 'bank' ? CODES.BANK : CODES.CASH);
 
 /** Small helper so every endpoint posts + responds identically. */
 const respondPosted = async (res, params) => {
@@ -160,21 +154,9 @@ export const recordPayment = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc   Record salary — accrued as owed, or paid.
- *
- *         Paying an employee first clears what they are already owed (an
- *         earlier accrual); only the part above that is new salary expense. So
- *         "record as owed" in March + "paid" in April books the salary ONCE and
- *         leaves the employee at zero — not owed forever, nor expensed twice.
- *
- *           accrue:  Dr Salaries            Cr Salaries Payable [employee]
- *           pay:     Dr Salaries (new part) Cr Salaries Payable [employee]
- *                    Dr Salaries Payable [employee] (whole payment)  Cr Cash/Bank
- *
- *         The employee is tagged only on Salaries Payable — never on the expense
- *         — so a paid employee never shows as owing the business. Their
- *         statement reads "salary due" / "salary paid" and nets to what is owed.
- *         Paying with no employee chosen stays a plain Dr Salaries / Cr Cash.
+ * @desc   Record salary — accrued as owed, or paid. Paying first clears what
+ *         the employee is already owed (see `salaryLines`), so an accrual then a
+ *         payment books the salary once.
  * @route  POST /api/v1/finance/salary  (journal:create — scoped)
  */
 export const recordSalary = asyncHandler(async (req, res, next) => {
@@ -189,36 +171,11 @@ export const recordSalary = asyncHandler(async (req, res, next) => {
     if (!employee) return next(new ErrorResponse('That is not an employee of this business', 400));
   }
 
-  const salaries = await accountByCode(business, CODES.SALARIES);
-  const payable = await accountByCode(business, CODES.SALARIES_PAYABLE);
-  const money = await accountByCode(business, methodCode(method));
-
-  let lines;
-  if (onCredit) {
-    lines = [
-      { account: salaries._id, debitPaisa: paisa },
-      { account: payable._id, party, creditPaisa: paisa }
-    ];
-  } else if (party) {
-    // What we already owe them (a credit balance on Salaries Payable).
-    const owedPaisa = Math.max(0, -(await partyAccountBalance(business, payable._id, party)));
-    const newSalaryPaisa = paisa - Math.min(paisa, owedPaisa);
-    lines = [
-      ...(newSalaryPaisa > 0
-        ? [
-            { account: salaries._id, debitPaisa: newSalaryPaisa },
-            { account: payable._id, party, creditPaisa: newSalaryPaisa }
-          ]
-        : []),
-      { account: payable._id, party, debitPaisa: paisa },
-      { account: money._id, creditPaisa: paisa }
-    ];
-  } else {
-    lines = [
-      { account: salaries._id, debitPaisa: paisa },
-      { account: money._id, creditPaisa: paisa }
-    ];
-  }
+  const lines = await salaryLines(business, party, paisa, {
+    onCredit,
+    method,
+    deductAdvancePaisa: toPaisa(req.body.deductAdvance || 0)
+  });
 
   await respondPosted(res, {
     business,
@@ -235,7 +192,7 @@ export const recordSalary = asyncHandler(async (req, res, next) => {
  *         the escape hatch for anything without a dedicated flow (buying an
  *         asset from cash, taking a loan, an adjustment). Always balances by
  *         construction: one amount, one debit, one credit.
- * @route  POST /api/v1/finance/manual  (journal:create — scoped)
+ * @route  POST /api/v1/finance/manual  (accounting:create — scoped)
  */
 export const recordManual = asyncHandler(async (req, res, next) => {
   const { business, debitAccount, creditAccount, date, memo } = req.body;
@@ -353,7 +310,7 @@ export const recordLoan = asyncHandler(async (req, res, next) => {
  * @desc   Depreciation — spread a fixed asset's cost as it wears out. An expense
  *         matched by a contra-asset (accumulated depreciation), so the asset's
  *         book value falls without touching its original cost.
- * @route  POST /api/v1/finance/depreciation  (journal:create — scoped)
+ * @route  POST /api/v1/finance/depreciation  (accounting:create — scoped)
  */
 export const recordDepreciation = asyncHandler(async (req, res) => {
   const { business, date, memo } = req.body;
@@ -382,7 +339,7 @@ export const recordDepreciation = asyncHandler(async (req, res) => {
  *         in equity where partner distributions draw from, and the next period
  *         starts a fresh P&L. Balances by construction; returns the net profit
  *         it moved. Run it before distributing profit.
- * @route  POST /api/v1/finance/close  (journal:create — scoped)
+ * @route  POST /api/v1/finance/close  (accounting:create — scoped)
  */
 export const closePeriod = asyncHandler(async (req, res, next) => {
   const { business, date, memo } = req.body;
@@ -668,5 +625,78 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
     userId: req.user.id,
     memo: req.body.memo
   });
+  // Undoing a courier's lump sum un-pays the orders it paid, so the orders and
+  // the courier's balance keep telling the same story.
+  if (entry.source?.kind === JOURNAL_SOURCES.COURIER_SETTLEMENT) {
+    await unsettleCourier(entry._id);
+  }
   res.status(201).json({ success: true, data: reversal });
+});
+
+/** An optional ISO date query param → Date, or a 400 if it doesn't parse. */
+const parseDateParam = (value, name) => {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new ErrorResponse(`Invalid ${name} date`, 400);
+  return date;
+};
+
+/**
+ * @desc   Cash book: opening balance, every movement in and out, closing balance
+ *         of Cash (or Bank) for a date range — the ledger read as a rokar.
+ * @route  GET /api/v1/finance/cashbook?business=&account=cash|bank&from=&to=
+ *         (journal:read — scoped)
+ */
+export const getCashbook = asyncHandler(async (req, res, next) => {
+  const { business, account } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  // Out of scope reads as not found, never forbidden (CLAUDE.md §6).
+  if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
+  if (account && account !== 'cash' && account !== 'bank') {
+    return next(new ErrorResponse('Account must be cash or bank', 400));
+  }
+
+  const book = await cashbook(business, {
+    account: account || 'cash',
+    from: parseDateParam(req.query.from, 'from'),
+    to: parseDateParam(req.query.to, 'to')
+  });
+  res.status(200).json({
+    success: true,
+    data: {
+      ...book,
+      opening: fromPaisa(book.openingPaisa),
+      in: fromPaisa(book.inPaisa),
+      out: fromPaisa(book.outPaisa),
+      closing: fromPaisa(book.closingPaisa),
+      rows: book.rows.map(r => ({
+        ...r,
+        in: fromPaisa(r.inPaisa),
+        out: fromPaisa(r.outPaisa),
+        balance: fromPaisa(r.balancePaisa)
+      }))
+    }
+  });
+});
+
+/**
+ * @desc   The home screen's numbers: cash in hand, bank, to get, to give.
+ * @route  GET /api/v1/finance/summary?business=  (journal:read — scoped)
+ */
+export const getMoneySummary = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
+
+  const s = await moneySummary(business);
+  res.status(200).json({
+    success: true,
+    data: {
+      ...s,
+      cash: fromPaisa(s.cashPaisa),
+      bank: fromPaisa(s.bankPaisa),
+      receivable: fromPaisa(s.receivablePaisa),
+      payable: fromPaisa(s.payablePaisa)
+    }
+  });
 });

@@ -15,3 +15,19 @@ export const partyCreateSchema = z.object({
 });
 
 export const partyUpdateSchema = partyCreateSchema.partial();
+
+export const partyTransactionSchema = z.object({
+  direction: z.enum(['gave', 'got']),
+  amount: z.coerce
+    .number({ error: 'Enter an amount' })
+    .positive('Enter an amount greater than zero'),
+  method: z.enum(['cash', 'bank']).optional(),
+  /** A supplier's bill: the expense account code it was for. */
+  category: z.string().optional(),
+  /** An employee payment: salary (default) or an advance against later salary. */
+  purpose: z.enum(['salary', 'advance']).optional(),
+  /** An employee's salary: how much of their outstanding advance to cut from it. */
+  deductAdvance: z.coerce.number().min(0, 'Can not be negative').optional(),
+  date: z.union([z.string(), z.date()]).optional(),
+  memo: z.string().trim().max(200).optional()
+});

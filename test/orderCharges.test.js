@@ -83,10 +83,6 @@ test('delivered requires the charge and books it into the sale', async () => {
   const { biz, order } = await makeOrder('dispatched');
 
   await assert.rejects(setStatus(order, { status: 'delivered' }), /charge/);
-  await assert.rejects(
-    setStatus(order, { status: 'delivered', deliveryCharge: 2500 }),
-    /exceed the COD/
-  );
 
   const out = await setStatus(order, { status: 'delivered', deliveryCharge: 180 });
   assert.equal(out.body.data.deliveryChargePaisa, toPaisa(180));
@@ -195,7 +191,24 @@ test('a charge row on the courier statement carries no COD breakdown', async () 
   const rows = out.body.data.rows;
   const sale = rows.find(r => String(r.entry) === String(delivered.saleEntry));
   assert.ok(sale.order, 'the sale row still explains the COD');
-  const pickup = rows.find(r => /^Return charge/.test(r.memo));
+  const pickup = rows.find(r => r.memo.startsWith('Return charge'));
   assert.ok(pickup, 'pickup charge is on the courier statement');
   assert.equal(pickup.order, undefined, 'but without the COD breakdown');
+});
+
+test('a fully prepaid parcel: the fee comes off what the courier owes us', async () => {
+  const { biz, courier, order } = await makeOrder('dispatched');
+  // The customer paid all 2,000 up front — nothing to collect on the door.
+  order.advanceAmount = 2000;
+  await order.save();
+  assert.equal(order.codAmount, 0);
+
+  const out = await setStatus(order, { status: 'delivered', deliveryCharge: 200 });
+  assert.ok(out.body.data.saleEntry, 'the sale is still booked');
+
+  const acc = async code => (await accountByCode(biz._id, code))._id;
+  assert.equal(await accountBalance(biz._id, await acc(CODES.DELIVERY_CHARGES)), toPaisa(200));
+  assert.equal(await accountBalance(biz._id, await acc(CODES.CASH)), toPaisa(2000), 'advance');
+  // The courier keeps 200 out of the COD it sends us for other parcels.
+  assert.equal(await partyBalance(biz._id, courier._id), -toPaisa(200));
 });

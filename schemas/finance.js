@@ -47,6 +47,8 @@ export const salarySchema = z.object({
   amount,
   party: id.optional(),
   onCredit: z.boolean().optional(),
+  /** How much of the employee's outstanding advance to cut from this salary. */
+  deductAdvance: z.coerce.number().min(0).optional(),
   method,
   memo,
   date

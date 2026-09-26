@@ -5,10 +5,14 @@ import Business from '../models/Business.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import { createCrudHandlers } from '../utils/crudController.js';
-import { partyBalancesByIds, partyStatement } from '../utils/ledger.js';
+import { partyBalancesByIds, partyStatement, postEntry } from '../utils/ledger.js';
+import { ensureChart } from '../utils/chartOfAccounts.js';
+import { partyLedgerReport } from '../utils/reports.js';
+import { partyTransactionLines, allocateCustomerPayment } from '../utils/partyPosting.js';
+import { settleCourier } from '../utils/courierSettlement.js';
 import { computeRemittance } from '../utils/orderPosting.js';
 import { fromPaisa, toPaisa } from '../utils/money.js';
-import { JOURNAL_SOURCES } from '../utils/constants.js';
+import { JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
 
 /**
  * Attach each order-sourced statement row's own breakdown, so a courier or
@@ -146,4 +150,87 @@ export const getPartyStatement = asyncHandler(async (req, res) => {
       }))
     }
   });
+});
+
+/**
+ * @desc   Totals across every party of a business — what is owed to you and what
+ *         you owe — for the top of the parties list. Computed over ALL parties,
+ *         not the page on screen, so the numbers don't change as you scroll.
+ * @route  GET /api/v1/parties/summary?business=  (parties:read — scoped)
+ */
+export const getPartySummary = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Choose a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    // Out of scope reads as not found, never as forbidden (CLAUDE.md §6).
+    return next(new ErrorResponse('Business not found', 404));
+  }
+
+  const { receivablePaisa, payablePaisa } = await partyLedgerReport(business);
+  res.status(200).json({
+    success: true,
+    data: {
+      receivable: fromPaisa(receivablePaisa),
+      payable: fromPaisa(payablePaisa),
+      receivablePaisa,
+      payablePaisa
+    }
+  });
+});
+
+/**
+ * @desc   "You gave" / "You got" on a party — DigiKhata's one action, on top of
+ *         the double-entry books. The party's type picks the account (see
+ *         `partyTransactionLines`), so the user never chooses one. A credit
+ *         customer's payment is also applied to their unpaid counter sales; a
+ *         courier's payment settles its delivered orders (`settleCourier`).
+ * @route  POST /api/v1/parties/:id/transactions  (journal:create — scoped)
+ */
+export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
+  const party = req.resource;
+  const { direction, method, category, purpose, date, memo } = req.body;
+  const paisa = toPaisa(req.body.amount);
+
+  // A courier pays in one weekly lump sum; that settles its orders, oldest
+  // first. We never hand a courier money from here, so "gave" is refused.
+  if (party.type === PARTY_TYPES.COURIER) {
+    if (direction !== 'got') {
+      return next(
+        new ErrorResponse('A courier only pays you — record its payment with You got', 400)
+      );
+    }
+    const { entry, settledOrders, unpaidOrders } = await settleCourier(party, paisa, {
+      method,
+      date,
+      memo,
+      userId: req.user.id
+    });
+    return res
+      .status(201)
+      .json({ success: true, data: { ...entry.toObject(), settledOrders, unpaidOrders } });
+  }
+
+  await ensureChart(party.business);
+  const built = await partyTransactionLines(party, direction, paisa, {
+    method,
+    category,
+    purpose,
+    deductAdvancePaisa: toPaisa(req.body.deductAdvance || 0)
+  });
+
+  const entry = await postEntry({
+    business: party.business,
+    date,
+    memo: memo || built.memo,
+    source: { kind: built.source },
+    lines: built.lines,
+    userId: req.user.id
+  });
+
+  if (party.type === PARTY_TYPES.CUSTOMER && direction === 'got') {
+    await allocateCustomerPayment(party.business, party._id, paisa);
+  }
+
+  res.status(201).json({ success: true, data: entry });
 });

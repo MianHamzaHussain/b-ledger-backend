@@ -145,7 +145,7 @@ export const deletePartner = asyncHandler(async (req, res, next) => {
 });
 
 /** Shared by invest/withdraw: move cash/bank against the partner's capital. */
-const postCapitalMove = async (partner, { amountRaw, method, invest, userId }) => {
+const postCapitalMove = async (partner, { amountRaw, method, invest, date, memo, userId }) => {
   const paisa = amountPaisa(amountRaw);
   await ensureChart(partner.business);
   const money = (await accountByCode(partner.business, methodCode(method)))._id;
@@ -160,7 +160,8 @@ const postCapitalMove = async (partner, { amountRaw, method, invest, userId }) =
       ];
   return postEntry({
     business: partner.business,
-    memo: `${invest ? 'Capital in' : 'Drawings'} — ${partner.name}`,
+    date,
+    memo: memo || `${invest ? 'Capital in' : 'Drawings'} — ${partner.name}`,
     source: { kind: JOURNAL_SOURCES.CAPITAL },
     lines,
     userId
@@ -176,6 +177,8 @@ export const investPartner = asyncHandler(async (req, res) => {
   await postCapitalMove(partner, {
     amountRaw: req.body.amount,
     method: req.body.method,
+    date: req.body.date,
+    memo: req.body.memo,
     invest: true,
     userId: req.user.id
   });
@@ -194,6 +197,8 @@ export const withdrawPartner = asyncHandler(async (req, res) => {
   await postCapitalMove(partner, {
     amountRaw: req.body.amount,
     method: req.body.method,
+    date: req.body.date,
+    memo: req.body.memo,
     invest: false,
     userId: req.user.id
   });
