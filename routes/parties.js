@@ -4,14 +4,20 @@ import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permiss
 import advancedResults from '../middlewares/advancedResults.js';
 import { validate } from '../middlewares/validate.js';
 import Party from '../models/Party.js';
-import { partyCreateSchema, partyUpdateSchema } from '../schemas/parties.js';
+import {
+  partyCreateSchema,
+  partyUpdateSchema,
+  partyTransactionSchema
+} from '../schemas/parties.js';
 import {
   getParties,
   getParty,
   createParty,
   updateParty,
   deleteParty,
-  getPartyStatement
+  getPartyStatement,
+  getPartySummary,
+  recordPartyTransaction
 } from '../controllers/partyController.js';
 
 const router = express.Router();
@@ -57,6 +63,62 @@ router
     validate(partyCreateSchema),
     createParty
   );
+
+/**
+ * @swagger
+ * /parties/summary:
+ *   get:
+ *     summary: Totals owed to you and owed by you, across every party of a business
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: query, name: business, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: "{ receivable, payable } in rupees (and paisa)" }
+ *       404: { description: Business outside your scope }
+ */
+router.get('/summary', can('parties', 'read'), getPartySummary);
+
+/**
+ * @swagger
+ * /parties/{id}/transactions:
+ *   post:
+ *     summary: '"You gave" / "You got" on a party — posted to the right account for its type'
+ *     description: >
+ *       supplier: gave = payment, got = a bill (needs `category`, an expense code).
+ *       reseller/customer: gave = money given, got = payment received (a customer's
+ *       payment is applied to their unpaid counter sales, oldest first).
+ *       employee: gave = salary paid (clears owed salary first), got = salary due.
+ *       lender: gave = principal repaid (at most what is owed), got = loan taken.
+ *       Couriers are settled per order and are refused here.
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [direction, amount]
+ *             properties:
+ *               direction: { type: string, enum: [gave, got] }
+ *               amount:    { type: number, description: Rupees }
+ *               method:    { type: string, enum: [cash, bank] }
+ *               category:  { type: string, description: "Expense account code — a supplier's bill" }
+ *               date:      { type: string, format: date }
+ *               memo:      { type: string }
+ *     responses:
+ *       201: { description: Entry posted }
+ *       400: { description: Invalid for this party type (e.g. courier, bill with no category) }
+ *       404: { description: Party not found or outside your businesses }
+ */
+router.post(
+  '/:id/transactions',
+  can('journal', 'create'),
+  loadScoped(Party),
+  validate(partyTransactionSchema),
+  recordPartyTransaction
+);
 
 /**
  * @swagger

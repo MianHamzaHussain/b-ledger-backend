@@ -24,4 +24,9 @@ export const partnerUpdateSchema = z.object({
 export const distributeSchema = z.object({ business: id, amount });
 
 /** invest / withdraw — amount and where it moves (business comes from the resource). */
-export const capitalMoveSchema = z.object({ amount, method });
+export const capitalMoveSchema = z.object({
+  amount,
+  method,
+  date: z.union([z.string(), z.date()]).optional(),
+  memo: z.string().trim().max(200).optional()
+});

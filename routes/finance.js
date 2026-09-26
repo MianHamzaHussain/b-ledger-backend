@@ -268,7 +268,7 @@ router.post(
  */
 router.post(
   '/manual',
-  can('journal', 'create'),
+  can('accounting', 'create'),
   restrictBusinessToScope(),
   validate(manualSchema),
   recordManual
@@ -307,7 +307,7 @@ router.post(
  */
 router.post(
   '/depreciation',
-  can('journal', 'create'),
+  can('accounting', 'create'),
   restrictBusinessToScope(),
   validate(depreciationSchema),
   recordDepreciation
@@ -328,7 +328,7 @@ router.post(
  */
 router.post(
   '/close',
-  can('journal', 'create'),
+  can('accounting', 'create'),
   restrictBusinessToScope(),
   validate(closeSchema),
   closePeriod

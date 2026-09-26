@@ -6,13 +6,8 @@ import Party from '../models/Party.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import {
-  postEntry,
-  reverseEntry,
-  trialBalance,
-  latestLock,
-  partyAccountBalance
-} from '../utils/ledger.js';
+import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledger.js';
+import { salaryLines, methodCode } from '../utils/partyPosting.js';
 import {
   profitAndLoss,
   balanceSheet,
@@ -31,9 +26,6 @@ const amountPaisa = raw => {
   }
   return toPaisa(value);
 };
-
-/** Cash or bank, defaulting to cash. */
-const methodCode = method => (method === 'bank' ? CODES.BANK : CODES.CASH);
 
 /** Small helper so every endpoint posts + responds identically. */
 const respondPosted = async (res, params) => {
@@ -160,21 +152,9 @@ export const recordPayment = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc   Record salary — accrued as owed, or paid.
- *
- *         Paying an employee first clears what they are already owed (an
- *         earlier accrual); only the part above that is new salary expense. So
- *         "record as owed" in March + "paid" in April books the salary ONCE and
- *         leaves the employee at zero — not owed forever, nor expensed twice.
- *
- *           accrue:  Dr Salaries            Cr Salaries Payable [employee]
- *           pay:     Dr Salaries (new part) Cr Salaries Payable [employee]
- *                    Dr Salaries Payable [employee] (whole payment)  Cr Cash/Bank
- *
- *         The employee is tagged only on Salaries Payable — never on the expense
- *         — so a paid employee never shows as owing the business. Their
- *         statement reads "salary due" / "salary paid" and nets to what is owed.
- *         Paying with no employee chosen stays a plain Dr Salaries / Cr Cash.
+ * @desc   Record salary — accrued as owed, or paid. Paying first clears what
+ *         the employee is already owed (see `salaryLines`), so an accrual then a
+ *         payment books the salary once.
  * @route  POST /api/v1/finance/salary  (journal:create — scoped)
  */
 export const recordSalary = asyncHandler(async (req, res, next) => {
@@ -189,36 +169,7 @@ export const recordSalary = asyncHandler(async (req, res, next) => {
     if (!employee) return next(new ErrorResponse('That is not an employee of this business', 400));
   }
 
-  const salaries = await accountByCode(business, CODES.SALARIES);
-  const payable = await accountByCode(business, CODES.SALARIES_PAYABLE);
-  const money = await accountByCode(business, methodCode(method));
-
-  let lines;
-  if (onCredit) {
-    lines = [
-      { account: salaries._id, debitPaisa: paisa },
-      { account: payable._id, party, creditPaisa: paisa }
-    ];
-  } else if (party) {
-    // What we already owe them (a credit balance on Salaries Payable).
-    const owedPaisa = Math.max(0, -(await partyAccountBalance(business, payable._id, party)));
-    const newSalaryPaisa = paisa - Math.min(paisa, owedPaisa);
-    lines = [
-      ...(newSalaryPaisa > 0
-        ? [
-            { account: salaries._id, debitPaisa: newSalaryPaisa },
-            { account: payable._id, party, creditPaisa: newSalaryPaisa }
-          ]
-        : []),
-      { account: payable._id, party, debitPaisa: paisa },
-      { account: money._id, creditPaisa: paisa }
-    ];
-  } else {
-    lines = [
-      { account: salaries._id, debitPaisa: paisa },
-      { account: money._id, creditPaisa: paisa }
-    ];
-  }
+  const lines = await salaryLines(business, party, paisa, { onCredit, method });
 
   await respondPosted(res, {
     business,
@@ -235,7 +186,7 @@ export const recordSalary = asyncHandler(async (req, res, next) => {
  *         the escape hatch for anything without a dedicated flow (buying an
  *         asset from cash, taking a loan, an adjustment). Always balances by
  *         construction: one amount, one debit, one credit.
- * @route  POST /api/v1/finance/manual  (journal:create — scoped)
+ * @route  POST /api/v1/finance/manual  (accounting:create — scoped)
  */
 export const recordManual = asyncHandler(async (req, res, next) => {
   const { business, debitAccount, creditAccount, date, memo } = req.body;
@@ -353,7 +304,7 @@ export const recordLoan = asyncHandler(async (req, res, next) => {
  * @desc   Depreciation — spread a fixed asset's cost as it wears out. An expense
  *         matched by a contra-asset (accumulated depreciation), so the asset's
  *         book value falls without touching its original cost.
- * @route  POST /api/v1/finance/depreciation  (journal:create — scoped)
+ * @route  POST /api/v1/finance/depreciation  (accounting:create — scoped)
  */
 export const recordDepreciation = asyncHandler(async (req, res) => {
   const { business, date, memo } = req.body;
@@ -382,7 +333,7 @@ export const recordDepreciation = asyncHandler(async (req, res) => {
  *         in equity where partner distributions draw from, and the next period
  *         starts a fresh P&L. Balances by construction; returns the net profit
  *         it moved. Run it before distributing profit.
- * @route  POST /api/v1/finance/close  (journal:create — scoped)
+ * @route  POST /api/v1/finance/close  (accounting:create — scoped)
  */
 export const closePeriod = asyncHandler(async (req, res, next) => {
   const { business, date, memo } = req.body;

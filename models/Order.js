@@ -112,6 +112,12 @@ const OrderSchema = new mongoose.Schema(
     /** The COD-remittance entry, posted when the courier settles. */
     paymentEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
     /**
+     * Counter sale on credit only: how much of the balance owed (`codAmount`) the
+     * customer has paid through their party page so far (paisa). Lets part
+     * payments land on the order, and a later "Mark paid" book only the rest.
+     */
+    paidPaisa: { type: Number },
+    /**
      * Courier's delivery fee, deducted from the remittance (paisa). Captured at
      * DELIVERY, not dispatch — the courier bills by weight, city and outcome, so
      * the real figure is only known once the parcel has landed.

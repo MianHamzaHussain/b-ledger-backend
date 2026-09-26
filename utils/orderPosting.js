@@ -169,19 +169,22 @@ export const postOrderRemittance = async (order, deliveryChargeRupees, userId) =
   const acc = code => accountByCode(order.business, code);
   const label = orderLabel(order);
 
-  // Counter sale on credit — the customer pays cash, clearing their A/R in full.
+  // Counter sale on credit — the customer pays cash, clearing what is still on
+  // their A/R. Part-payments made from their party page are already booked.
   if (!order.courier) {
+    const owedPaisa = codPaisa - (order.paidPaisa || 0);
+    if (owedPaisa <= 0) return null;
     return postEntry({
       business: order.business,
       memo: `Payment received — order ${order.orderNumber}`,
       source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
       lines: [
-        { account: (await acc(CODES.CASH))._id, debitPaisa: codPaisa },
+        { account: (await acc(CODES.CASH))._id, debitPaisa: owedPaisa },
         {
           account: (await acc(CODES.ACCOUNTS_RECEIVABLE))._id,
           party: order.customerParty || undefined,
           label,
-          creditPaisa: codPaisa
+          creditPaisa: owedPaisa
         }
       ],
       userId

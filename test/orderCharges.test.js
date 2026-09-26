@@ -195,7 +195,7 @@ test('a charge row on the courier statement carries no COD breakdown', async () 
   const rows = out.body.data.rows;
   const sale = rows.find(r => String(r.entry) === String(delivered.saleEntry));
   assert.ok(sale.order, 'the sale row still explains the COD');
-  const pickup = rows.find(r => /^Return charge/.test(r.memo));
+  const pickup = rows.find(r => r.memo.startsWith('Return charge'));
   assert.ok(pickup, 'pickup charge is on the courier statement');
   assert.equal(pickup.order, undefined, 'but without the COD breakdown');
 });

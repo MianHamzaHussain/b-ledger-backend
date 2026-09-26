@@ -103,6 +103,14 @@ export const RESOURCES = {
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
   },
+  accounting: {
+    // Accountant-only tools, kept off everyday screens: a raw debit/credit
+    // General entry, depreciation and the year-end close. read = see the
+    // accountant area (trial balance, journal); create = post those entries.
+    label: 'Accountant tools',
+    scopable: true,
+    ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
+  },
   reports: {
     label: 'Reports',
     scopable: true,
