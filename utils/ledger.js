@@ -65,7 +65,9 @@ export const reverseEntry = async (entryId, { userId, memo } = {}) => {
   return JournalEntry.create({
     business: original.business,
     date: new Date(),
-    memo: memo || `Reversal of entry ${original._id}`,
+    // Name what was undone — people read this on the journal and cash book, and
+    // a database id tells them nothing.
+    memo: memo || `Reversal — ${original.memo || 'entry'}`,
     source: original.source,
     reversalOf: original._id,
     lines,
