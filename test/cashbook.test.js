@@ -137,3 +137,28 @@ test('rejects a bad account or date, and hides other businesses', async () => {
     /not found/
   );
 });
+
+test('within a day, rows follow when they were recorded, not the stored time', async () => {
+  const biz = await makeBusiness();
+  // Recorded first, at 2 pm Pakistan time.
+  await post(biz, '2026-09-02T09:00:00Z', 'Walk-in sale', CODES.CASH, CODES.SALES, 900);
+  // Recorded second from a form's date field — stored as midnight UTC (5 am Pakistan).
+  await post(biz, '2026-09-02', 'Bills', CODES.UTILITIES, CODES.CASH, 400);
+  // The previous day still comes before both.
+  await post(biz, '2026-09-01T12:00:00Z', 'Opening', CODES.CASH, CODES.OWNERS_CAPITAL, 1000);
+
+  const out = (await book(biz, {})).body.data;
+  assert.deepEqual(
+    out.rows.map(r => r.memo),
+    ['Opening', 'Walk-in sale', 'Bills']
+  );
+  assert.deepEqual(
+    out.rows.map(r => r.balance),
+    [1000, 1900, 1500],
+    'running balance follows the same order'
+  );
+  assert.ok(
+    out.rows.every(r => r.recordedAt),
+    'each row says when it was recorded'
+  );
+});

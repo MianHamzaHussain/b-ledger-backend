@@ -522,7 +522,9 @@ salary _expense_, or a paid employee reads as owing us. `salaryLines`:
 
 `GET /finance/cashbook` is the Cash (or Bank) account's ledger for a range, read
 as opening / in / out / closing — it can't disagree with the books. The client
-sends its **local** day bounds. `GET /finance/summary` returns cash, bank, to
+sends its **local** day bounds. Rows run by Pakistan day, then by when each entry
+was recorded (`recordedAt`) — a form's date is stored as midnight UTC, so the
+stored time is not the time to show or sort by. `GET /finance/summary` returns cash, bank, to
 get, to give for the home screen. Both need `journal:read`.
 
 ---

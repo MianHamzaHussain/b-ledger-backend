@@ -6,6 +6,21 @@ import { partyLedgerReport } from './reports.js';
 
 const toId = value => new mongoose.Types.ObjectId(value);
 
+// The businesses trade in Pakistan; a "day" in the cash book is a Pakistan day.
+const pakistanDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' });
+
+/**
+ * Cash-book order: by day, then by when each entry was recorded. A date picked in
+ * a form is stored as midnight UTC (5 am in Pakistan), so sorting on the stored
+ * time would put those entries first and show a time nobody entered.
+ */
+const byDayThenRecorded = (a, b) => {
+  const dayA = pakistanDay.format(a.date);
+  const dayB = pakistanDay.format(b.date);
+  if (dayA !== dayB) return dayA < dayB ? -1 : 1;
+  return a.createdAt - b.createdAt;
+};
+
 /**
  * The cash book (rokar) — what a DigiKhata user checks every morning: how much
  * cash was in the drawer when the day started, every rupee in and out, and what
@@ -34,9 +49,9 @@ export const cashbook = async (business, { account = 'cash', from, to }) => {
     'lines.account': acc._id,
     ...(from || to ? { date: dateMatch } : {})
   })
-    .sort({ date: 1, createdAt: 1 })
     .populate('lines.party', 'name')
     .lean();
+  entries.sort(byDayThenRecorded);
 
   let running = openingPaisa;
   let inPaisa = 0;
@@ -57,6 +72,7 @@ export const cashbook = async (business, { account = 'cash', from, to }) => {
     return {
       entry: entry._id,
       date: entry.date,
+      recordedAt: entry.createdAt,
       memo: entry.memo,
       party: withParty || null,
       inPaisa: net > 0 ? net : 0,

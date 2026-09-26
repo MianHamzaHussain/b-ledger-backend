@@ -70,3 +70,19 @@ test('reverseEntry mirrors the sides, preserves the label, and re-balances', asy
   // Original + its mirror net the account back to zero.
   assert.equal(await accountBalance(biz._id, await acc(biz._id, CODES.COD_RECEIVABLE)), 0);
 });
+
+test('a reversal without its own memo names the entry it undoes', async () => {
+  const biz = await makeBusiness();
+  const entry = await postEntry({
+    business: biz._id,
+    memo: 'PTCL internet, September',
+    lines: [
+      { account: await acc(biz._id, CODES.UTILITIES), debitPaisa: toPaisa(3500) },
+      { account: await acc(biz._id, CODES.CASH), creditPaisa: toPaisa(3500) }
+    ],
+    userId
+  });
+
+  const rev = await reverseEntry(entry._id, { userId });
+  assert.equal(rev.memo, 'Reversal — PTCL internet, September');
+});
