@@ -103,6 +103,16 @@ export const accountBalance = async (business, accountId, { asOf } = {}) => {
 };
 
 /**
+ * Signed balance of one party on ONE account (net debit, paisa) — e.g. what an
+ * employee is owed on Salaries Payable, ignoring anything else tagged to them.
+ */
+export const partyAccountBalance = async (business, accountId, partyId) =>
+  netPaisa(
+    { business: toId(business) },
+    { 'lines.account': toId(accountId), 'lines.party': toId(partyId) }
+  );
+
+/**
  * Signed balance of one party (paisa). Positive = they owe us (a receivable);
  * negative = we owe them (a payable). This is the "against his name" number.
  */

@@ -213,36 +213,52 @@ export const postOrderRemittance = async (order, deliveryChargeRupees, userId) =
   });
 };
 
-/** A courier charge on a parcel whose sale did not stand: Dr <expense>  Cr Cash. */
+/**
+ * A courier charge on a parcel whose sale did not stand (a return, an exchange
+ * pickup, or the delivery fee re-booked after an exchange).
+ *
+ * The courier takes its charges out of the COD it remits, so the charge
+ * reduces what the courier owes us — it never leaves the cash drawer:
+ *
+ *   Dr <expense>   Cr COD-receivable [courier]
+ *
+ * Tagging the courier puts the charge on its statement, so the courier's
+ * balance is what it will actually pay. An order with no courier (never the
+ * case for a return, which is only reachable from dispatched) falls back to Cash.
+ */
 const postCourierCost = async (order, chargeRupees, expenseCode, memo, userId) => {
   await ensureChart(order.business);
   const chargePaisa = toPaisa(Number(chargeRupees) || 0);
   if (chargePaisa <= 0) return null;
+  const acc = code => accountByCode(order.business, code);
+  const label = `${memo} · ${orderLabel(order)}`;
+
+  const credit = order.courier
+    ? {
+        account: (await acc(CODES.COD_RECEIVABLE))._id,
+        party: order.courier,
+        label,
+        creditPaisa: chargePaisa
+      }
+    : { account: (await acc(CODES.CASH))._id, creditPaisa: chargePaisa };
 
   return postEntry({
     business: order.business,
     memo: `${memo} — order ${order.orderNumber}`,
     source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
-    lines: [
-      {
-        account: (await accountByCode(order.business, expenseCode))._id,
-        label: orderLabel(order),
-        debitPaisa: chargePaisa
-      },
-      { account: (await accountByCode(order.business, CODES.CASH))._id, creditPaisa: chargePaisa }
-    ],
+    lines: [{ account: (await acc(expenseCode))._id, label, debitPaisa: chargePaisa }, credit],
     userId
   });
 };
 
-/** A return's (or an exchange pickup's) courier charge: Dr Return charges  Cr Cash. */
+/** A return's (or an exchange pickup's) courier charge, taken off the courier's COD. */
 export const postReturnCharge = (order, returnChargeRupees, userId) =>
   postCourierCost(order, returnChargeRupees, CODES.RETURN_CHARGES, 'Return charge', userId);
 
 /**
  * The forward delivery fee of an order whose sale was reversed (an exchange).
  * The reversal takes the fee out with the sale, but the courier still charged
- * it — so it is booked again on its own: Dr Delivery charges  Cr Cash.
+ * it — so it is booked again on its own, taken off the courier's COD.
  */
 export const postDeliveryCharge = (order, deliveryChargeRupees, userId) =>
   postCourierCost(order, deliveryChargeRupees, CODES.DELIVERY_CHARGES, 'Delivery charge', userId);

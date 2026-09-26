@@ -209,6 +209,10 @@ router.post(
  * /finance/salary:
  *   post:
  *     summary: Record salary (paid, or accrued as owed)
+ *     description: >
+ *       Paying an employee first clears what they are already owed from an
+ *       earlier accrual; only the amount above that is booked as new salary
+ *       expense. Without an employee, a payment is a plain Dr Salaries / Cr Cash.
  *     tags: [Finance]
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
@@ -221,7 +225,7 @@ router.post(
  *             properties:
  *               business: { type: string }
  *               amount:   { type: number, description: Rupees }
- *               party:    { type: string, description: "Employee — required when onCredit (accrue)" }
+ *               party:    { type: string, description: "Employee — required when onCredit (accrue); when paying, their owed salary is cleared first" }
  *               onCredit: { type: boolean, description: "true = accrue (Cr Salaries Payable); false = paid (Cr Cash/Bank)" }
  *               method:   { type: string, enum: [cash, bank] }
  *           example:

@@ -6,7 +6,13 @@ import Party from '../models/Party.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledger.js';
+import {
+  postEntry,
+  reverseEntry,
+  trialBalance,
+  latestLock,
+  partyAccountBalance
+} from '../utils/ledger.js';
 import {
   profitAndLoss,
   balanceSheet,
@@ -154,7 +160,21 @@ export const recordPayment = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc   Record salary — paid now, or accrued as owed to the employee
+ * @desc   Record salary — accrued as owed, or paid.
+ *
+ *         Paying an employee first clears what they are already owed (an
+ *         earlier accrual); only the part above that is new salary expense. So
+ *         "record as owed" in March + "paid" in April books the salary ONCE and
+ *         leaves the employee at zero — not owed forever, nor expensed twice.
+ *
+ *           accrue:  Dr Salaries            Cr Salaries Payable [employee]
+ *           pay:     Dr Salaries (new part) Cr Salaries Payable [employee]
+ *                    Dr Salaries Payable [employee] (whole payment)  Cr Cash/Bank
+ *
+ *         The employee is tagged only on Salaries Payable — never on the expense
+ *         — so a paid employee never shows as owing the business. Their
+ *         statement reads "salary due" / "salary paid" and nets to what is owed.
+ *         Paying with no employee chosen stays a plain Dr Salaries / Cr Cash.
  * @route  POST /api/v1/finance/salary  (journal:create — scoped)
  */
 export const recordSalary = asyncHandler(async (req, res, next) => {
@@ -164,24 +184,48 @@ export const recordSalary = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Choose the employee this is owed to', 400));
   await ensureChart(business);
 
+  if (party) {
+    const employee = await Party.exists({ _id: party, business, type: PARTY_TYPES.EMPLOYEE });
+    if (!employee) return next(new ErrorResponse('That is not an employee of this business', 400));
+  }
+
   const salaries = await accountByCode(business, CODES.SALARIES);
-  // The employee is tagged only on the PAYABLE (accrue) line — never on the
-  // expense. Tagging the expense would make a paid employee show a debit
-  // balance, as if they owed the business money.
-  const credit = onCredit
-    ? {
-        account: (await accountByCode(business, CODES.SALARIES_PAYABLE))._id,
-        party,
-        creditPaisa: paisa
-      }
-    : { account: (await accountByCode(business, methodCode(method)))._id, creditPaisa: paisa };
+  const payable = await accountByCode(business, CODES.SALARIES_PAYABLE);
+  const money = await accountByCode(business, methodCode(method));
+
+  let lines;
+  if (onCredit) {
+    lines = [
+      { account: salaries._id, debitPaisa: paisa },
+      { account: payable._id, party, creditPaisa: paisa }
+    ];
+  } else if (party) {
+    // What we already owe them (a credit balance on Salaries Payable).
+    const owedPaisa = Math.max(0, -(await partyAccountBalance(business, payable._id, party)));
+    const newSalaryPaisa = paisa - Math.min(paisa, owedPaisa);
+    lines = [
+      ...(newSalaryPaisa > 0
+        ? [
+            { account: salaries._id, debitPaisa: newSalaryPaisa },
+            { account: payable._id, party, creditPaisa: newSalaryPaisa }
+          ]
+        : []),
+      { account: payable._id, party, debitPaisa: paisa },
+      { account: money._id, creditPaisa: paisa }
+    ];
+  } else {
+    lines = [
+      { account: salaries._id, debitPaisa: paisa },
+      { account: money._id, creditPaisa: paisa }
+    ];
+  }
 
   await respondPosted(res, {
     business,
     date,
-    memo: memo || 'Salary',
+    memo: memo || (onCredit ? 'Salary due' : 'Salary paid'),
     source: { kind: JOURNAL_SOURCES.SALARY },
-    lines: [{ account: salaries._id, debitPaisa: paisa }, credit],
+    lines,
     userId: req.user.id
   });
 });
