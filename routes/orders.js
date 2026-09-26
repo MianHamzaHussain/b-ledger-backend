@@ -158,7 +158,7 @@ router
  *             properties:
  *               status: { type: string, enum: [confirmed, dispatched, delivered, cancelled, returned] }
  *               trackingId: { type: string, description: "Required on dispatched — the courier consignment number" }
- *               deliveryCharge: { type: number, description: "Required on delivered (the delivery fee, at most the COD) and returned (the return fee, booked as an expense). 0 if none." }
+ *               deliveryCharge: { type: number, description: "Required on delivered (the delivery fee — on a prepaid order it comes off the courier's COD balance) and returned (the return fee, booked as an expense). 0 if none." }
  *     responses:
  *       200: { description: Updated }
  *       400: { description: Illegal transition }

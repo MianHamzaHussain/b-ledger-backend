@@ -30,14 +30,24 @@ export const methodCode = method => (method === 'bank' ? CODES.BANK : CODES.CASH
  * so an accrual followed by a payment books the salary once and nets to zero.
  *
  *   accrue:  Dr Salaries                         Cr Salaries Payable [employee]
- *   pay:     Dr Salaries (new part)              Cr Salaries Payable [employee]
+ *   pay:     Dr Salaries (new part + advance cut) Cr Salaries Payable [employee]
  *            Dr Salaries Payable [employee]      Cr Cash/Bank (whole payment)
+ *
+ * An advance (`advanceLines`) is a debit on the same Salaries Payable account —
+ * salary paid ahead. `deductAdvancePaisa` cuts some of it from this salary: the
+ * salary EXPENSE is the full amount (cash paid + advance cut), while only the
+ * cash leaves the drawer, and the advance on the employee's account shrinks.
  *
  * The employee is tagged only on Salaries Payable — never on the expense — so a
  * paid employee never shows as owing the business. With no employee, a payment
  * is a plain Dr Salaries / Cr Cash.
  */
-export const salaryLines = async (business, party, paisa, { onCredit, method } = {}) => {
+export const salaryLines = async (
+  business,
+  party,
+  paisa,
+  { onCredit, method, deductAdvancePaisa = 0 } = {}
+) => {
   const salaries = await accountByCode(business, CODES.SALARIES);
   const payable = await accountByCode(business, CODES.SALARIES_PAYABLE);
 
@@ -56,9 +66,19 @@ export const salaryLines = async (business, party, paisa, { onCredit, method } =
     ];
   }
 
-  // What we already owe them (a credit balance on Salaries Payable).
-  const owedPaisa = Math.max(0, -(await partyAccountBalance(business, payable._id, party)));
-  const newSalaryPaisa = paisa - Math.min(paisa, owedPaisa);
+  // One account, one balance: negative = we owe them salary, positive = they
+  // hold an advance from us. It can't be both at once.
+  const balance = await partyAccountBalance(business, payable._id, party);
+  const owedPaisa = Math.max(0, -balance);
+  const advancePaisa = Math.max(0, balance);
+  if (deductAdvancePaisa > advancePaisa) {
+    throw new ErrorResponse(
+      `Only Rs ${fromPaisa(advancePaisa)} of advance is left to cut from salary`,
+      400
+    );
+  }
+
+  const newSalaryPaisa = paisa - Math.min(paisa, owedPaisa) + deductAdvancePaisa;
   return [
     ...(newSalaryPaisa > 0
       ? [
@@ -66,6 +86,22 @@ export const salaryLines = async (business, party, paisa, { onCredit, method } =
           { account: payable._id, party, creditPaisa: newSalaryPaisa }
         ]
       : []),
+    { account: payable._id, party, debitPaisa: paisa },
+    { account: money._id, creditPaisa: paisa }
+  ];
+};
+
+/**
+ * An advance to an employee — salary paid ahead, not an expense yet. It sits on
+ * their Salaries Payable account as money they hold of ours, and comes back by
+ * being cut from a later salary (`deductAdvancePaisa`) or netted off salary due.
+ *
+ *   Dr Salaries Payable [employee]   Cr Cash/Bank
+ */
+export const advanceLines = async (business, party, paisa, method) => {
+  const payable = await accountByCode(business, CODES.SALARIES_PAYABLE);
+  const money = await accountByCode(business, methodCode(method));
+  return [
     { account: payable._id, party, debitPaisa: paisa },
     { account: money._id, creditPaisa: paisa }
   ];
@@ -98,11 +134,17 @@ const moneyLines = async (business, party, paisa, direction, accountCode, method
  *   supplier   gave → pay them down            got → their bill (an expense, owed)
  *   reseller   gave → refund / credit given    got → their payment
  *   customer   gave → refund / credit given    got → their payment
- *   employee   gave → salary paid (clears owed first)   got → salary due
+ *   employee   gave → salary paid (clears owed first; can cut an advance),
+ *                     or an advance (purpose: 'advance')     got → salary due
  *   lender     gave → loan repaid (principal)  got → loan taken
  *   courier    — handled by settleCourier (a lump-sum payment), not here
  */
-export const partyTransactionLines = async (party, direction, paisa, { method, category } = {}) => {
+export const partyTransactionLines = async (
+  party,
+  direction,
+  paisa,
+  { method, category, purpose, deductAdvancePaisa } = {}
+) => {
   const business = party.business;
   const id = party._id;
   const name = party.name;
@@ -143,8 +185,20 @@ export const partyTransactionLines = async (party, direction, paisa, { method, c
       };
 
     case PARTY_TYPES.EMPLOYEE:
+      // An advance is money they hold of ours until a later salary absorbs it.
+      if (direction === 'gave' && purpose === 'advance') {
+        return {
+          lines: await advanceLines(business, id, paisa, method),
+          memo: `Advance — ${name}`,
+          source: JOURNAL_SOURCES.SALARY
+        };
+      }
       return {
-        lines: await salaryLines(business, id, paisa, { onCredit: direction === 'got', method }),
+        lines: await salaryLines(business, id, paisa, {
+          onCredit: direction === 'got',
+          method,
+          deductAdvancePaisa
+        }),
         memo: direction === 'gave' ? `Salary paid — ${name}` : `Salary due — ${name}`,
         source: JOURNAL_SOURCES.SALARY
       };

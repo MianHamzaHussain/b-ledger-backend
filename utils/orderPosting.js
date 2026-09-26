@@ -50,8 +50,13 @@ export const postOrderSale = async (order, userId) => {
 
   const lines = [];
 
+  // A courier order goes through the courier branch even when it is fully
+  // prepaid (COD 0): the courier still charges its fee, and takes it out of the
+  // COD it owes us on other orders.
+  const isCourierSale = Boolean(order.courier) && (codPaisa > 0 || order.deliveryChargePaisa > 0);
+
   if (totalPaisa > 0) {
-    if (codPaisa > 0) {
+    if (codPaisa > 0 || isCourierSale) {
       if (order.courier) {
         const business = await Business.findById(order.business).select('codTax');
         const { deliveryPaisa, whtPaisa, salesTaxPaisa, bankPaisa, whtIsAsset } = computeRemittance(
@@ -59,13 +64,15 @@ export const postOrderSale = async (order, userId) => {
           order.deliveryChargePaisa || 0,
           business?.codTax || {}
         );
-        // The net is what the courier owes us — sub-ledgered to it.
-        if (bankPaisa > 0) {
+        // The net is what the courier owes us — sub-ledgered to it. When the
+        // fee is more than the COD (a prepaid order), the net is negative: the
+        // courier keeps the difference out of what it owes us on other orders.
+        if (bankPaisa !== 0) {
           lines.push({
             account: (await acc(CODES.COD_RECEIVABLE))._id,
             party: order.courier,
             label,
-            debitPaisa: bankPaisa
+            ...(bankPaisa > 0 ? { debitPaisa: bankPaisa } : { creditPaisa: -bankPaisa })
           });
         }
         if (deliveryPaisa > 0) {

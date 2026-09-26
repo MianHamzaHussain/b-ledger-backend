@@ -196,3 +196,41 @@ test('summary is 404 for a business outside your scope', async () => {
     /not found/
   );
 });
+
+test('employee advance: not an expense, and they owe it back', async () => {
+  const biz = await makeBusiness();
+  const employee = await makeParty(biz._id, 'employee');
+
+  await txn(employee, { direction: 'gave', amount: 5000, purpose: 'advance' });
+  assert.equal(await balanceOf(biz, CODES.SALARIES), 0, 'no salary expense yet');
+  assert.equal(await partyBalance(biz._id, employee._id), toPaisa(5000), 'they hold 5,000 of ours');
+});
+
+test('employee advance: salary due nets it off, so you pay only the rest', async () => {
+  const biz = await makeBusiness();
+  const employee = await makeParty(biz._id, 'employee');
+
+  await txn(employee, { direction: 'gave', amount: 5000, purpose: 'advance' });
+  await txn(employee, { direction: 'got', amount: 30000 }); // salary due
+  assert.equal(await partyBalance(biz._id, employee._id), -toPaisa(25000), 'owed 25,000');
+
+  await txn(employee, { direction: 'gave', amount: 25000 });
+  assert.equal(await partyBalance(biz._id, employee._id), 0);
+  assert.equal(await balanceOf(biz, CODES.SALARIES), toPaisa(30000), 'full salary expensed');
+  assert.equal(await balanceOf(biz, CODES.CASH), -toPaisa(30000), '5,000 + 25,000 paid out');
+});
+
+test('employee advance: cut straight from a salary payment', async () => {
+  const biz = await makeBusiness();
+  const employee = await makeParty(biz._id, 'employee');
+
+  await txn(employee, { direction: 'gave', amount: 5000, purpose: 'advance' });
+  await assert.rejects(
+    txn(employee, { direction: 'gave', amount: 25000, deductAdvance: 6000 }),
+    /Only Rs 5000 of advance/
+  );
+
+  await txn(employee, { direction: 'gave', amount: 25000, deductAdvance: 5000 });
+  assert.equal(await partyBalance(biz._id, employee._id), 0, 'advance used up');
+  assert.equal(await balanceOf(biz, CODES.SALARIES), toPaisa(30000), 'salary = cash + advance cut');
+});

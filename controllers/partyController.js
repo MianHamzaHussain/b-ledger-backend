@@ -189,7 +189,7 @@ export const getPartySummary = asyncHandler(async (req, res, next) => {
  */
 export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
   const party = req.resource;
-  const { direction, method, category, date, memo } = req.body;
+  const { direction, method, category, purpose, date, memo } = req.body;
   const paisa = toPaisa(req.body.amount);
 
   // A courier pays in one weekly lump sum; that settles its orders, oldest
@@ -212,7 +212,12 @@ export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
   }
 
   await ensureChart(party.business);
-  const built = await partyTransactionLines(party, direction, paisa, { method, category });
+  const built = await partyTransactionLines(party, direction, paisa, {
+    method,
+    category,
+    purpose,
+    deductAdvancePaisa: toPaisa(req.body.deductAdvance || 0)
+  });
 
   const entry = await postEntry({
     business: party.business,

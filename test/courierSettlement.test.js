@@ -41,8 +41,8 @@ async function setup() {
   return { biz, courier, product };
 }
 
-/** A dispatched order of `price`, then moved to `outcome` with `charge`. */
-async function courierOrder({ biz, courier, product }, price, outcome, charge) {
+/** A dispatched order of `price` (`advance` paid up front), moved to `outcome` with `charge`. */
+async function courierOrder({ biz, courier, product }, price, outcome, charge, advance = 0) {
   const variant = product.variants[0];
   const order = await Order.create({
     business: biz._id,
@@ -60,6 +60,7 @@ async function courierOrder({ biz, courier, product }, price, outcome, charge) {
       }
     ],
     courier: courier._id,
+    advanceAmount: advance,
     trackingId: `TCS${price}`,
     status: 'dispatched',
     createdBy: userId
@@ -182,4 +183,18 @@ test('with FBR taxes on, paying exactly the balance still clears every order', a
   assert.equal(out.body.data.settledOrders, 2);
   assert.deepEqual(await statusOf(ids), ['paid', 'paid']);
   assert.equal(await partyBalance(biz._id, courier._id), 0);
+});
+
+test('a prepaid parcel fee is counted in the settlement too', async () => {
+  const ctx = await setup();
+  const ids = [
+    await courierOrder(ctx, 2000, 'delivered', 100), // courier owes 1,900
+    await courierOrder(ctx, 1500, 'delivered', 200, 1500) // prepaid: courier keeps 200
+  ];
+
+  // Owed 1,900 − 200 = 1,700 — paying that settles both.
+  const out = await courierPaid(ctx.courier, 1700);
+  assert.equal(out.body.data.settledOrders, 2);
+  assert.deepEqual(await statusOf(ids), ['paid', 'paid']);
+  assert.equal(await partyBalance(ctx.biz._id, ctx.courier._id), 0);
 });

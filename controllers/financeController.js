@@ -171,7 +171,11 @@ export const recordSalary = asyncHandler(async (req, res, next) => {
     if (!employee) return next(new ErrorResponse('That is not an employee of this business', 400));
   }
 
-  const lines = await salaryLines(business, party, paisa, { onCredit, method });
+  const lines = await salaryLines(business, party, paisa, {
+    onCredit,
+    method,
+    deductAdvancePaisa: toPaisa(req.body.deductAdvance || 0)
+  });
 
   await respondPosted(res, {
     business,

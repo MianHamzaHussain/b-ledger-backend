@@ -558,10 +558,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   const chargePaisa = isOutcome ? toPaisa(req.body.deliveryCharge) : 0;
 
   if (status === ORDER_STATUS.DELIVERED) {
-    // The fee comes out of the COD remittance, so it can not exceed it.
-    if (chargePaisa > toPaisa(order.codAmount)) {
-      return next(new ErrorResponse('Delivery charge can not exceed the COD amount', 400));
-    }
+    // The fee may exceed the COD — a fully prepaid parcel still costs a fee,
+    // which the courier takes out of what it owes us on other orders.
     order.deliveryChargePaisa = chargePaisa;
   }
 

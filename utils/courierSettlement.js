@@ -64,14 +64,20 @@ export const settleCourier = async (courier, paisa, { method, date, memo, userId
     .select('codAmount deliveryChargePaisa');
 
   const biz = await Business.findById(business).select('codTax');
-  const nets = orders.map(o => netPaisaOf(o, biz?.codTax || {}));
-  let unpaidTotal = nets.reduce((s, n) => s + n, 0);
+  // A prepaid parcel nets zero or less (the courier collected nothing, or less
+  // than its fee): it needs no money to be settled, and its deduction is part of
+  // what the payment already squares — so settle those first, then the rest
+  // oldest first. (Array sort is stable, so date order holds within each group.)
+  const queue = orders
+    .map(order => ({ order, net: netPaisaOf(order, biz?.codTax || {}) }))
+    .sort((a, b) => Number(a.net > 0) - Number(b.net > 0));
+  let unpaidTotal = queue.reduce((s, q) => s + q.net, 0);
 
   const paidIds = [];
-  for (const [i, order] of orders.entries()) {
-    if (unpaidTotal - nets[i] < owedAfter) break;
+  for (const { order, net } of queue) {
+    if (unpaidTotal - net < owedAfter) break;
     paidIds.push(order._id);
-    unpaidTotal -= nets[i];
+    unpaidTotal -= net;
   }
 
   if (paidIds.length) {
