@@ -8,6 +8,7 @@ import ErrorResponse from '../utils/errorResponse.js';
 import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledger.js';
 import { salaryLines, methodCode } from '../utils/partyPosting.js';
+import { cashbook, moneySummary } from '../utils/cashbook.js';
 import {
   profitAndLoss,
   balanceSheet,
@@ -620,4 +621,72 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
     memo: req.body.memo
   });
   res.status(201).json({ success: true, data: reversal });
+});
+
+/** An optional ISO date query param → Date, or a 400 if it doesn't parse. */
+const parseDateParam = (value, name) => {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new ErrorResponse(`Invalid ${name} date`, 400);
+  return date;
+};
+
+/**
+ * @desc   Cash book: opening balance, every movement in and out, closing balance
+ *         of Cash (or Bank) for a date range — the ledger read as a rokar.
+ * @route  GET /api/v1/finance/cashbook?business=&account=cash|bank&from=&to=
+ *         (journal:read — scoped)
+ */
+export const getCashbook = asyncHandler(async (req, res, next) => {
+  const { business, account } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  // Out of scope reads as not found, never forbidden (CLAUDE.md §6).
+  if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
+  if (account && account !== 'cash' && account !== 'bank') {
+    return next(new ErrorResponse('Account must be cash or bank', 400));
+  }
+
+  const book = await cashbook(business, {
+    account: account || 'cash',
+    from: parseDateParam(req.query.from, 'from'),
+    to: parseDateParam(req.query.to, 'to')
+  });
+  res.status(200).json({
+    success: true,
+    data: {
+      ...book,
+      opening: fromPaisa(book.openingPaisa),
+      in: fromPaisa(book.inPaisa),
+      out: fromPaisa(book.outPaisa),
+      closing: fromPaisa(book.closingPaisa),
+      rows: book.rows.map(r => ({
+        ...r,
+        in: fromPaisa(r.inPaisa),
+        out: fromPaisa(r.outPaisa),
+        balance: fromPaisa(r.balancePaisa)
+      }))
+    }
+  });
+});
+
+/**
+ * @desc   The home screen's numbers: cash in hand, bank, to get, to give.
+ * @route  GET /api/v1/finance/summary?business=  (journal:read — scoped)
+ */
+export const getMoneySummary = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
+
+  const s = await moneySummary(business);
+  res.status(200).json({
+    success: true,
+    data: {
+      ...s,
+      cash: fromPaisa(s.cashPaisa),
+      bank: fromPaisa(s.bankPaisa),
+      receivable: fromPaisa(s.receivablePaisa),
+      payable: fromPaisa(s.payablePaisa)
+    }
+  });
 });

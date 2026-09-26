@@ -35,7 +35,9 @@ import {
   getCourierRecon,
   getPeriodLock,
   lockPeriod,
-  unlockPeriod
+  unlockPeriod,
+  getCashbook,
+  getMoneySummary
 } from '../controllers/financeController.js';
 
 const router = express.Router();
@@ -383,6 +385,38 @@ router.get('/accounts', can('accounts', 'read'), getAccounts);
  *                 balanced: true
  */
 router.get('/trial-balance', can('reports', 'read'), getTrialBalance);
+
+/**
+ * @swagger
+ * /finance/cashbook:
+ *   get:
+ *     summary: Cash book — opening, every movement in/out, and closing for Cash or Bank
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: account, schema: { type: string, enum: [cash, bank] } }
+ *       - { in: query, name: from, schema: { type: string, format: date-time }, description: "Inclusive; the client's local day start" }
+ *       - { in: query, name: to, schema: { type: string, format: date-time }, description: "Inclusive; the client's local day end" }
+ *     responses:
+ *       200: { description: "{ opening, in, out, closing, rows[] } in rupees (and paisa)" }
+ *       404: { description: Business outside your scope }
+ */
+router.get('/cashbook', can('journal', 'read'), getCashbook);
+
+/**
+ * @swagger
+ * /finance/summary:
+ *   get:
+ *     summary: The home screen numbers — cash in hand, bank, to get, to give
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: query, name: business, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: "{ cash, bank, receivable, payable } in rupees (and paisa)" }
+ *       404: { description: Business outside your scope }
+ */
+router.get('/summary', can('journal', 'read'), getMoneySummary);
 
 /**
  * @swagger
