@@ -309,6 +309,52 @@ Swagger (`/api-docs`) documents every field.
 
 ## Deploying to production
 
+### Auto-deploy to the VPS
+
+Merging to `master` deploys automatically: the **CI** workflow runs the check,
+and only if it passes does its `deploy` job SSH into the VPS and run `git pull --ff-only`, `npm ci --omit=dev` and `pm2 restart bledger-api` in `/var/www/sites/b-ledger-backend`, then waits for `/api/v1/health` to answer.
+Every PR runs the same check once — make it required so nothing merges red.
+
+**One-time setup** (do it once per repo — backend and frontend):
+
+1. **A deploy key.** On your own machine:
+
+   ```bash
+   ssh-keygen -t ed25519 -C "github-deploy" -f bledger_deploy -N ""
+   ```
+
+   Append `bledger_deploy.pub` to `~/.ssh/authorized_keys` on the VPS, for the
+   **same user that runs pm2** (pm2 processes are per-user). Both repos can
+   share this key.
+
+2. **The server's host key**, so the deploy refuses an impostor:
+
+   ```bash
+   ssh-keyscan -p 22 <vps-host> > known_hosts.txt
+   ```
+
+3. **GitHub → repo → Settings → Secrets and variables → Actions:**
+
+   | Kind     | Name              | Value                                  |
+   | -------- | ----------------- | -------------------------------------- |
+   | Secret   | `VPS_HOST`        | the VPS IP or hostname                 |
+   | Secret   | `VPS_USER`        | the SSH user that owns the app and pm2 |
+   | Secret   | `VPS_SSH_KEY`     | the whole contents of `bledger_deploy` |
+   | Secret   | `VPS_KNOWN_HOSTS` | the contents of `known_hosts.txt`      |
+   | Secret   | `VPS_PORT`        | only if SSH isn't on 22                |
+   | Variable | `DEPLOY_ENABLED`  | `true` — the switch; unset it to pause |
+
+4. **Require the check:** Settings → Branches → add a rule for `master` →
+   _Require status checks to pass_ → select **`check`**.
+
+5. The VPS must already be able to `git pull` this repo (as it does today).
+
+A failed deploy shows red on the commit in GitHub → Actions, with the server's
+output. If the API doesn't come up healthy the deploy fails — look at
+`pm2 logs bledger-api` on the server.
+
+### First-time server setup
+
 1. **Host:** deploy to a platform that runs a **persistent Node process** —
    Render, Railway, Fly, a VPS, a container. ⚠️ **Vercel/Lambda serverless
    functions cannot hold the Socket.io WebSocket**, so real-time notifications
