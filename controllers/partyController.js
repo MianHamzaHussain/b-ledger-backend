@@ -27,7 +27,7 @@ const enrichOrderRows = async (business, rows) => {
   if (!refs.length) return;
 
   const orders = await Order.find({ _id: { $in: refs } }).select(
-    'orderNumber trackingId total advanceAmount codAmount deliveryChargePaisa courier'
+    'orderNumber trackingId total advanceAmount codAmount deliveryChargePaisa courier saleEntry paymentEntry'
   );
   const byId = new Map(orders.map(o => [String(o._id), o]));
   const biz = await Business.findById(business).select('codTax');
@@ -38,6 +38,13 @@ const enrichOrderRows = async (business, rows) => {
     if (!o) continue;
 
     if (o.courier) {
+      // The COD breakdown explains the sale and its remittance only. A return
+      // charge, pickup charge or reversal on the same order is its own row —
+      // attaching the COD to it would misread as money the courier owes.
+      const isCodRow = [o.saleEntry, o.paymentEntry].some(
+        e => e && String(e) === String(row.entry)
+      );
+      if (!isCodRow) continue;
       const parts = computeRemittance(
         toPaisa(o.codAmount),
         o.deliveryChargePaisa || 0,

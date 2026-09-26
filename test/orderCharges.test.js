@@ -15,7 +15,9 @@ import Order from '../models/Order.js';
 import JournalEntry from '../models/JournalEntry.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { updateOrderStatus, exchangeOrder } from '../controllers/orderController.js';
-import { accountBalance } from '../utils/ledger.js';
+import { accountBalance, partyBalance } from '../utils/ledger.js';
+import Party from '../models/Party.js';
+import { getPartyStatement } from '../controllers/partyController.js';
 import { orderExchangeSchema, orderStatusSchema } from '../schemas/orders.js';
 import { toPaisa } from '../utils/money.js';
 
@@ -157,4 +159,43 @@ test('exchange keeps the forward delivery fee and books the pickup charge', asyn
   assert.equal(await accountBalance(biz._id, await acc(CODES.DELIVERY_CHARGES)), toPaisa(180));
   assert.equal(await accountBalance(biz._id, await acc(CODES.RETURN_CHARGES)), toPaisa(120));
   assert.equal(await accountBalance(biz._id, await acc(CODES.SALES)), 0, 'sale unwound');
+});
+
+test('courier charges come off the courier COD, never out of cash', async () => {
+  const { biz, courier, order } = await makeOrder('dispatched');
+  await setStatus(order, { status: 'returned', deliveryCharge: 300 });
+
+  const cash = (await accountByCode(biz._id, CODES.CASH))._id;
+  assert.equal(await accountBalance(biz._id, cash), 0, 'the drawer is untouched');
+  // The courier keeps 300 out of its next remittance — it owes us 300 less.
+  assert.equal(await partyBalance(biz._id, courier._id), -toPaisa(300));
+});
+
+test('a charge row on the courier statement carries no COD breakdown', async () => {
+  const { courier, order } = await makeOrder('dispatched');
+  await setStatus(order, { status: 'delivered', deliveryCharge: 150 });
+  const delivered = await Order.findById(order._id);
+  const item = delivered.items[0];
+  await runHandler(exchangeOrder, {
+    resource: delivered,
+    body: orderExchangeSchema.parse({
+      items: [
+        {
+          product: String(item.product),
+          variantId: String(item.variantId),
+          quantity: 1,
+          unitPrice: 2000
+        }
+      ],
+      returnCharge: 120
+    })
+  });
+
+  const out = await runHandler(getPartyStatement, { resource: await Party.findById(courier._id) });
+  const rows = out.body.data.rows;
+  const sale = rows.find(r => String(r.entry) === String(delivered.saleEntry));
+  assert.ok(sale.order, 'the sale row still explains the COD');
+  const pickup = rows.find(r => /^Return charge/.test(r.memo));
+  assert.ok(pickup, 'pickup charge is on the courier statement');
+  assert.equal(pickup.order, undefined, 'but without the COD breakdown');
 });
