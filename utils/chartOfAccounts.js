@@ -27,6 +27,9 @@ export const CODES = {
   SALARIES_PAYABLE: '2100',
   // Money borrowed (bank or a person) — a liability until repaid.
   LOAN_PAYABLE: '2200',
+  // Money customers paid before their order was sold — owed to them (as goods
+  // or a refund) until delivery uses it.
+  CUSTOMER_ADVANCES: '2300',
   OWNERS_CAPITAL: '3000',
   DRAWINGS: '3100',
   RETAINED_EARNINGS: '3900',
@@ -64,6 +67,7 @@ export const DEFAULT_CHART = [
   { code: CODES.ACCOUNTS_PAYABLE, name: 'Accounts Payable', type: LIABILITY, control: true },
   { code: CODES.SALARIES_PAYABLE, name: 'Salaries Payable', type: LIABILITY },
   { code: CODES.LOAN_PAYABLE, name: 'Loan Payable', type: LIABILITY },
+  { code: CODES.CUSTOMER_ADVANCES, name: 'Advances from customers', type: LIABILITY },
   { code: CODES.OWNERS_CAPITAL, name: "Owner's Capital", type: EQUITY },
   { code: CODES.DRAWINGS, name: 'Drawings', type: EQUITY },
   { code: CODES.RETAINED_EARNINGS, name: 'Retained Earnings', type: EQUITY },

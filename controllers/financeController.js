@@ -10,7 +10,6 @@ import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledg
 import { salaryLines } from '../utils/partyPosting.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
 import { cashbook, moneySummary } from '../utils/cashbook.js';
-import { unsettleCourier } from '../utils/courierSettlement.js';
 import { undoCourierInvoice } from '../utils/courierInvoice.js';
 import {
   profitAndLoss,
@@ -630,15 +629,19 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('This entry has already been reversed', 400));
   }
 
+  // An order's advance or refund is undone on the order, so the order and its
+  // refund-due stay in step with the books.
+  if (
+    entry.source?.kind === JOURNAL_SOURCES.ORDER_ADVANCE ||
+    entry.source?.kind === JOURNAL_SOURCES.ORDER_REFUND
+  ) {
+    return next(new ErrorResponse('Remove this payment from its order instead', 400));
+  }
+
   const reversal = await reverseEntry(entry._id, {
     userId: req.user.id,
     memo: req.body.memo
   });
-  // Undoing a courier's lump sum un-pays the orders it paid, so the orders and
-  // the courier's balance keep telling the same story.
-  if (entry.source?.kind === JOURNAL_SOURCES.COURIER_SETTLEMENT) {
-    await unsettleCourier(entry._id);
-  }
   // Undoing a courier invoice reopens its CODs and the charges it billed.
   if (entry.source?.kind === JOURNAL_SOURCES.COURIER_INVOICE) {
     await undoCourierInvoice(entry._id);

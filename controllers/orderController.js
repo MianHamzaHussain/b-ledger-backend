@@ -19,6 +19,8 @@ import {
 import { notify } from '../utils/notify.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
+import { resolveMoney } from '../utils/moneyAccounts.js';
+import { recordAdvance, recordRefund, removeCustomerMoney } from '../utils/customerMoney.js';
 import {
   ORDER_STATUS,
   ORDER_TRANSITIONS,
@@ -252,6 +254,11 @@ export const createOrder = asyncHandler(async (req, res, next) => {
 
   const biz = await Business.findById(business);
   if (!biz) return next(new ErrorResponse('Business not found', 404));
+  // Where the advance (or counter payment) went — checked before anything is held.
+  const advanceMoney =
+    advanceAmount > 0
+      ? await resolveMoney(business, { account: req.body.advanceAccount }, req.user)
+      : null;
 
   // Courier is chosen at dispatch, not here — a walk-in/counter sale has none.
   const lineItems = await buildLineItems(business, items);
@@ -263,6 +270,9 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   const isWalkIn = source === SALES_CHANNELS.WALK_IN;
   const total = lineItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
   const owed = Math.max(0, total - advanceAmount);
+  if (advanceAmount > total) {
+    return next(new ErrorResponse('The advance is more than the order total', 400));
+  }
   let customerParty;
   if (isWalkIn && owed > 0) {
     if (req.body.customerParty) {
@@ -284,6 +294,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   // Atomic reserve — throws (and unwinds itself) if any line lacks stock.
   await reserveStock(lineItems);
 
+  let order;
   try {
     const customer = await Customer.findOneAndUpdate(
       { business, phone: contactNumber },
@@ -294,7 +305,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
-    const order = await Order.create({
+    order = await Order.create({
       business,
       customer: customer._id,
       customerParty,
@@ -304,7 +315,10 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       city,
       deliveryAddress,
       items: lineItems,
-      advanceAmount,
+      // A counter sale takes its payment in the sale; any other order's advance
+      // is booked as it arrives (below), which also derives the COD.
+      advanceAmount: isWalkIn ? advanceAmount : 0,
+      counterAccount: isWalkIn ? advanceMoney?.account : undefined,
       status: isWalkIn ? ORDER_STATUS.DELIVERED : undefined,
       paymentStatus: isWalkIn && owed <= 0 ? PAYMENT_STATUS.PAID : undefined,
       createdBy: req.user.id
@@ -318,6 +332,12 @@ export const createOrder = asyncHandler(async (req, res, next) => {
         order.saleEntry = entry._id;
         await order.save();
       }
+    } else if (advanceMoney) {
+      await recordAdvance(order, {
+        amount: advanceAmount,
+        money: advanceMoney,
+        userId: req.user.id
+      });
     }
 
     // Ambient alerts — must never fail the order.
@@ -332,8 +352,10 @@ export const createOrder = asyncHandler(async (req, res, next) => {
 
     res.status(201).json({ success: true, data: order });
   } catch (err) {
-    // Order creation failed after stock was reserved — give it back.
+    // Order creation failed after stock was reserved — give it back, and drop
+    // an order whose advance couldn't be booked rather than leave it half-made.
     await releaseStock(lineItems);
+    if (order && !order.saleEntry) await Order.deleteOne({ _id: order._id });
     next(err);
   }
 });
@@ -365,7 +387,6 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   }
 
   const { customerName, contactNumber, city, deliveryAddress, source, items } = req.body;
-  const advanceAmount = Number(req.body.advanceAmount) || 0;
   const business = order.business;
 
   if (!Array.isArray(items) || items.length === 0) {
@@ -377,6 +398,16 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
 
   // Re-validate and re-snapshot the new lines against this business's products.
   const newItems = await buildLineItems(business, items);
+  // Advances are money already booked — the new total can't drop below them.
+  const newTotal = newItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+  if (order.advanceAmount > newTotal) {
+    return next(
+      new ErrorResponse(
+        'The advance is more than the new total — refund part of it on the order first',
+        400
+      )
+    );
+  }
 
   // Stock reconciliation on a transaction-less DB: free the old reservation,
   // take the new one. If the new one can't be met, restore the old exactly and
@@ -412,7 +443,6 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   order.city = city;
   order.deliveryAddress = deliveryAddress;
   order.items = newItems;
-  order.advanceAmount = advanceAmount;
   order.updatedBy = req.user.id;
   await order.save();
 
@@ -671,11 +701,11 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     // whatever this entry just booked.
     if (!order.courier) order.paidPaisa = toPaisa(order.codAmount);
   } else if (order.courierSettlement) {
-    // Paid as part of a courier's lump sum — unmarking one order would leave the
-    // money booked against the courier but the order unpaid.
+    // Paid on a courier invoice — unmarking one order would leave the money
+    // booked against the courier but the order unpaid.
     return next(
       new ErrorResponse(
-        'This order was paid in a courier settlement. Reverse that settlement instead.',
+        "This order was paid on a courier's invoice. Reverse that invoice instead.",
         400
       )
     );
@@ -744,4 +774,43 @@ export const getPriceHint = asyncHandler(async (req, res) => {
   );
 
   res.status(200).json({ success: true, data: { lastPrice: line ? line.unitPrice : null } });
+});
+
+/** Where money came from / went, resolved for this order's business. */
+const orderMoney = (order, req) =>
+  resolveMoney(order.business, { account: req.body.account }, req.user);
+
+/**
+ * @desc   The customer sent money (a payment screenshot). Before dispatch it
+ *         lowers the COD; after, the COD is fixed and it becomes a refund due.
+ * @route  POST /api/v1/orders/:id/advances  (orders:update — scoped)
+ */
+export const addOrderAdvance = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  const money = await orderMoney(order, req);
+  const { amount, date, note } = req.body;
+  await recordAdvance(order, { amount, money, date, note, userId: req.user.id });
+  res.status(201).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Money paid back to the customer — at most what is due.
+ * @route  POST /api/v1/orders/:id/refunds  (orders:update — scoped)
+ */
+export const addOrderRefund = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  const money = await orderMoney(order, req);
+  const { amount, date, note } = req.body;
+  await recordRefund(order, { amount, money, date, note, userId: req.user.id });
+  res.status(201).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Remove an advance or refund entered by mistake (its entry is reversed).
+ * @route  DELETE /api/v1/orders/:id/customer-money/:rowId  (orders:update — scoped)
+ */
+export const deleteOrderMoney = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  await removeCustomerMoney(order, req.params.rowId, req.user.id);
+  res.status(200).json({ success: true, data: order });
 });

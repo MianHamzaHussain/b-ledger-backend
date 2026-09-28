@@ -20,6 +20,7 @@ import Party from '../models/Party.js';
 import { getPartyStatement } from '../controllers/partyController.js';
 import { orderExchangeSchema, orderStatusSchema } from '../schemas/orders.js';
 import { toPaisa } from '../utils/money.js';
+import { recordAdvance } from '../utils/customerMoney.js';
 
 /**
  * The courier's charge is taken at the parcel's OUTCOME (delivered / returned /
@@ -209,9 +210,11 @@ test('a charge row on the courier statement carries no COD breakdown', async () 
 });
 
 test('a fully prepaid parcel: the fee comes off what the courier owes us', async () => {
-  const { biz, courier, order } = await makeOrder('dispatched');
+  const { biz, courier, order } = await makeOrder('confirmed');
   // The customer paid all 2,000 up front — nothing to collect on the door.
-  order.advanceAmount = 2000;
+  const cash = await accountByCode(biz._id, CODES.CASH);
+  await recordAdvance(order, { amount: 2000, money: { account: cash._id, name: 'Cash' }, userId });
+  order.status = 'dispatched';
   await order.save();
   assert.equal(order.codAmount, 0);
 

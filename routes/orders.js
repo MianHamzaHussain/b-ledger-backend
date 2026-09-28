@@ -10,7 +10,8 @@ import {
   orderPaymentSchema,
   orderExchangeSchema,
   orderTrackingSchema,
-  orderNoteSchema
+  orderNoteSchema,
+  orderMoneySchema
 } from '../schemas/orders.js';
 import Order from '../models/Order.js';
 import {
@@ -23,6 +24,9 @@ import {
   updateOrderPayment,
   updateOrderTracking,
   updateOrderNote,
+  addOrderAdvance,
+  addOrderRefund,
+  deleteOrderMoney,
   getPriceHint
 } from '../controllers/orderController.js';
 
@@ -107,7 +111,7 @@ router
       Order,
       null,
       ['orderNumber', 'customerName', 'contactNumber', 'trackingId'],
-      'orderNumber dailySerial orderDay customerName city trackingId status paymentStatus total itemCount createdAt dispatchedAt deliveredAt'
+      'orderNumber dailySerial orderDay customerName city trackingId status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount'
     ),
     getOrders
   )
@@ -291,6 +295,66 @@ router.put(
   loadScoped(Order),
   validate(orderNoteSchema),
   updateOrderNote
+);
+
+/**
+ * @openapi
+ * /orders/{id}/advances:
+ *   post:
+ *     summary: Record an advance the customer sent (booked the same day)
+ *     description: Before dispatch it lowers the COD. After dispatch the COD is fixed, so it becomes a refund due.
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [amount, account]
+ *             properties:
+ *               amount: { type: number }
+ *               account: { type: string, description: "A money account id, or partner:<id>" }
+ *               date: { type: string, format: date }
+ *               note: { type: string }
+ *     responses:
+ *       201: { description: The order, with its customer money and refund due }
+ * /orders/{id}/refunds:
+ *   post:
+ *     summary: Record money paid back to the customer (at most the refund due)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       201: { description: The order }
+ * /orders/{id}/customer-money/{rowId}:
+ *   delete:
+ *     summary: Remove an advance or refund entered by mistake (reverses its entry)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: The order }
+ */
+router.post(
+  '/:id/advances',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderMoneySchema),
+  addOrderAdvance
+);
+router.post(
+  '/:id/refunds',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderMoneySchema),
+  addOrderRefund
+);
+router.delete(
+  '/:id/customer-money/:rowId',
+  can('orders', 'update'),
+  loadScoped(Order),
+  deleteOrderMoney
 );
 
 export default router;

@@ -14,6 +14,37 @@ const StatusEventSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/**
+ * Money the customer paid us directly (an advance — the payment screenshot) or
+ * we paid back (a refund). Each is posted the day it happens, against
+ * "Advances from customers", so the money is in the books before the parcel
+ * even ships.
+ */
+const CustomerMoneySchema = new mongoose.Schema(
+  {
+    kind: { type: String, enum: ['advance', 'refund'], required: true },
+    amountPaisa: { type: Number, required: true, min: 1 },
+    /** The money account it went into / came out of — or a partner, personally. */
+    account: { type: mongoose.Schema.ObjectId, ref: 'Account' },
+    partner: { type: mongoose.Schema.ObjectId, ref: 'Partner' },
+    /** Where, as it read at the time ("Meezan bank", "Ali (partner)"). */
+    accountName: { type: String },
+    date: { type: Date, default: Date.now },
+    note: { type: String, trim: true, maxlength: 300 },
+    entry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry', required: true },
+    by: { type: mongoose.Schema.ObjectId, ref: 'User' }
+  },
+  { _id: true }
+);
+
+/** Statuses after which the COD is fixed — the courier has it on the airway bill. */
+const COD_FROZEN = new Set([
+  ORDER_STATUS.DISPATCHED,
+  ORDER_STATUS.DELIVERED,
+  ORDER_STATUS.RETURNED,
+  ORDER_STATUS.EXCHANGED
+]);
+
 /** The date field each status stamps, so lists can filter "delivered 1–15 Sep". */
 const STATUS_DATE_FIELD = {
   dispatched: 'dispatchedAt',
@@ -118,7 +149,21 @@ const OrderSchema = new mongoose.Schema(
       min: [0, 'Advance can not be negative']
     },
     total: { type: Number, default: 0 }, // derived (= subtotal)
-    codAmount: { type: Number, default: 0 }, // derived (= total − advance)
+    /**
+     * What the courier collects — total − advance, derived until DISPATCH, then
+     * frozen: the courier has printed it, so an advance that arrives later
+     * doesn't change it and becomes a refund due instead.
+     */
+    codAmount: { type: Number, default: 0 },
+    /** Advances and refunds, each with its ledger entry. `advanceAmount` is their net. */
+    customerMoney: { type: [CustomerMoneySchema], default: [] },
+    /**
+     * What we owe the customer back (paisa, derived): an advance that came after
+     * the COD was fixed, or anything held on an order that won't be sold.
+     */
+    refundDuePaisa: { type: Number, default: 0 },
+    /** Counter sale: the money account the "paid now" went into. */
+    counterAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' },
     /** Number of line items — denormalised so the list can show it without
      *  shipping (or counting) the whole items array. Derived, like the money. */
     itemCount: { type: Number, default: 0 },
@@ -156,9 +201,9 @@ const OrderSchema = new mongoose.Schema(
      */
     paidPaisa: { type: Number },
     /**
-     * Courier order paid by a lump-sum courier settlement rather than its own
-     * "Mark paid": the settlement's journal entry. Reversing that entry sets the
-     * order back to unpaid; the order itself can't be unmarked on its own.
+     * Courier order whose COD was paid on a courier invoice: that invoice's
+     * journal entry. Reversing it sets the order back to unpaid; the order
+     * itself can't be unmarked on its own.
      */
     courierSettlement: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
     /**
@@ -197,6 +242,7 @@ OrderSchema.index({ business: 1, status: 1 });
 OrderSchema.index({ business: 1, createdAt: -1 });
 OrderSchema.index({ business: 1, dispatchedAt: -1 });
 OrderSchema.index({ business: 1, deliveredAt: -1 });
+OrderSchema.index({ business: 1, refundDuePaisa: 1 });
 // Scan-to-find: a courier tracking number resolves to its order. Sparse — most
 // orders have no tracking id until they are dispatched.
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
@@ -234,8 +280,42 @@ OrderSchema.pre('save', async function () {
 
   this.subtotal = this.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
   this.total = this.subtotal;
-  this.codAmount = Math.max(0, this.total - (this.advanceAmount || 0));
+  deriveCustomerMoney(this);
   this.itemCount = this.items.length;
 });
+
+/** A walk-in counter sale — its "advance" is the cash taken at the counter. */
+export const isCounterSale = order => !order.courier && order.source === SALES_CHANNELS.WALK_IN;
+
+/**
+ * Keep advance, COD and refund-due consistent with the customer's money. Held
+ * money is the net of advances and refunds; the COD takes it off the total until
+ * dispatch; after that, whatever is held beyond what the sale uses is owed back.
+ * A cancelled or returned order uses none of it.
+ */
+function deriveCustomerMoney(order) {
+  const totalPaisa = Math.round(order.total * 100);
+  if (!isCounterSale(order)) {
+    const heldPaisa = order.customerMoney.reduce(
+      (s, m) => s + (m.kind === 'advance' ? m.amountPaisa : -m.amountPaisa),
+      0
+    );
+    order.advanceAmount = heldPaisa / 100;
+    // Before dispatch the COD follows the advance; frozen after.
+    if (order.isNew || !COD_FROZEN.has(order.status)) {
+      order.codAmount = Math.max(0, totalPaisa - heldPaisa) / 100;
+    }
+    const usedPaisa =
+      order.status === ORDER_STATUS.CANCELLED ||
+      order.status === ORDER_STATUS.RETURNED ||
+      order.status === ORDER_STATUS.EXCHANGED
+        ? 0
+        : totalPaisa - Math.round(order.codAmount * 100);
+    order.refundDuePaisa = Math.max(0, heldPaisa - usedPaisa);
+    return;
+  }
+  order.codAmount = Math.max(0, order.total - (order.advanceAmount || 0));
+  order.refundDuePaisa = 0;
+}
 
 export default mongoose.model('Order', OrderSchema);

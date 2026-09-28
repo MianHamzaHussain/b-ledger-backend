@@ -26,6 +26,8 @@ export const orderCreateSchema = z.object({
   city: z.string().optional(),
   deliveryAddress: z.string().optional(),
   advanceAmount: z.coerce.number().min(0).optional(),
+  /** Where the advance (or a counter sale's "paid now") went — a money account or partner:<id>. */
+  advanceAccount: z.string().optional(),
   source: source.optional(),
   customerParty: id.optional(),
   newCustomerParty: z.boolean().optional(),
@@ -38,7 +40,6 @@ export const orderUpdateSchema = z.object({
   contactNumber: z.string().trim().min(1, 'Contact number is required'),
   city: z.string().optional(),
   deliveryAddress: z.string().optional(),
-  advanceAmount: z.coerce.number().min(0).optional(),
   source: source.optional(),
   items: z.array(orderItem).min(1, 'Add at least one item')
 });
@@ -67,6 +68,14 @@ export const orderExchangeSchema = z.object({
   courier: id.optional(),
   /** What the courier billed to collect the original parcel — usually left for its invoice. */
   returnCharge: z.coerce.number().min(0, 'Return charge can not be negative').optional()
+});
+
+/** An advance the customer sent, or a refund we paid them. */
+export const orderMoneySchema = z.object({
+  amount: z.coerce.number().positive('Must be more than 0'),
+  account: z.string().min(1, 'Choose where the money went'),
+  date: z.coerce.date().optional(),
+  note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
 });
 
 export const orderTrackingSchema = z.object({

@@ -231,7 +231,7 @@ MONGO_TEST_URI="mongodb://127.0.0.1:27017/b_ledger_test" npm test
 
 They cover the accounting invariants (balanced double-entry, order/walk-in/
 courier posting, partner distribution, year-end close), the money flows
-(charges at delivery/return/exchange, courier lump-sum settlement, You gave /
+(charges at delivery/return/exchange, the courier invoice, You gave /
 You got per party type, salary and advances, customer part-payments, the cash
 book), the permission resolver, and the request-validation middleware. CI spins up a Mongo service
 and runs `npm run check` on every push.

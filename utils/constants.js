@@ -116,8 +116,9 @@ export const JOURNAL_SOURCES = {
   DEPRECIATION: 'depreciation',
   // Year-end close: sweeps income/expense into retained earnings.
   CLOSING: 'closing',
-  // A courier's lump-sum payment covering many orders (see courierSettlement.js).
-  COURIER_SETTLEMENT: 'courier-settlement',
+  // A customer's advance on an order, and money paid back to them.
+  ORDER_ADVANCE: 'order-advance',
+  ORDER_REFUND: 'order-refund',
   // A courier's invoice: the COD it paid and the charges it billed, by parcel.
   COURIER_INVOICE: 'courier-invoice',
   // Money moved between two of the business's own places (cash to bank, a

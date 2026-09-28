@@ -137,7 +137,7 @@ const moneyLines = async (business, party, paisa, direction, accountCode, money)
  *   employee   gave → salary paid (clears owed first; can cut an advance),
  *                     or an advance (purpose: 'advance')     got → salary due
  *   lender     gave → loan repaid (principal)  got → loan taken
- *   courier    — handled by settleCourier (a lump-sum payment), not here
+ *   courier    — recorded on its invoice (courierInvoice.js), not here
  */
 export const partyTransactionLines = async (
   party,
@@ -224,7 +224,7 @@ export const partyTransactionLines = async (
     }
 
     default:
-      // Couriers are handled before this (settleCourier) — only reachable if a
+      // Couriers are refused before this (they use invoices) — only reachable if a
       // new party type is added without a mapping.
       throw new ErrorResponse('This kind of party can not be recorded here', 400);
   }
