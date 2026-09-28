@@ -14,12 +14,17 @@ import {
 import Order from '../models/Order.js';
 import JournalEntry from '../models/JournalEntry.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { updateOrderStatus, exchangeOrder } from '../controllers/orderController.js';
+import {
+  updateOrderStatus,
+  exchangeReturn,
+  createReplacement
+} from '../controllers/orderController.js';
 import { accountBalance, partyBalance } from '../utils/ledger.js';
 import Party from '../models/Party.js';
 import { getPartyStatement } from '../controllers/partyController.js';
-import { orderExchangeSchema, orderStatusSchema } from '../schemas/orders.js';
+import { orderExchangeReturnSchema, orderStatusSchema } from '../schemas/orders.js';
 import { toPaisa } from '../utils/money.js';
+import { recordAdvance } from '../utils/customerMoney.js';
 
 /**
  * The courier's charge is taken at the parcel's OUTCOME (delivered / returned /
@@ -79,11 +84,15 @@ test('dispatch requires a tracking number and takes no charge', async () => {
   assert.equal(out.body.data.deliveryChargePaisa, undefined, 'no charge booked at dispatch');
 });
 
-test('delivered requires the charge and books it into the sale', async () => {
+test('delivered without a charge leaves it open for the courier invoice', async () => {
+  const { order } = await makeOrder('dispatched');
+  const out = await setStatus(order, { status: 'delivered' });
+  assert.equal(out.body.data.status, 'delivered');
+  assert.equal(out.body.data.deliveryChargePaisa, undefined, 'charge still open');
+});
+
+test('delivered with a known charge books it into the sale', async () => {
   const { biz, order } = await makeOrder('dispatched');
-
-  await assert.rejects(setStatus(order, { status: 'delivered' }), /charge/);
-
   const out = await setStatus(order, { status: 'delivered', deliveryCharge: 180 });
   assert.equal(out.body.data.deliveryChargePaisa, toPaisa(180));
 
@@ -103,10 +112,16 @@ test('an explicit 0 delivers without a delivery-fee line', async () => {
   assert.ok(!sale.lines.some(l => String(l.account) === String(deliveryAcc)));
 });
 
-test('returned requires the charge and books it as a return expense', async () => {
+test('returned without a charge posts nothing and leaves it open', async () => {
   const { biz, order } = await makeOrder('dispatched');
+  const out = await setStatus(order, { status: 'returned' });
+  assert.equal(out.body.data.returnChargePaisa, undefined);
+  const returnAcc = (await accountByCode(biz._id, CODES.RETURN_CHARGES))._id;
+  assert.equal(await JournalEntry.countDocuments({ 'lines.account': returnAcc }), 0);
+});
 
-  await assert.rejects(setStatus(order, { status: 'returned' }), /charge/);
+test('returned with a known charge books it as a return expense', async () => {
+  const { biz, order } = await makeOrder('dispatched');
 
   // A return fee is not capped by the COD — the courier bills it regardless.
   const out = await setStatus(order, { status: 'returned', deliveryCharge: 300 });
@@ -120,11 +135,12 @@ test('returned requires the charge and books it as a return expense', async () =
   assert.equal(line.debitPaisa, toPaisa(300));
 });
 
-test('exchange schema requires the pickup charge', () => {
-  const items = [{ product: 'p', variantId: 'v', quantity: 1, unitPrice: 100 }];
-  assert.equal(orderExchangeSchema.safeParse({ items }).success, false);
-  assert.equal(orderExchangeSchema.safeParse({ items, returnCharge: -1 }).success, false);
-  const ok = orderExchangeSchema.safeParse({ items, returnCharge: 0 });
+test('exchange schema takes an optional, non-negative pickup charge', () => {
+  const open = orderExchangeReturnSchema.safeParse({});
+  assert.equal(open.success, true);
+  assert.equal(open.data.returnCharge, undefined);
+  assert.equal(orderExchangeReturnSchema.safeParse({ returnCharge: -1 }).success, false);
+  const ok = orderExchangeReturnSchema.safeParse({ returnCharge: 0 });
   assert.equal(ok.success, true);
   assert.equal(ok.data.returnCharge, 0);
 });
@@ -134,18 +150,9 @@ test('exchange keeps the forward delivery fee and books the pickup charge', asyn
   await setStatus(order, { status: 'delivered', deliveryCharge: 180 });
 
   const delivered = await Order.findById(order._id);
-  const item = delivered.items[0];
-  await runHandler(exchangeOrder, {
+  await runHandler(exchangeReturn, {
     resource: delivered,
-    body: orderExchangeSchema.parse({
-      items: [
-        {
-          product: String(item.product),
-          variantId: String(item.variantId),
-          quantity: 1,
-          unitPrice: 2000
-        }
-      ],
+    body: orderExchangeReturnSchema.parse({
       returnCharge: 120
     })
   });
@@ -171,18 +178,9 @@ test('a charge row on the courier statement carries no COD breakdown', async () 
   const { courier, order } = await makeOrder('dispatched');
   await setStatus(order, { status: 'delivered', deliveryCharge: 150 });
   const delivered = await Order.findById(order._id);
-  const item = delivered.items[0];
-  await runHandler(exchangeOrder, {
+  await runHandler(exchangeReturn, {
     resource: delivered,
-    body: orderExchangeSchema.parse({
-      items: [
-        {
-          product: String(item.product),
-          variantId: String(item.variantId),
-          quantity: 1,
-          unitPrice: 2000
-        }
-      ],
+    body: orderExchangeReturnSchema.parse({
       returnCharge: 120
     })
   });
@@ -197,9 +195,11 @@ test('a charge row on the courier statement carries no COD breakdown', async () 
 });
 
 test('a fully prepaid parcel: the fee comes off what the courier owes us', async () => {
-  const { biz, courier, order } = await makeOrder('dispatched');
+  const { biz, courier, order } = await makeOrder('confirmed');
   // The customer paid all 2,000 up front — nothing to collect on the door.
-  order.advanceAmount = 2000;
+  const cash = await accountByCode(biz._id, CODES.CASH);
+  await recordAdvance(order, { amount: 2000, money: { account: cash._id, name: 'Cash' }, userId });
+  order.status = 'dispatched';
   await order.save();
   assert.equal(order.codAmount, 0);
 
@@ -211,4 +211,20 @@ test('a fully prepaid parcel: the fee comes off what the courier owes us', async
   assert.equal(await accountBalance(biz._id, await acc(CODES.CASH)), toPaisa(2000), 'advance');
   // The courier keeps 200 out of the COD it sends us for other parcels.
   assert.equal(await partyBalance(biz._id, courier._id), -toPaisa(200));
+});
+
+test("createReplacement on a delivered order (the item hasn't come back) is rejected", async () => {
+  const { order } = await makeOrder('dispatched');
+  await setStatus(order, { status: 'delivered', deliveryCharge: 100 });
+  const delivered = await Order.findById(order._id);
+
+  try {
+    await runHandler(createReplacement, {
+      resource: delivered,
+      body: { items: [{ product: oid(), variantId: oid(), quantity: 1, unitPrice: 500 }] }
+    });
+    assert.fail('Should have thrown');
+  } catch (err) {
+    assert.match(err.message, /coming back first/i);
+  }
 });

@@ -1,6 +1,12 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
-import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permissions.js';
+import {
+  can,
+  loadScoped,
+  restrictBusinessToScope,
+  hideCosts,
+  requirePermission
+} from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
 import { validate } from '../middlewares/validate.js';
 import {
@@ -8,8 +14,14 @@ import {
   orderUpdateSchema,
   orderStatusSchema,
   orderPaymentSchema,
-  orderExchangeSchema,
-  orderTrackingSchema
+  orderExchangeReturnSchema,
+  orderSwapSchema,
+  orderReplacementSchema,
+  orderTrackingSchema,
+  orderNoteSchema,
+  orderMoneySchema,
+  orderCreditSchema,
+  customCostSchema
 } from '../schemas/orders.js';
 import Order from '../models/Order.js';
 import {
@@ -17,16 +29,28 @@ import {
   getOrder,
   createOrder,
   updateOrder,
-  exchangeOrder,
+  exchangeReturn,
+  createReplacement,
+  swapOrder,
+  receiveReturn,
   updateOrderStatus,
   updateOrderPayment,
   updateOrderTracking,
-  getPriceHint
+  updateOrderNote,
+  addOrderAdvance,
+  addOrderRefund,
+  deleteOrderMoney,
+  getPriceHint,
+  keepOrderCredit,
+  addCustomCost,
+  deleteCustomCost
 } from '../controllers/orderController.js';
 
 const router = express.Router();
 
 router.use(protect);
+// Order lines carry the cost snapshot — only people who may "See costs" get it.
+router.use(hideCosts);
 
 /**
  * @swagger
@@ -57,6 +81,8 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *       - { in: query, name: status,        schema: { type: string, enum: [pending, confirmed, dispatched, delivered, cancelled, returned] } }
  *       - { in: query, name: paymentStatus, schema: { type: string, enum: [unpaid, paid] } }
  *       - { in: query, name: search,        schema: { type: string } }
+ *       - { in: query, name: "createdAt[gte]",   schema: { type: string, format: date-time }, description: "Date range on any of createdAt / dispatchedAt / deliveredAt, with [gte] and [lte]" }
+ *       - { in: query, name: "deliveredAt[lte]", schema: { type: string, format: date-time } }
  *       - { in: query, name: page,          schema: { type: integer } }
  *       - { in: query, name: limit,         schema: { type: integer } }
  *     responses:
@@ -93,15 +119,15 @@ router
   .route('/')
   .get(
     can('orders', 'read'),
-    // Lean list: the cards show only #, tracking, status, item count, total and
-    // payment. Full details (customer, items, courier, remittance) come from the
-    // detail-by-id endpoint. Search still matches name/phone/tracking — that is
-    // the query filter, independent of the projection.
+    // Lean list: the cards show who it's for, #, today's serial, tracking, status,
+    // item count, total and payment. Full details (items, courier, remittance)
+    // come from the detail-by-id endpoint. Search still matches name/phone/
+    // tracking — that is the query filter, independent of the projection.
     advancedResults(
       Order,
       null,
-      ['orderNumber', 'customerName', 'contactNumber', 'trackingId'],
-      'orderNumber trackingId status paymentStatus total itemCount'
+      ['orderNumber', 'customerName', 'contactNumber', 'trackingId', 'reversalTrackingId'],
+      'orderNumber dailySerial orderDay customerName city trackingId status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount reversalTrackingId awaitingReturn'
     ),
     getOrders
   )
@@ -158,6 +184,7 @@ router
  *             properties:
  *               status: { type: string, enum: [confirmed, dispatched, delivered, cancelled, returned] }
  *               trackingId: { type: string, description: "Required on dispatched — the courier consignment number" }
+ *               note: { type: string, description: "Optional reason, shown on the order's timeline (max 300)" }
  *               deliveryCharge: { type: number, description: "Required on delivered (the delivery fee — on a prepaid order it comes off the courier's COD balance) and returned (the return fee, booked as an expense). 0 if none." }
  *     responses:
  *       200: { description: Updated }
@@ -192,11 +219,57 @@ router
  *       404: { description: Not found, or outside your businesses }
  */
 router.post(
-  '/:id/exchange',
+  '/:id/exchange-return',
   can('orders', 'update'),
   loadScoped(Order),
-  validate(orderExchangeSchema),
-  exchangeOrder
+  validate(orderExchangeReturnSchema),
+  exchangeReturn
+);
+
+router.post(
+  '/:id/exchange-replacement',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderReplacementSchema),
+  createReplacement
+);
+
+/**
+ * @openapi
+ * /orders/{id}/swap:
+ *   post:
+ *     summary: Exchange by swapping at the door — the replacement goes out now
+ *     description: >
+ *       The original's sale becomes the customer's credit, which the replacement
+ *       carries (its COD is the price difference). The old item comes back on the
+ *       courier's reversal tracking number; its stock returns on receive-return.
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       201: { description: The replacement order }
+ * /orders/{id}/receive-return:
+ *   post:
+ *     summary: Swap at the door — the old item has arrived back (stock returns)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: The original order }
+ */
+router.post(
+  '/:id/swap',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderSwapSchema),
+  swapOrder
+);
+router.post(
+  '/:id/receive-return',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderExchangeReturnSchema),
+  receiveReturn
 );
 
 router.put(
@@ -258,6 +331,137 @@ router.put(
   loadScoped(Order),
   validate(orderTrackingSchema),
   updateOrderTracking
+);
+
+/**
+ * @swagger
+ * /orders/{id}/note:
+ *   put:
+ *     summary: Set the order's note (any status — changes nothing else)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               note: { type: string, description: "Free text, max 1000 (empty to clear)" }
+ *     responses:
+ *       200: { description: Updated }
+ */
+router.put(
+  '/:id/note',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderNoteSchema),
+  updateOrderNote
+);
+
+/**
+ * @openapi
+ * /orders/{id}/advances:
+ *   post:
+ *     summary: Record an advance the customer sent (booked the same day)
+ *     description: Before dispatch it lowers the COD. After dispatch the COD is fixed, so it becomes a refund due.
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [amount, account]
+ *             properties:
+ *               amount: { type: number }
+ *               account: { type: string, description: "A money account id, or partner:<id>" }
+ *               date: { type: string, format: date }
+ *               note: { type: string }
+ *     responses:
+ *       201: { description: The order, with its customer money and refund due }
+ * /orders/{id}/refunds:
+ *   post:
+ *     summary: Record money paid back to the customer (at most the refund due)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       201: { description: The order }
+ * /orders/{id}/customer-money/{rowId}:
+ *   delete:
+ *     summary: Remove an advance or refund entered by mistake (reverses its entry)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: The order }
+ */
+router.post(
+  '/:id/advances',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderMoneySchema),
+  addOrderAdvance
+);
+router.post(
+  '/:id/refunds',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderMoneySchema),
+  addOrderRefund
+);
+router.delete(
+  '/:id/customer-money/:rowId',
+  can('orders', 'update'),
+  loadScoped(Order),
+  deleteOrderMoney
+);
+
+/**
+ * @swagger
+ * /orders/{id}/credit:
+ *   post:
+ *     summary: Keep a cancelled/returned order's refund due as credit on the customer's khata
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [amount]
+ *             properties:
+ *               amount: { type: number }
+ *     responses:
+ *       201: { description: The order }
+ */
+router.post(
+  '/:id/credit',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderCreditSchema),
+  keepOrderCredit
+);
+
+router.post(
+  '/:id/custom-cost',
+  can('orders', 'update'),
+  requirePermission('costs', 'read'),
+  loadScoped(Order),
+  validate(customCostSchema),
+  addCustomCost
+);
+
+router.delete(
+  '/:id/custom-cost/:costId',
+  can('orders', 'update'),
+  requirePermission('costs', 'read'),
+  loadScoped(Order),
+  deleteCustomCost
 );
 
 export default router;

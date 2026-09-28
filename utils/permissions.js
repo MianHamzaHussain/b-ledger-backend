@@ -116,6 +116,14 @@ export const RESOURCES = {
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
   },
+  costs: {
+    // "See costs & profit": what an article cost to make, per-line margins and
+    // product profitability. A trade secret — owners and partners only. Without
+    // it the server strips every cost field from responses (hideCosts) and the
+    // production screens, which are all costs, are closed.
+    label: 'See costs & profit',
+    scopable: false
+  },
   notifications: {
     // In-app alerts for the businesses a user is assigned to.
     label: 'Notifications',
@@ -183,3 +191,16 @@ export const resolvePermissions = user => {
 
   return resolved;
 };
+
+/**
+ * Whether a user may take an action on a resource — the same rule as `can()`
+ * (admin passes; deny overrides win), for code that needs a yes/no rather than
+ * a route guard.
+ */
+export const userCan = (user, resource, action) =>
+  Boolean(user?.role?.fullAccess) ||
+  Boolean(
+    resolvePermissions(user || {})
+      .get(resource)
+      ?.actions.has(action)
+  );

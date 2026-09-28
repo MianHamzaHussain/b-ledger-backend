@@ -18,7 +18,8 @@ import {
   deletePartner,
   investPartner,
   withdrawPartner,
-  distributeProfit
+  distributeProfit,
+  PARTNER_LIST_FIELDS
 } from '../controllers/partnerController.js';
 
 const router = express.Router();
@@ -49,12 +50,7 @@ router
   .route('/')
   .get(
     can('partners', 'read'),
-    advancedResults(
-      Partner,
-      null,
-      ['name'],
-      'name sharePercent isActive capitalAccount business createdAt updatedAt'
-    ),
+    advancedResults(Partner, null, ['name'], PARTNER_LIST_FIELDS),
     getPartners
   )
   .post(

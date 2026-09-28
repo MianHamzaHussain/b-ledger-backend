@@ -1,6 +1,11 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
-import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permissions.js';
+import {
+  can,
+  loadScoped,
+  restrictBusinessToScope,
+  requirePermission
+} from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
 import ProductionBatch from '../models/ProductionBatch.js';
 import {
@@ -15,6 +20,9 @@ import {
 const router = express.Router();
 
 router.use(protect);
+// Production is costs through and through — it needs "See costs" as well as its
+// own permission, so a production role can't reveal what articles cost.
+router.use(requirePermission('costs', 'read'));
 
 /**
  * @swagger

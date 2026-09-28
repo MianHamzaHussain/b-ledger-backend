@@ -13,12 +13,32 @@ import {
   postOrderSale,
   postOrderRemittance,
   postReturnCharge,
-  postDeliveryCharge,
   computeRemittance
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
+import { resolveMoney } from '../utils/moneyAccounts.js';
+import {
+  recordAdvance,
+  recordRefund,
+  removeCustomerMoney,
+  keepAsCredit
+} from '../utils/customerMoney.js';
+import {
+  recordCustomCost,
+  removeCustomCost,
+  moveCustomWipToCogs,
+  writeOffCustomWip
+} from '../utils/customCost.js';
+import { upsertCustomerParty } from '../utils/customerParty.js';
+import {
+  assertExchangeable,
+  convertSaleToCredit,
+  receiveReturnedGoods,
+  creditForReplacement,
+  markCreditMoved
+} from '../utils/exchange.js';
 import {
   ORDER_STATUS,
   ORDER_TRANSITIONS,
@@ -90,15 +110,20 @@ export const getOrder = asyncHandler(async (req, res) => {
   await order.populate([
     { path: 'courier', select: 'name' },
     { path: 'customerParty', select: 'name phone' },
-    { path: 'customer', select: 'name phone' }
+    { path: 'customer', select: 'name phone' },
+    // The timeline names who made each change.
+    { path: 'statusHistory.by', select: 'name' }
   ]);
 
   const codPaisa = toPaisa(order.codAmount);
 
   // A walk-in / counter sale has no courier: no delivery fee, no COD taxes — the
   // buyer simply owes the full balance, so the net receivable is the balance.
+  // An order that merely hasn't been dispatched yet has no courier either, but it
+  // will be collected on delivery — so it's a counter sale only if it came in as
+  // a walk-in.
   let remittance;
-  if (!order.courier) {
+  if (!order.courier && order.source === SALES_CHANNELS.WALK_IN) {
     // Part-payments made from the customer's party page come off what is owed.
     const paidPaisa = order.paidPaisa || 0;
     remittance = {
@@ -170,36 +195,13 @@ const resolveCustomerParty = async (business, partyId) => {
 };
 
 /**
- * Create a customer party straight from the details already on the order (its
- * name + contact number), so an unpaid walk-in never re-asks for them. Upserts
- * by phone within the business so a repeat credit buyer folds into one running
- * account rather than spawning a duplicate statement each visit.
- */
-const upsertCustomerParty = async (business, name, phone, userId) => {
-  if (!phone)
-    throw new ErrorResponse('A contact number is required to record a customer on credit', 400);
-  // Bake the phone into the party name — a common first name ("Ali") stays
-  // distinguishable everywhere the party is shown by name alone. Phone is still
-  // kept as its own field so dedup-by-phone and phone search keep working.
-  const label = `${name} - ${phone}`;
-  const party = await Party.findOneAndUpdate(
-    { business, type: PARTY_TYPES.CUSTOMER, phone },
-    {
-      $set: { name: label },
-      $setOnInsert: { business, type: PARTY_TYPES.CUSTOMER, phone, createdBy: userId }
-    },
-    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-  );
-  return party._id;
-};
-
-/**
  * Validate order lines against a business's products and snapshot the name,
  * variant label and COST at order time (price is the negotiated input). Throws
  * a 400 on any bad line. Shared by create, edit and exchange — the three places
  * that build order lines.
  */
 const buildLineItems = async (business, items) => {
+  if (!items.length) return [];
   const lineItems = [];
   for (const it of items) {
     const product = await Product.findOne({ _id: it.product, business });
@@ -235,18 +237,23 @@ const buildLineItems = async (business, items) => {
  */
 export const createOrder = asyncHandler(async (req, res, next) => {
   const { business, customerName, contactNumber, city, deliveryAddress, source, items } = req.body;
+  const customWork = req.body.customWork || [];
   const advanceAmount = Number(req.body.advanceAmount) || 0;
 
   if (!business) return next(new ErrorResponse('Please select a business', 400));
-  if (!Array.isArray(items) || items.length === 0) {
-    return next(new ErrorResponse('Add at least one item', 400));
-  }
+  if ((items?.length ?? 0) + customWork.length === 0)
+    return next(new ErrorResponse('Add at least one item or custom work', 400));
   if (!customerName || !contactNumber) {
     return next(new ErrorResponse('Customer name and contact number are required', 400));
   }
 
   const biz = await Business.findById(business);
   if (!biz) return next(new ErrorResponse('Business not found', 404));
+  // Where the advance (or counter payment) went — checked before anything is held.
+  const advanceMoney =
+    advanceAmount > 0
+      ? await resolveMoney(business, { account: req.body.advanceAccount }, req.user)
+      : null;
 
   // Courier is chosen at dispatch, not here — a walk-in/counter sale has none.
   const lineItems = await buildLineItems(business, items);
@@ -256,8 +263,15 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   // actually taken at the counter. Anything still owed is credit — sub-ledgered
   // to a named customer party, so we must know who owes it.
   const isWalkIn = source === SALES_CHANNELS.WALK_IN;
-  const total = lineItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+  const total =
+    lineItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0) +
+    customWork.reduce((s, w) => s + w.price, 0);
+  // A reduction ("no dupatta") can lower the price, but never below nothing.
+  if (total < 0) return next(new ErrorResponse("The order total can't be below 0", 400));
   const owed = Math.max(0, total - advanceAmount);
+  if (advanceAmount > total) {
+    return next(new ErrorResponse('The advance is more than the order total', 400));
+  }
   let customerParty;
   if (isWalkIn && owed > 0) {
     if (req.body.customerParty) {
@@ -279,6 +293,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   // Atomic reserve — throws (and unwinds itself) if any line lacks stock.
   await reserveStock(lineItems);
 
+  let order;
   try {
     const customer = await Customer.findOneAndUpdate(
       { business, phone: contactNumber },
@@ -289,7 +304,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
 
-    const order = await Order.create({
+    order = await Order.create({
       business,
       customer: customer._id,
       customerParty,
@@ -299,7 +314,11 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       city,
       deliveryAddress,
       items: lineItems,
-      advanceAmount,
+      customWork,
+      // A counter sale takes its payment in the sale; any other order's advance
+      // is booked as it arrives (below), which also derives the COD.
+      advanceAmount: isWalkIn ? advanceAmount : 0,
+      counterAccount: isWalkIn ? advanceMoney?.account : undefined,
       status: isWalkIn ? ORDER_STATUS.DELIVERED : undefined,
       paymentStatus: isWalkIn && owed <= 0 ? PAYMENT_STATUS.PAID : undefined,
       createdBy: req.user.id
@@ -313,6 +332,12 @@ export const createOrder = asyncHandler(async (req, res, next) => {
         order.saleEntry = entry._id;
         await order.save();
       }
+    } else if (advanceMoney) {
+      await recordAdvance(order, {
+        amount: advanceAmount,
+        money: advanceMoney,
+        userId: req.user.id
+      });
     }
 
     // Ambient alerts — must never fail the order.
@@ -327,8 +352,10 @@ export const createOrder = asyncHandler(async (req, res, next) => {
 
     res.status(201).json({ success: true, data: order });
   } catch (err) {
-    // Order creation failed after stock was reserved — give it back.
+    // Order creation failed after stock was reserved — give it back, and drop
+    // an order whose advance couldn't be booked rather than leave it half-made.
     await releaseStock(lineItems);
+    if (order && !order.saleEntry) await Order.deleteOne({ _id: order._id });
     next(err);
   }
 });
@@ -360,18 +387,30 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   }
 
   const { customerName, contactNumber, city, deliveryAddress, source, items } = req.body;
-  const advanceAmount = Number(req.body.advanceAmount) || 0;
+  const customWork = req.body.customWork || [];
   const business = order.business;
 
-  if (!Array.isArray(items) || items.length === 0) {
-    return next(new ErrorResponse('Add at least one item', 400));
-  }
+  if ((items?.length ?? 0) + customWork.length === 0)
+    return next(new ErrorResponse('Add at least one item or custom work', 400));
   if (!customerName || !contactNumber) {
     return next(new ErrorResponse('Customer name and contact number are required', 400));
   }
 
   // Re-validate and re-snapshot the new lines against this business's products.
   const newItems = await buildLineItems(business, items);
+  // Advances are money already booked — the new total can't drop below them.
+  const newTotal =
+    newItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0) +
+    customWork.reduce((s, w) => s + w.price, 0);
+  if (newTotal < 0) return next(new ErrorResponse("The order total can't be below 0", 400));
+  if (order.advanceAmount > newTotal) {
+    return next(
+      new ErrorResponse(
+        'The advance is more than the new total — refund part of it on the order first',
+        400
+      )
+    );
+  }
 
   // Stock reconciliation on a transaction-less DB: free the old reservation,
   // take the new one. If the new one can't be met, restore the old exactly and
@@ -407,105 +446,141 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   order.city = city;
   order.deliveryAddress = deliveryAddress;
   order.items = newItems;
-  order.advanceAmount = advanceAmount;
+  order.customWork = customWork;
   order.updatedBy = req.user.id;
   await order.save();
 
   res.status(200).json({ success: true, data: order });
 });
 
+/** Book the pickup charge now, when the courier's bill is already known. */
+const bookReturnCharge = async (order, returnCharge, userId) => {
+  if (returnCharge == null) return;
+  const returnChargePaisa = toPaisa(returnCharge);
+  order.returnChargePaisa = returnChargePaisa;
+  if (returnChargePaisa > 0) await postReturnCharge(order, fromPaisa(returnChargePaisa), userId);
+};
+
 /**
- * @desc   Exchange a delivered order: put its goods back and reverse its sale
- *         (refunding any COD), book the courier's pickup charge, then create a
- *         linked replacement order for the new items. The price difference is
- *         simply the replacement's COD — more if the new items cost more, less
- *         (a refund) if they cost less.
- * @route  POST /api/v1/orders/:id/exchange  (orders:update — scoped)
+ * Create the replacement for an exchanged order — same customer, new items —
+ * carrying the original's credit, so its COD is only the price difference.
+ * Stock is reserved first, then `beforeCreate` runs (a swap turns the sale into
+ * credit there); if anything fails the stock is given back and that step undone.
  */
-export const exchangeOrder = asyncHandler(async (req, res, next) => {
-  const original = req.resource;
-
-  // Exchange means the customer already has the goods, so it only applies once
-  // the order is delivered — and never twice.
-  if (original.status !== ORDER_STATUS.DELIVERED) {
-    return next(new ErrorResponse('Only a delivered order can be exchanged.', 400));
-  }
-  if (original.exchangedFor) {
-    return next(new ErrorResponse('This order has already been exchanged.', 400));
-  }
-
-  const { items } = req.body;
-  if (!Array.isArray(items) || items.length === 0) {
-    return next(new ErrorResponse('Add at least one replacement item', 400));
-  }
-
+const makeReplacement = async (original, { items, courier }, userId, beforeCreate) => {
   const business = original.business;
   // The replacement inherits the original's courier unless a new one is chosen.
-  const courier = req.body.courier
-    ? await resolveCourier(business, req.body.courier)
-    : original.courier;
-
+  const replacementCourier = courier ? await resolveCourier(business, courier) : original.courier;
   const newItems = await buildLineItems(business, items);
-
-  // Reserve the replacement stock first — if it can't be met, nothing has
-  // changed yet and we simply reject.
   await reserveStock(newItems);
-
+  let undo;
   try {
-    // Unwind the original: goods back to inventory, sale reversed, COD refunded.
-    await releaseStock(original.items);
-    if (original.saleEntry) {
-      await reverseEntry(original.saleEntry, {
-        userId: req.user.id,
-        memo: `Exchange of order ${original.orderNumber}`
-      });
-      // The reversal took the forward delivery fee out with the sale, but the
-      // courier did deliver the parcel — that cost stands, so re-book it.
-      if (original.courier && original.deliveryChargePaisa > 0) {
-        await postDeliveryCharge(original, fromPaisa(original.deliveryChargePaisa), req.user.id);
-      }
-    }
-    if (original.paymentEntry) {
-      await reverseEntry(original.paymentEntry, {
-        userId: req.user.id,
-        memo: `Refund on exchange — order ${original.orderNumber}`
-      });
-    }
-    // Collecting the original parcel is a courier leg of its own, billed now.
-    const returnChargePaisa = toPaisa(req.body.returnCharge);
-    original.returnChargePaisa = returnChargePaisa;
-    if (returnChargePaisa > 0) {
-      await postReturnCharge(original, fromPaisa(returnChargePaisa), req.user.id);
-    }
-
-    // The replacement — same customer, new items, linked back to the original.
+    undo = beforeCreate ? await beforeCreate() : null;
+    const credit = creditForReplacement(original, userId);
     const replacement = await Order.create({
       business,
       customer: original.customer,
-      courier,
+      courier: replacementCourier,
       source: original.source,
       customerName: original.customerName,
       contactNumber: original.contactNumber,
       city: original.city,
       deliveryAddress: original.deliveryAddress,
       items: newItems,
+      customerMoney: credit ? [credit] : [],
       exchangeOf: original._id,
-      createdBy: req.user.id
+      createdBy: userId
     });
-
-    original.status = ORDER_STATUS.EXCHANGED;
-    original.exchangedFor = replacement._id;
-    original.updatedBy = req.user.id;
-    await original.save();
-
-    res.status(201).json({ success: true, data: replacement });
+    markCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
+    return replacement;
   } catch (err) {
-    // Failed after reserving the replacement stock — give it back and restore
-    // the original's reservation (standalone DB, unwound by hand).
     await releaseStock(newItems);
-    await reserveStock(original.items).catch(() => {});
-    next(err);
+    if (undo) await undo();
+    throw err;
   }
+};
+
+/**
+ * @desc   Exchange, return first: the old item is back. Its stock returns and its
+ *         sale becomes the customer's credit, waiting for the replacement. The
+ *         courier's COD, delivery charge and taxes stand — they happened.
+ * @route  POST /api/v1/orders/:id/exchange-return  (orders:update — scoped)
+ */
+export const exchangeReturn = asyncHandler(async (req, res) => {
+  const original = req.resource;
+  assertExchangeable(original);
+
+  await convertSaleToCredit(original, req.user.id);
+  await receiveReturnedGoods(original, req.user.id);
+  await bookReturnCharge(original, req.body.returnCharge, req.user.id);
+  if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
+  original.$locals.statusNote = req.body.note;
+  await original.save();
+
+  res.status(200).json({ success: true, data: original });
+});
+
+/**
+ * @desc   Exchange, step 2 of return first: send the replacement, carrying the credit.
+ * @route  POST /api/v1/orders/:id/exchange-replacement  (orders:update — scoped)
+ */
+export const createReplacement = asyncHandler(async (req, res, next) => {
+  const original = req.resource;
+  if (original.status !== ORDER_STATUS.EXCHANGED) {
+    return next(new ErrorResponse('Record the item coming back first', 400));
+  }
+  if (original.exchangedFor) {
+    return next(new ErrorResponse('A replacement was already sent for this order', 400));
+  }
+
+  const replacement = await makeReplacement(original, req.body, req.user.id);
+  await original.save();
+  res.status(201).json({ success: true, data: replacement });
+});
+
+/**
+ * @desc   Exchange, swap at the door: the replacement goes out now and the rider
+ *         brings the old item back on the courier's reversal tracking number.
+ *         The sale becomes credit at once (the replacement's COD needs it); the
+ *         stock comes back when the old item is received.
+ * @route  POST /api/v1/orders/:id/swap  (orders:update — scoped)
+ */
+export const swapOrder = asyncHandler(async (req, res) => {
+  const original = req.resource;
+  assertExchangeable(original);
+
+  // The sale turns into credit only once the replacement stock is reserved, so
+  // a shortfall leaves the original untouched.
+  const replacement = await makeReplacement(original, req.body, req.user.id, async () => {
+    const entry = await convertSaleToCredit(original, req.user.id);
+    return entry
+      ? () => reverseEntry(entry._id, { userId: req.user.id, memo: 'Swap not completed' })
+      : null;
+  });
+  original.awaitingReturn = true;
+  if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
+  original.$locals.statusNote = req.body.note;
+  await original.save();
+
+  res.status(201).json({ success: true, data: replacement });
+});
+
+/**
+ * @desc   Swap at the door: the old item has arrived back — its stock returns.
+ * @route  POST /api/v1/orders/:id/receive-return  (orders:update — scoped)
+ */
+export const receiveReturn = asyncHandler(async (req, res, next) => {
+  const original = req.resource;
+  if (!original.awaitingReturn) {
+    return next(new ErrorResponse('This order is not waiting for an item to come back', 400));
+  }
+  await receiveReturnedGoods(original, req.user.id);
+  await bookReturnCharge(original, req.body.returnCharge, req.user.id);
+  if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
+  original.updatedBy = req.user.id;
+  await original.save();
+
+  res.status(200).json({ success: true, data: original });
 });
 
 /**
@@ -549,15 +624,15 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     order.trackingId = trackingId;
   }
 
-  // The outcome is where the courier's bill is final, so it is required — an
-  // explicit 0 means "no charge", a missing value means the step was skipped.
+  // The courier's charge is normally only known when its invoice arrives, so it
+  // is optional here: left out, the charge stays open and is billed on the
+  // courier invoice. Given (e.g. already on the courier's portal), it is booked
+  // now, with 0 meaning "no charge".
   const isOutcome = status === ORDER_STATUS.DELIVERED || status === ORDER_STATUS.RETURNED;
-  if (isOutcome && req.body.deliveryCharge === undefined) {
-    return next(new ErrorResponse("Enter the courier's charge for this parcel (0 if none)", 400));
-  }
-  const chargePaisa = isOutcome ? toPaisa(req.body.deliveryCharge) : 0;
+  const chargeKnown = isOutcome && req.body.deliveryCharge !== undefined;
+  const chargePaisa = chargeKnown ? toPaisa(req.body.deliveryCharge) : 0;
 
-  if (status === ORDER_STATUS.DELIVERED) {
+  if (status === ORDER_STATUS.DELIVERED && chargeKnown) {
     // The fee may exceed the COD — a fully prepaid parcel still costs a fee,
     // which the courier takes out of what it owes us on other orders.
     order.deliveryChargePaisa = chargePaisa;
@@ -568,10 +643,22 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     await releaseStock(order.items);
   }
 
+  if (order.status === ORDER_STATUS.CANCELLED && status === ORDER_STATUS.PENDING) {
+    await reserveStock(order.items);
+    if (order.customCostWriteOff) {
+      await reverseEntry(order.customCostWriteOff, {
+        userId: req.user.id,
+        memo: `Reopen Custom WIP — order ${order.orderNumber}`
+      });
+      order.customCostWriteOff = undefined;
+    }
+  }
+
   // Delivery is where revenue and cost of goods are recognised (once).
   if (status === ORDER_STATUS.DELIVERED && !order.saleEntry) {
     const entry = await postOrderSale(order, req.user.id);
     if (entry) order.saleEntry = entry._id;
+    await moveCustomWipToCogs(order, req.user.id);
   }
 
   // A return unwinds whatever was booked, and what the courier billed for the
@@ -583,11 +670,39 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
         memo: `Return of order ${order.orderNumber}`
       });
     }
-    order.returnChargePaisa = chargePaisa;
-    if (chargePaisa > 0) await postReturnCharge(order, fromPaisa(chargePaisa), req.user.id);
+    if (chargeKnown) {
+      order.returnChargePaisa = chargePaisa;
+      if (chargePaisa > 0) await postReturnCharge(order, fromPaisa(chargePaisa), req.user.id);
+    }
+  }
+
+  if (
+    (status === ORDER_STATUS.CANCELLED || status === ORDER_STATUS.RETURNED) &&
+    !order.customCostWriteOff
+  ) {
+    const entry = await writeOffCustomWip(order, req.user.id);
+    if (entry) order.customCostWriteOff = entry._id;
   }
 
   order.status = status;
+  order.updatedBy = req.user.id;
+  // The optional reason ("customer refused", "cancelled on call") lands on the
+  // timeline entry the model writes for this change.
+  order.$locals.statusNote = req.body.note;
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Set the order's free note. Allowed at any status, even after dispatch
+ *         or payment — it changes nothing but the note.
+ * @route  PUT /api/v1/orders/:id/note  (orders:update — scoped)
+ */
+export const updateOrderNote = asyncHandler(async (req, res) => {
+  const order = req.resource;
+
+  order.note = req.body.note || undefined;
   order.updatedBy = req.user.id;
   await order.save();
 
@@ -625,6 +740,11 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     if (order.status !== ORDER_STATUS.DELIVERED) {
       return next(new ErrorResponse('Only delivered orders can be marked paid', 400));
     }
+    // Without its delivery charge the net can't be known — the courier's invoice
+    // is where both arrive together.
+    if (order.courier && order.deliveryChargePaisa == null) {
+      return next(new ErrorResponse("Record this parcel's payment on the courier's invoice", 400));
+    }
 
     // Post the courier's remittance once — Bank in, delivery fee expensed. The
     // delivery charge was already captured at delivery, so we reuse it here
@@ -638,11 +758,11 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     // whatever this entry just booked.
     if (!order.courier) order.paidPaisa = toPaisa(order.codAmount);
   } else if (order.courierSettlement) {
-    // Paid as part of a courier's lump sum — unmarking one order would leave the
-    // money booked against the courier but the order unpaid.
+    // Paid on a courier invoice — unmarking one order would leave the money
+    // booked against the courier but the order unpaid.
     return next(
       new ErrorResponse(
-        'This order was paid in a courier settlement. Reverse that settlement instead.',
+        "This order was paid on a courier's invoice. Reverse that invoice instead.",
         400
       )
     );
@@ -711,4 +831,90 @@ export const getPriceHint = asyncHandler(async (req, res) => {
   );
 
   res.status(200).json({ success: true, data: { lastPrice: line ? line.unitPrice : null } });
+});
+
+/** Where money came from / went, resolved for this order's business. */
+const orderMoney = (order, req) =>
+  resolveMoney(order.business, { account: req.body.account }, req.user);
+
+/**
+ * @desc   The customer sent money (a payment screenshot). Before dispatch it
+ *         lowers the COD; after, the COD is fixed and it becomes a refund due.
+ * @route  POST /api/v1/orders/:id/advances  (orders:update — scoped)
+ */
+export const addOrderAdvance = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  const money = await orderMoney(order, req);
+  const { amount, date, note } = req.body;
+  await recordAdvance(order, { amount, money, date, note, userId: req.user.id });
+  res.status(201).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Money paid back to the customer — at most what is due.
+ * @route  POST /api/v1/orders/:id/refunds  (orders:update — scoped)
+ */
+export const addOrderRefund = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  const money = await orderMoney(order, req);
+  const { amount, date, note } = req.body;
+  await recordRefund(order, { amount, money, date, note, userId: req.user.id });
+  res.status(201).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Remove an advance or refund entered by mistake (its entry is reversed).
+ * @route  DELETE /api/v1/orders/:id/customer-money/:rowId  (orders:update — scoped)
+ */
+export const deleteOrderMoney = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  await removeCustomerMoney(order, req.params.rowId, req.user.id);
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Keep a cancelled/returned order's refund due as credit on the customer's khata.
+ * @route  POST /api/v1/orders/:id/credit  (orders:update — scoped)
+ */
+export const keepOrderCredit = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  await keepAsCredit(order, { amount: req.body.amount, userId: req.user.id });
+  res.status(201).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Add a material/labor cost to a custom order
+ * @route  POST /api/v1/orders/:id/custom-cost
+ */
+export const addCustomCost = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+
+  if (order.status !== ORDER_STATUS.PENDING && order.status !== ORDER_STATUS.CONFIRMED) {
+    return next(new ErrorResponse('Costs can only be added before the order is dispatched', 400));
+  }
+
+  const { description, amount, account } = req.body;
+  const money = await resolveMoney(order.business, { account }, req.user);
+
+  await recordCustomCost(order, description, toPaisa(amount), money, req.user.id);
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Remove a material/labor cost logged by mistake
+ * @route  DELETE /api/v1/orders/:id/custom-cost/:costId
+ */
+export const deleteCustomCost = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+
+  if (order.status !== ORDER_STATUS.PENDING && order.status !== ORDER_STATUS.CONFIRMED) {
+    return next(new ErrorResponse('Costs can only be removed before the order is dispatched', 400));
+  }
+
+  await removeCustomCost(order, req.params.costId, req.user.id);
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
 });

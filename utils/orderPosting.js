@@ -2,7 +2,7 @@ import Business from '../models/Business.js';
 import { ensureChart, accountByCode, CODES } from './chartOfAccounts.js';
 import { postEntry } from './ledger.js';
 import { toPaisa } from './money.js';
-import { JOURNAL_SOURCES } from './constants.js';
+import { JOURNAL_SOURCES, SALES_CHANNELS } from './constants.js';
 
 /**
  * The accounting behind an order's lifecycle, kept out of the controller so the
@@ -14,11 +14,12 @@ import { JOURNAL_SOURCES } from './constants.js';
  * an expense at that moment. All amounts convert rupees → integer paisa.
  */
 
-const cogsPaisaOf = order =>
+/** Cost of the goods on an order (paisa) — what the sale moved out of inventory. */
+export const cogsPaisaOf = order =>
   order.items.reduce((sum, i) => sum + toPaisa(i.unitCost) * i.quantity, 0);
 
 /** "Order #0034 · TCS0349912345" — the courier statement row label. */
-const orderLabel = order =>
+export const orderLabel = order =>
   `Order #${order.orderNumber}${order.trackingId ? ` · ${order.trackingId}` : ''}`;
 
 /**
@@ -35,7 +36,8 @@ const orderLabel = order =>
  *
  *   Dr COD-receivable (NET) [courier]  Dr Delivery + WHT + Sales tax    ┐
  *   — or — Dr A/R (full) [customer]                                     ├ Cr Sales (total)
- *   Dr Cash (any advance / counter payment)                            ┘
+ *   Dr Advances from customers (what the advance covers)               ┘
+ *   — or, counter sale — Dr the money account the "paid now" went into
  *   Dr COGS  Cr Inventory   (only if the items carry a cost)
  */
 export const postOrderSale = async (order, userId) => {
@@ -43,7 +45,12 @@ export const postOrderSale = async (order, userId) => {
 
   const totalPaisa = toPaisa(order.total);
   const codPaisa = toPaisa(order.codAmount);
-  const advancePaisa = toPaisa(order.advanceAmount || 0);
+  // A counter sale's "paid now" is taken at the sale itself; any other order's
+  // advance was booked when it came in, and the sale uses what the COD left off.
+  const isCounter = !order.courier && order.source === SALES_CHANNELS.WALK_IN;
+  const advancePaisa = isCounter
+    ? toPaisa(order.advanceAmount || 0)
+    : Math.max(0, totalPaisa - codPaisa);
   const cogsPaisa = cogsPaisaOf(order);
   const acc = code => accountByCode(order.business, code);
   const label = orderLabel(order);
@@ -109,7 +116,10 @@ export const postOrderSale = async (order, userId) => {
       }
     }
     if (advancePaisa > 0) {
-      lines.push({ account: (await acc(CODES.CASH))._id, debitPaisa: advancePaisa });
+      const account = isCounter
+        ? order.counterAccount || (await acc(CODES.CASH))._id
+        : (await acc(CODES.CUSTOMER_ADVANCES))._id;
+      lines.push({ account, label, debitPaisa: advancePaisa });
     }
     lines.push({ account: (await acc(CODES.SALES))._id, creditPaisa: totalPaisa });
   }

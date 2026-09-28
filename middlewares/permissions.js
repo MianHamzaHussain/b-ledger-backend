@@ -1,6 +1,6 @@
 import ErrorResponse from '../utils/errorResponse.js';
 import asyncHandler from './asyncHandler.js';
-import { RESOURCES, resolvePermissions } from '../utils/permissions.js';
+import { RESOURCES, resolvePermissions, userCan } from '../utils/permissions.js';
 
 /**
  * The single authorization choke point. Every protected route declares what it
@@ -49,6 +49,57 @@ export const can = (resource, action) => (req, res, next) => {
       ? RESOURCES[resource].ownFilter(req.user)
       : {};
 
+  next();
+};
+
+/**
+ * An extra permission a route needs on top of its own resource — e.g. the
+ * production screens also need "See costs". Unlike `can()` it only allows or
+ * refuses; it leaves the scope `can()` set for the route's own resource alone.
+ */
+export const requirePermission = (resource, action) => (req, res, next) => {
+  if (!RESOURCES[resource]) {
+    return next(new ErrorResponse(`Resource "${resource}" is not in the permission registry`, 500));
+  }
+  if (!userCan(req.user, resource, action)) {
+    return next(new ErrorResponse(`You do not have permission to ${action} ${resource}`, 403));
+  }
+  next();
+};
+
+/** Fields that reveal what goods cost to make — a trade secret. */
+const COST_FIELDS = new Set([
+  'costPrice',
+  'unitCost',
+  'unitCostPaisa',
+  'totalCostPaisa',
+  'customCosts'
+]);
+
+const stripCosts = value => {
+  if (Array.isArray(value)) return value.map(stripCosts);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, v] of Object.entries(value)) {
+      if (!COST_FIELDS.has(key)) out[key] = stripCosts(v);
+    }
+    return out;
+  }
+  return value;
+};
+
+/**
+ * Remove every cost field from this route's responses unless the user may
+ * "See costs". One choke point on the way out, rather than a check in each
+ * controller — so a new endpoint on a guarded router can't leak cost by
+ * forgetting. Hiding it in the UI alone would not keep it secret: the numbers
+ * would still arrive in the browser.
+ */
+export const hideCosts = (req, res, next) => {
+  if (userCan(req.user, 'costs', 'read')) return next();
+  const send = res.json.bind(res);
+  // Round-trip through JSON first so Mongoose documents become plain objects.
+  res.json = body => send(stripCosts(JSON.parse(JSON.stringify(body ?? null))));
   next();
 };
 

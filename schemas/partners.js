@@ -27,6 +27,7 @@ export const distributeSchema = z.object({ business: id, amount });
 export const capitalMoveSchema = z.object({
   amount,
   method,
+  account: z.string().min(1).optional(),
   date: z.union([z.string(), z.date()]).optional(),
   memo: z.string().trim().max(200).optional()
 });

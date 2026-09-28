@@ -42,6 +42,11 @@ const PartySchema = new mongoose.Schema(
       maxlength: [200, 'Note can not be more than 200 characters']
     },
     isActive: { type: Boolean, default: true },
+    /**
+     * Courier only: the money account its payments usually land in ("TCS pays
+     * into Meezan"). Remembered from its last invoice so the next one starts there.
+     */
+    defaultMoneyAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
   },

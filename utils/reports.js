@@ -49,9 +49,35 @@ const accountNets = async (business, { from, to } = {}) => {
   ]);
 };
 
+/**
+ * Courier parcels whose outcome fell in the period but whose charge the courier
+ * hasn't billed yet. Those charges land when its invoice is entered, so until
+ * then the period's profit is provisional — and this says by how many parcels.
+ */
+const unbilledCourierCharges = async (business, { from, to } = {}) => {
+  const range = dateRange(from, to);
+  const when = field => (range ? { [field]: range } : {});
+  return Order.countDocuments({
+    business: toId(business),
+    courier: { $exists: true, $ne: null },
+    $or: [
+      {
+        status: { $in: [ORDER_STATUS.DELIVERED, ORDER_STATUS.EXCHANGED] },
+        deliveryChargePaisa: null,
+        ...when('deliveredAt')
+      },
+      { status: ORDER_STATUS.RETURNED, returnChargePaisa: null, ...when('returnedAt') },
+      { status: ORDER_STATUS.EXCHANGED, returnChargePaisa: null, ...when('exchangedAt') }
+    ]
+  });
+};
+
 /** Income − expenses over a period. Income shows as credit-normal, expense debit-normal. */
 export const profitAndLoss = async (business, opts = {}) => {
-  const nets = await accountNets(business, opts);
+  const [nets, unbilledCharges] = await Promise.all([
+    accountNets(business, opts),
+    unbilledCourierCharges(business, opts)
+  ]);
 
   const income = nets
     .filter(r => r.type === 'income')
@@ -63,7 +89,14 @@ export const profitAndLoss = async (business, opts = {}) => {
   const incomePaisa = income.reduce((s, r) => s + r.amountPaisa, 0);
   const expensePaisa = expense.reduce((s, r) => s + r.amountPaisa, 0);
 
-  return { income, expense, incomePaisa, expensePaisa, netProfitPaisa: incomePaisa - expensePaisa };
+  return {
+    income,
+    expense,
+    incomePaisa,
+    expensePaisa,
+    netProfitPaisa: incomePaisa - expensePaisa,
+    unbilledCharges
+  };
 };
 
 /** Assets = Liabilities + Equity (incl. accumulated profit) as of a date. */

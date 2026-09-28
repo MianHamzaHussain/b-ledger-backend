@@ -1,6 +1,11 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
-import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permissions.js';
+import {
+  can,
+  loadScoped,
+  restrictBusinessToScope,
+  requirePermission
+} from '../middlewares/permissions.js';
 import { validate } from '../middlewares/validate.js';
 import {
   capitalSchema,
@@ -11,9 +16,19 @@ import {
   assetSchema,
   loanSchema,
   depreciationSchema,
-  closeSchema
+  closeSchema,
+  moneyAccountCreateSchema,
+  moneyAccountUpdateSchema,
+  transferSchema
 } from '../schemas/finance.js';
 import JournalEntry from '../models/JournalEntry.js';
+import Account from '../models/Account.js';
+import {
+  getMoneyAccounts,
+  addMoneyAccount,
+  updateMoneyAccount,
+  recordTransfer
+} from '../controllers/moneyAccountController.js';
 import {
   recordCapital,
   recordExpense,
@@ -420,6 +435,79 @@ router.get('/summary', can('journal', 'read'), getMoneySummary);
 
 /**
  * @swagger
+ * /finance/money-accounts:
+ *   get:
+ *     summary: The business's money accounts (cash, banks, wallets) with balances, and partners' running balances
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: includeClosed, schema: { type: boolean } }
+ *     responses:
+ *       200: { description: "{ accounts: [{ _id, name, kind, number, isActive, balance }], partners: [{ _id: 'partner:<id>', name, balance }] } — partners only for people who may read Partners" }
+ *   post:
+ *     summary: Add a money account — a bank account, a JazzCash/Easypaisa wallet, or another cash box
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content: { application/json: { schema: { type: object, required: [business, name, kind], properties: { business: { type: string }, name: { type: string }, kind: { type: string, enum: [cash, bank, wallet] }, number: { type: string } } } } }
+ *     responses:
+ *       201: { description: Created }
+ */
+router
+  .route('/money-accounts')
+  .get(can('journal', 'read'), getMoneyAccounts)
+  .post(
+    can('accounts', 'create'),
+    restrictBusinessToScope(),
+    validate(moneyAccountCreateSchema),
+    addMoneyAccount
+  );
+
+/**
+ * @swagger
+ * /finance/money-accounts/{id}:
+ *   put:
+ *     summary: Rename a money account, change its number, or close / reopen it (closes only at a zero balance)
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: Updated }
+ *       400: { description: Still holds money, or is one of the original two }
+ */
+router.put(
+  '/money-accounts/:id',
+  can('accounts', 'update'),
+  loadScoped(Account),
+  validate(moneyAccountUpdateSchema),
+  updateMoneyAccount
+);
+
+/**
+ * @swagger
+ * /finance/transfers:
+ *   post:
+ *     summary: Move money between the business's own places — cash to bank, wallet to cash, a partner handing over or being paid back
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content: { application/json: { schema: { type: object, required: [business, from, to, amount], properties: { business: { type: string }, from: { type: string, description: "Money account id or partner:<id>" }, to: { type: string }, amount: { type: number }, date: { type: string }, memo: { type: string } } } } }
+ *     responses:
+ *       201: { description: Posted }
+ */
+router.post(
+  '/transfers',
+  can('journal', 'create'),
+  restrictBusinessToScope(),
+  validate(transferSchema),
+  recordTransfer
+);
+
+/**
+ * @swagger
  * /finance/journal:
  *   get:
  *     summary: The journal — every posted entry, newest first, with its lines
@@ -577,7 +665,13 @@ router.get('/reports/balance-sheet', can('reports', 'read'), getBalanceSheet);
  *               data:
  *                 - { product: "66a1f2c3b4d5e6f708091011", name: Lawn Suit, quantity: 4, revenue: 10000, cost: 6000, profit: 4000 }
  */
-router.get('/reports/product-profit', can('reports', 'read'), getProductProfit);
+// Per-product cost and margin — reports access alone isn't enough.
+router.get(
+  '/reports/product-profit',
+  can('reports', 'read'),
+  requirePermission('costs', 'read'),
+  getProductProfit
+);
 
 /**
  * @swagger

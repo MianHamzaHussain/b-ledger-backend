@@ -1,4 +1,6 @@
 import Business from '../models/Business.js';
+import asyncHandler from '../middlewares/asyncHandler.js';
+import { gettingStarted } from '../utils/gettingStarted.js';
 import { createCrudHandlers } from '../utils/crudController.js';
 
 /**
@@ -28,3 +30,11 @@ export const {
   update: updateBusiness,
   remove: deleteBusiness
 } = handlers;
+
+/**
+ * @desc   The getting-started checklist for a business — each step's done flag.
+ * @route  GET /api/v1/businesses/:id/getting-started  (businesses:read — scoped)
+ */
+export const getGettingStarted = asyncHandler(async (req, res) => {
+  res.status(200).json({ success: true, data: await gettingStarted(req.resource._id) });
+});

@@ -1,13 +1,13 @@
 import mongoose from 'mongoose';
 import JournalEntry from '../models/JournalEntry.js';
-import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
+import { ensureChart } from './chartOfAccounts.js';
 import { accountBalance } from './ledger.js';
 import { partyLedgerReport } from './reports.js';
+import { pakistanDay } from './pakistanDay.js';
+import { listMoneyAccounts } from './moneyAccounts.js';
+import { MONEY_KINDS } from './constants.js';
 
 const toId = value => new mongoose.Types.ObjectId(value);
-
-// The businesses trade in Pakistan; a "day" in the cash book is a Pakistan day.
-const pakistanDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' });
 
 /**
  * Cash-book order: by day, then by when each entry was recorded. A date picked in
@@ -15,8 +15,8 @@ const pakistanDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' 
  * time would put those entries first and show a time nobody entered.
  */
 const byDayThenRecorded = (a, b) => {
-  const dayA = pakistanDay.format(a.date);
-  const dayB = pakistanDay.format(b.date);
+  const dayA = pakistanDay(a.date);
+  const dayB = pakistanDay(b.date);
   if (dayA !== dayB) return dayA < dayB ? -1 : 1;
   return a.createdAt - b.createdAt;
 };
@@ -24,17 +24,17 @@ const byDayThenRecorded = (a, b) => {
 /**
  * The cash book (rokar) — what a DigiKhata user checks every morning: how much
  * cash was in the drawer when the day started, every rupee in and out, and what
- * should be there now. It is simply the Cash (or Bank) account's ledger for a
- * date range, read as money in / money out instead of debit / credit, so it can
- * never disagree with the books.
+ * should be there now. It is simply one money account's ledger (or a partner's
+ * running account) for a date range, read as money in / money out instead of
+ * debit / credit, so it can never disagree with the books. `accountId` is
+ * already resolved and checked by the caller (resolveMoney).
  *
  * `from` / `to` are inclusive instants; the client sends its own local day
  * bounds, so "today" means today in Pakistan, not in UTC.
  */
-export const cashbook = async (business, { account = 'cash', from, to }) => {
+export const cashbook = async (business, { accountId, from, to }) => {
   await ensureChart(business);
-  const code = account === 'bank' ? CODES.BANK : CODES.CASH;
-  const acc = await accountByCode(business, code);
+  const acc = { _id: toId(accountId) };
 
   // Opening = everything posted before the range starts.
   const openingPaisa = from
@@ -81,29 +81,37 @@ export const cashbook = async (business, { account = 'cash', from, to }) => {
     };
   });
 
-  return { account, openingPaisa, inPaisa, outPaisa, closingPaisa: running, rows };
+  return {
+    account: String(accountId),
+    openingPaisa,
+    inPaisa,
+    outPaisa,
+    closingPaisa: running,
+    rows
+  };
 };
 
 /**
- * The four numbers on the home screen: cash in hand, bank, what you'll get and
- * what you'll give. Cash and bank are their accounts' balances; the other two
- * are every party's net balance, owed each way.
+ * The home screen's money: cash in hand, in banks, in wallets (each a total of
+ * its money accounts), what you'll get and what you'll give (every party's net
+ * balance, owed each way), and — for people who may read Partners — business
+ * money partners are holding and what the business owes them.
  */
-export const moneySummary = async business => {
+export const moneySummary = async (business, user) => {
   await ensureChart(business);
-  const [cash, bank] = await Promise.all([
-    accountByCode(business, CODES.CASH),
-    accountByCode(business, CODES.BANK)
-  ]);
-  const [cashPaisa, bankPaisa, parties] = await Promise.all([
-    accountBalance(business, cash._id),
-    accountBalance(business, bank._id),
+  const [{ accounts, partners }, parties] = await Promise.all([
+    listMoneyAccounts(business, user),
     partyLedgerReport(business)
   ]);
+  const totalOf = kind =>
+    accounts.filter(a => a.kind === kind).reduce((sum, a) => sum + a.balancePaisa, 0);
   return {
-    cashPaisa,
-    bankPaisa,
+    cashPaisa: totalOf(MONEY_KINDS.CASH),
+    bankPaisa: totalOf(MONEY_KINDS.BANK),
+    walletPaisa: totalOf(MONEY_KINDS.WALLET),
     receivablePaisa: parties.receivablePaisa,
-    payablePaisa: parties.payablePaisa
+    payablePaisa: parties.payablePaisa,
+    partnersHoldingPaisa: partners.reduce((sum, p) => sum + Math.max(0, p.balancePaisa), 0),
+    owedToPartnersPaisa: partners.reduce((sum, p) => sum + Math.max(0, -p.balancePaisa), 0)
   };
 };

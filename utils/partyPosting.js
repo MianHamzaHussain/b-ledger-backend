@@ -21,8 +21,11 @@ import {
  * place, and shared with the salary form so both book salary identically.
  */
 
-/** Cash or bank, defaulting to cash. */
-export const methodCode = method => (method === 'bank' ? CODES.BANK : CODES.CASH);
+/*
+ * `money` below is where the money moved, already resolved by resolveMoney()
+ * (utils/moneyAccounts.js): `{ account }` — a money account, or a partner who
+ * received or paid it personally.
+ */
 
 /**
  * Salary for one employee — accrued as owed, or paid. Paying first clears what
@@ -46,7 +49,7 @@ export const salaryLines = async (
   business,
   party,
   paisa,
-  { onCredit, method, deductAdvancePaisa = 0 } = {}
+  { onCredit, money, deductAdvancePaisa = 0 } = {}
 ) => {
   const salaries = await accountByCode(business, CODES.SALARIES);
   const payable = await accountByCode(business, CODES.SALARIES_PAYABLE);
@@ -58,11 +61,10 @@ export const salaryLines = async (
     ];
   }
 
-  const money = await accountByCode(business, methodCode(method));
   if (!party) {
     return [
       { account: salaries._id, debitPaisa: paisa },
-      { account: money._id, creditPaisa: paisa }
+      { account: money.account, creditPaisa: paisa }
     ];
   }
 
@@ -87,7 +89,7 @@ export const salaryLines = async (
         ]
       : []),
     { account: payable._id, party, debitPaisa: paisa },
-    { account: money._id, creditPaisa: paisa }
+    { account: money.account, creditPaisa: paisa }
   ];
 };
 
@@ -98,12 +100,11 @@ export const salaryLines = async (
  *
  *   Dr Salaries Payable [employee]   Cr Cash/Bank
  */
-export const advanceLines = async (business, party, paisa, method) => {
+export const advanceLines = async (business, party, paisa, money) => {
   const payable = await accountByCode(business, CODES.SALARIES_PAYABLE);
-  const money = await accountByCode(business, methodCode(method));
   return [
     { account: payable._id, party, debitPaisa: paisa },
-    { account: money._id, creditPaisa: paisa }
+    { account: money.account, creditPaisa: paisa }
   ];
 };
 
@@ -112,16 +113,15 @@ export const advanceLines = async (business, party, paisa, method) => {
  * the party. `gave` moves money out and adds to what they owe us; `got` moves
  * money in and takes off it.
  */
-const moneyLines = async (business, party, paisa, direction, accountCode, method) => {
+const moneyLines = async (business, party, paisa, direction, accountCode, money) => {
   const ledger = (await accountByCode(business, accountCode))._id;
-  const money = (await accountByCode(business, methodCode(method)))._id;
   return direction === 'gave'
     ? [
         { account: ledger, party, debitPaisa: paisa },
-        { account: money, creditPaisa: paisa }
+        { account: money.account, creditPaisa: paisa }
       ]
     : [
-        { account: money, debitPaisa: paisa },
+        { account: money.account, debitPaisa: paisa },
         { account: ledger, party, creditPaisa: paisa }
       ];
 };
@@ -137,13 +137,13 @@ const moneyLines = async (business, party, paisa, direction, accountCode, method
  *   employee   gave → salary paid (clears owed first; can cut an advance),
  *                     or an advance (purpose: 'advance')     got → salary due
  *   lender     gave → loan repaid (principal)  got → loan taken
- *   courier    — handled by settleCourier (a lump-sum payment), not here
+ *   courier    — recorded on its invoice (courierInvoice.js), not here
  */
 export const partyTransactionLines = async (
   party,
   direction,
   paisa,
-  { method, category, purpose, deductAdvancePaisa } = {}
+  { money, category, purpose, deductAdvancePaisa } = {}
 ) => {
   const business = party.business;
   const id = party._id;
@@ -153,7 +153,7 @@ export const partyTransactionLines = async (
     case PARTY_TYPES.SUPPLIER: {
       if (direction === 'gave') {
         return {
-          lines: await moneyLines(business, id, paisa, 'gave', CODES.ACCOUNTS_PAYABLE, method),
+          lines: await moneyLines(business, id, paisa, 'gave', CODES.ACCOUNTS_PAYABLE, money),
           memo: `Paid ${name}`,
           source: JOURNAL_SOURCES.PAYMENT
         };
@@ -179,7 +179,7 @@ export const partyTransactionLines = async (
     case PARTY_TYPES.RESELLER:
     case PARTY_TYPES.CUSTOMER:
       return {
-        lines: await moneyLines(business, id, paisa, direction, CODES.ACCOUNTS_RECEIVABLE, method),
+        lines: await moneyLines(business, id, paisa, direction, CODES.ACCOUNTS_RECEIVABLE, money),
         memo: direction === 'gave' ? `Given to ${name}` : `Received from ${name}`,
         source: JOURNAL_SOURCES.PAYMENT
       };
@@ -188,7 +188,7 @@ export const partyTransactionLines = async (
       // An advance is money they hold of ours until a later salary absorbs it.
       if (direction === 'gave' && purpose === 'advance') {
         return {
-          lines: await advanceLines(business, id, paisa, method),
+          lines: await advanceLines(business, id, paisa, money),
           memo: `Advance — ${name}`,
           source: JOURNAL_SOURCES.SALARY
         };
@@ -196,7 +196,7 @@ export const partyTransactionLines = async (
       return {
         lines: await salaryLines(business, id, paisa, {
           onCredit: direction === 'got',
-          method,
+          money,
           deductAdvancePaisa
         }),
         memo: direction === 'gave' ? `Salary paid — ${name}` : `Salary due — ${name}`,
@@ -217,14 +217,14 @@ export const partyTransactionLines = async (
         }
       }
       return {
-        lines: await moneyLines(business, id, paisa, direction, CODES.LOAN_PAYABLE, method),
+        lines: await moneyLines(business, id, paisa, direction, CODES.LOAN_PAYABLE, money),
         memo: direction === 'gave' ? `Loan repaid — ${name}` : `Loan from ${name}`,
         source: JOURNAL_SOURCES.LOAN
       };
     }
 
     default:
-      // Couriers are handled before this (settleCourier) — only reachable if a
+      // Couriers are refused before this (they use invoices) — only reachable if a
       // new party type is added without a mapping.
       throw new ErrorResponse('This kind of party can not be recorded here', 400);
   }

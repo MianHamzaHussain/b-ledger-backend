@@ -22,6 +22,8 @@ export const partyTransactionSchema = z.object({
     .number({ error: 'Enter an amount' })
     .positive('Enter an amount greater than zero'),
   method: z.enum(['cash', 'bank']).optional(),
+  /** A money account id, or `partner:<id>` — wins over `method`. */
+  account: z.string().min(1).optional(),
   /** A supplier's bill: the expense account code it was for. */
   category: z.string().optional(),
   /** An employee payment: salary (default) or an advance against later salary. */
@@ -29,5 +31,34 @@ export const partyTransactionSchema = z.object({
   /** An employee's salary: how much of their outstanding advance to cut from it. */
   deductAdvance: z.coerce.number().min(0, 'Can not be negative').optional(),
   date: z.union([z.string(), z.date()]).optional(),
+  memo: z.string().trim().max(200).optional()
+});
+
+/** A courier's invoice — what it paid (COD per order) and billed (charge per parcel). */
+export const courierInvoiceSchema = z.object({
+  /** Optional — some courier invoices carry none; the tracking numbers are what settle. */
+  invoiceNumber: z
+    .string()
+    .trim()
+    .max(60, 'Invoice number is too long')
+    .optional()
+    .transform(v => v || undefined),
+  invoiceDate: z.union([z.string(), z.date()]).optional(),
+  /** What actually arrived — 0 on a week the courier only deducted charges. */
+  received: z.coerce.number().min(0, 'Can not be negative').default(0),
+  /** The money account it arrived in (id or `partner:<id>`), when anything did. */
+  account: z.string().min(1).optional(),
+  /** Orders whose COD this invoice paid. */
+  cod: z.array(id).default([]),
+  /** Charges this invoice billed, per parcel. */
+  charges: z
+    .array(
+      z.object({
+        order: id,
+        kind: z.enum(['delivery', 'return']),
+        amount: z.coerce.number().min(0, 'A charge can not be negative')
+      })
+    )
+    .default([]),
   memo: z.string().trim().max(200).optional()
 });

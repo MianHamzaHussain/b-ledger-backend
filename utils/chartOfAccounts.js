@@ -1,5 +1,5 @@
 import Account from '../models/Account.js';
-import { ACCOUNT_TYPES } from './constants.js';
+import { ACCOUNT_TYPES, MONEY_KINDS } from './constants.js';
 import ErrorResponse from './errorResponse.js';
 
 const { ASSET, LIABILITY, EQUITY, INCOME, EXPENSE } = ACCOUNT_TYPES;
@@ -27,6 +27,9 @@ export const CODES = {
   SALARIES_PAYABLE: '2100',
   // Money borrowed (bank or a person) — a liability until repaid.
   LOAN_PAYABLE: '2200',
+  // Money customers paid before their order was sold — owed to them (as goods
+  // or a refund) until delivery uses it.
+  CUSTOMER_ADVANCES: '2300',
   OWNERS_CAPITAL: '3000',
   DRAWINGS: '3100',
   RETAINED_EARNINGS: '3900',
@@ -44,17 +47,24 @@ export const CODES = {
   SALARIES: '5300',
   RENT: '5400',
   UTILITIES: '5410',
-  MISC_EXPENSE: '5900'
+  MISC_EXPENSE: '5900',
+  // Material bought for one order's custom work, held until that order is sold.
+  CUSTOM_WIP: '1330',
+  // Custom work whose order was cancelled or returned — the material is a loss.
+  CUSTOM_WRITE_OFF: '5130'
 };
 
 /** The standard chart every business is seeded with. `control` = detail by party. */
 export const DEFAULT_CHART = [
-  { code: CODES.CASH, name: 'Cash', type: ASSET },
-  { code: CODES.BANK, name: 'Bank', type: ASSET },
+  // The two money accounts every business starts with. More banks and wallets
+  // are added by the owner (utils/moneyAccounts.js).
+  { code: CODES.CASH, name: 'Cash', type: ASSET, moneyKind: MONEY_KINDS.CASH },
+  { code: CODES.BANK, name: 'Main bank', type: ASSET, moneyKind: MONEY_KINDS.BANK },
   { code: CODES.ACCOUNTS_RECEIVABLE, name: 'Accounts Receivable', type: ASSET, control: true },
   { code: CODES.COD_RECEIVABLE, name: 'COD Receivable — Courier', type: ASSET, control: true },
   { code: CODES.WHT_RECEIVABLE, name: 'Advance Tax (WHT Receivable)', type: ASSET },
   { code: CODES.INVENTORY, name: 'Inventory — Finished', type: ASSET },
+  { code: CODES.CUSTOM_WIP, name: 'Custom work in progress', type: ASSET },
   { code: CODES.WIP, name: 'Work in Progress', type: ASSET },
   { code: CODES.GOODS_ON_APPROVAL, name: 'Goods on Approval', type: ASSET, control: true },
   { code: CODES.FIXED_ASSETS, name: 'Fixed Assets', type: ASSET },
@@ -62,6 +72,7 @@ export const DEFAULT_CHART = [
   { code: CODES.ACCOUNTS_PAYABLE, name: 'Accounts Payable', type: LIABILITY, control: true },
   { code: CODES.SALARIES_PAYABLE, name: 'Salaries Payable', type: LIABILITY },
   { code: CODES.LOAN_PAYABLE, name: 'Loan Payable', type: LIABILITY },
+  { code: CODES.CUSTOMER_ADVANCES, name: 'Advances from customers', type: LIABILITY },
   { code: CODES.OWNERS_CAPITAL, name: "Owner's Capital", type: EQUITY },
   { code: CODES.DRAWINGS, name: 'Drawings', type: EQUITY },
   { code: CODES.RETAINED_EARNINGS, name: 'Retained Earnings', type: EQUITY },
@@ -79,7 +90,8 @@ export const DEFAULT_CHART = [
   { code: CODES.SALARIES, name: 'Salaries', type: EXPENSE },
   { code: CODES.RENT, name: 'Rent', type: EXPENSE },
   { code: CODES.UTILITIES, name: 'Utilities', type: EXPENSE },
-  { code: CODES.MISC_EXPENSE, name: 'Miscellaneous', type: EXPENSE }
+  { code: CODES.MISC_EXPENSE, name: 'Miscellaneous', type: EXPENSE },
+  { code: CODES.CUSTOM_WRITE_OFF, name: 'Custom work written off', type: EXPENSE }
 ];
 
 /**
@@ -97,7 +109,8 @@ export const ensureChart = async businessId => {
     name: a.name,
     type: a.type,
     isControl: Boolean(a.control),
-    isSystem: true
+    isSystem: true,
+    ...(a.moneyKind ? { moneyKind: a.moneyKind } : {})
   }));
 
   if (missing.length) await Account.insertMany(missing);

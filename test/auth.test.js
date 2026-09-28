@@ -6,6 +6,7 @@ import User from '../models/User.js';
 import Role from '../models/Role.js';
 import RefreshToken from '../models/RefreshToken.js';
 import { protect } from '../middlewares/auth.js';
+import { login } from '../controllers/authController.js';
 import {
   issueRefreshToken,
   rotateRefreshToken,
@@ -103,4 +104,24 @@ test('revoke deletes a specific refresh token (logout)', async () => {
   await revokeRefreshToken(token);
   assert.equal(await RefreshToken.countDocuments({ user: user._id }), 0);
   assert.equal(await rotateRefreshToken(token), null); // can't refresh after logout
+});
+
+test('a fresh sign-in token works for a user whose sessions were revoked before', async () => {
+  const user = await makeUser();
+  // Setting or changing a password bumps tokenVersion to revoke old sessions.
+  await User.updateOne({ _id: user._id }, { $set: { tokenVersion: 2 } });
+
+  const token = await new Promise((resolve, reject) => {
+    const res = {
+      cookie() {},
+      status() {
+        return this;
+      },
+      json: body => resolve(body.token)
+    };
+    login({ body: { email: 'ali@b-ledger.pk', password: 'password1' } }, res, reject);
+  });
+
+  const { err } = await runProtect(token);
+  assert.equal(err, undefined, 'the token from sign-in must pass protect straight away');
 });
