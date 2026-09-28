@@ -10,6 +10,7 @@ import { ensureChart } from '../utils/chartOfAccounts.js';
 import { partyLedgerReport } from '../utils/reports.js';
 import { partyTransactionLines, allocateCustomerPayment } from '../utils/partyPosting.js';
 import { settleCourier } from '../utils/courierSettlement.js';
+import { resolveMoney } from '../utils/moneyAccounts.js';
 import { computeRemittance } from '../utils/orderPosting.js';
 import { fromPaisa, toPaisa } from '../utils/money.js';
 import { JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
@@ -189,8 +190,10 @@ export const getPartySummary = asyncHandler(async (req, res, next) => {
  */
 export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
   const party = req.resource;
-  const { direction, method, category, purpose, date, memo } = req.body;
+  const { direction, method, account, category, purpose, date, memo } = req.body;
   const paisa = toPaisa(req.body.amount);
+  // Which money account (or partner) it moved through — resolved once, for every type.
+  const money = await resolveMoney(party.business, { account, method }, req.user);
 
   // A courier pays in one weekly lump sum; that settles its orders, oldest
   // first. We never hand a courier money from here, so "gave" is refused.
@@ -201,7 +204,7 @@ export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
       );
     }
     const { entry, settledOrders, unpaidOrders } = await settleCourier(party, paisa, {
-      method,
+      money,
       date,
       memo,
       userId: req.user.id
@@ -213,7 +216,7 @@ export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
 
   await ensureChart(party.business);
   const built = await partyTransactionLines(party, direction, paisa, {
-    method,
+    money,
     category,
     purpose,
     deductAdvancePaisa: toPaisa(req.body.deductAdvance || 0)

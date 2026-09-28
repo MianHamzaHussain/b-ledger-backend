@@ -79,11 +79,15 @@ test('dispatch requires a tracking number and takes no charge', async () => {
   assert.equal(out.body.data.deliveryChargePaisa, undefined, 'no charge booked at dispatch');
 });
 
-test('delivered requires the charge and books it into the sale', async () => {
+test('delivered without a charge leaves it open for the courier invoice', async () => {
+  const { order } = await makeOrder('dispatched');
+  const out = await setStatus(order, { status: 'delivered' });
+  assert.equal(out.body.data.status, 'delivered');
+  assert.equal(out.body.data.deliveryChargePaisa, undefined, 'charge still open');
+});
+
+test('delivered with a known charge books it into the sale', async () => {
   const { biz, order } = await makeOrder('dispatched');
-
-  await assert.rejects(setStatus(order, { status: 'delivered' }), /charge/);
-
   const out = await setStatus(order, { status: 'delivered', deliveryCharge: 180 });
   assert.equal(out.body.data.deliveryChargePaisa, toPaisa(180));
 
@@ -103,10 +107,16 @@ test('an explicit 0 delivers without a delivery-fee line', async () => {
   assert.ok(!sale.lines.some(l => String(l.account) === String(deliveryAcc)));
 });
 
-test('returned requires the charge and books it as a return expense', async () => {
+test('returned without a charge posts nothing and leaves it open', async () => {
   const { biz, order } = await makeOrder('dispatched');
+  const out = await setStatus(order, { status: 'returned' });
+  assert.equal(out.body.data.returnChargePaisa, undefined);
+  const returnAcc = (await accountByCode(biz._id, CODES.RETURN_CHARGES))._id;
+  assert.equal(await JournalEntry.countDocuments({ 'lines.account': returnAcc }), 0);
+});
 
-  await assert.rejects(setStatus(order, { status: 'returned' }), /charge/);
+test('returned with a known charge books it as a return expense', async () => {
+  const { biz, order } = await makeOrder('dispatched');
 
   // A return fee is not capped by the COD — the courier bills it regardless.
   const out = await setStatus(order, { status: 'returned', deliveryCharge: 300 });
@@ -120,9 +130,11 @@ test('returned requires the charge and books it as a return expense', async () =
   assert.equal(line.debitPaisa, toPaisa(300));
 });
 
-test('exchange schema requires the pickup charge', () => {
+test('exchange schema takes an optional, non-negative pickup charge', () => {
   const items = [{ product: 'p', variantId: 'v', quantity: 1, unitPrice: 100 }];
-  assert.equal(orderExchangeSchema.safeParse({ items }).success, false);
+  const open = orderExchangeSchema.safeParse({ items });
+  assert.equal(open.success, true);
+  assert.equal(open.data.returnCharge, undefined);
   assert.equal(orderExchangeSchema.safeParse({ items, returnCharge: -1 }).success, false);
   const ok = orderExchangeSchema.safeParse({ items, returnCharge: 0 });
   assert.equal(ok.success, true);

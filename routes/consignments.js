@@ -1,6 +1,6 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
-import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permissions.js';
+import { can, loadScoped, restrictBusinessToScope, hideCosts } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
 import { validate } from '../middlewares/validate.js';
 import {
@@ -25,6 +25,8 @@ import {
 const router = express.Router();
 
 router.use(protect);
+// Consignment lines carry the goods' cost — only for people who may "See costs".
+router.use(hideCosts);
 
 /**
  * @swagger

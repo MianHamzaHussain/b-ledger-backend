@@ -7,9 +7,11 @@ import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledger.js';
-import { salaryLines, methodCode } from '../utils/partyPosting.js';
+import { salaryLines } from '../utils/partyPosting.js';
+import { resolveMoney } from '../utils/moneyAccounts.js';
 import { cashbook, moneySummary } from '../utils/cashbook.js';
 import { unsettleCourier } from '../utils/courierSettlement.js';
+import { undoCourierInvoice } from '../utils/courierInvoice.js';
 import {
   profitAndLoss,
   balanceSheet,
@@ -46,11 +48,11 @@ const inScope = (req, business) => {
  * @route  POST /api/v1/finance/capital  (journal:create — scoped)
  */
 export const recordCapital = asyncHandler(async (req, res) => {
-  const { business, direction, method, date, memo } = req.body;
+  const { business, direction, method, account, date, memo } = req.body;
   const paisa = amountPaisa(req.body.amount);
   await ensureChart(business);
 
-  const money = await accountByCode(business, methodCode(method));
+  const money = await resolveMoney(business, { account, method }, req.user);
   const capital = await accountByCode(business, CODES.OWNERS_CAPITAL);
   const drawings = await accountByCode(business, CODES.DRAWINGS);
 
@@ -58,17 +60,18 @@ export const recordCapital = asyncHandler(async (req, res) => {
     direction === 'drawings'
       ? [
           { account: drawings._id, debitPaisa: paisa },
-          { account: money._id, creditPaisa: paisa }
+          { account: money.account, creditPaisa: paisa }
         ]
       : [
-          { account: money._id, debitPaisa: paisa },
+          { account: money.account, debitPaisa: paisa },
           { account: capital._id, creditPaisa: paisa }
         ];
 
   await respondPosted(res, {
     business,
     date,
-    memo: memo || (direction === 'drawings' ? 'Owner drawings' : 'Owner investment'),
+    // Plain words — this memo shows in the cash book.
+    memo: memo || (direction === 'drawings' ? 'Owner took money' : 'Owner put money in'),
     source: { kind: JOURNAL_SOURCES.CAPITAL },
     lines,
     userId: req.user.id
@@ -80,7 +83,7 @@ export const recordCapital = asyncHandler(async (req, res) => {
  * @route  POST /api/v1/finance/expenses  (journal:create — scoped)
  */
 export const recordExpense = asyncHandler(async (req, res, next) => {
-  const { business, category, party, product, onCredit, method, date, memo } = req.body;
+  const { business, category, party, product, onCredit, method, account, date, memo } = req.body;
   const paisa = amountPaisa(req.body.amount);
   await ensureChart(business);
 
@@ -99,7 +102,10 @@ export const recordExpense = asyncHandler(async (req, res, next) => {
         party,
         creditPaisa: paisa
       }
-    : { account: (await accountByCode(business, methodCode(method)))._id, creditPaisa: paisa };
+    : {
+        account: (await resolveMoney(business, { account, method }, req.user)).account,
+        creditPaisa: paisa
+      };
 
   const debit = { account: expense._id, debitPaisa: paisa };
   if (product) debit.product = product;
@@ -119,12 +125,12 @@ export const recordExpense = asyncHandler(async (req, res, next) => {
  * @route  POST /api/v1/finance/payments  (journal:create — scoped)
  */
 export const recordPayment = asyncHandler(async (req, res, next) => {
-  const { business, party, direction, method, date, memo } = req.body;
+  const { business, party, direction, method, account, date, memo } = req.body;
   const paisa = amountPaisa(req.body.amount);
   if (!party) return next(new ErrorResponse('Choose the party', 400));
   await ensureChart(business);
 
-  const money = await accountByCode(business, methodCode(method));
+  const money = await resolveMoney(business, { account, method }, req.user);
 
   let lines;
   if (direction === 'pay') {
@@ -132,13 +138,13 @@ export const recordPayment = asyncHandler(async (req, res, next) => {
     const payable = await accountByCode(business, CODES.ACCOUNTS_PAYABLE);
     lines = [
       { account: payable._id, party, debitPaisa: paisa },
-      { account: money._id, creditPaisa: paisa }
+      { account: money.account, creditPaisa: paisa }
     ];
   } else {
     // We receive from a reseller/customer — reduce what they owe us.
     const receivable = await accountByCode(business, CODES.ACCOUNTS_RECEIVABLE);
     lines = [
-      { account: money._id, debitPaisa: paisa },
+      { account: money.account, debitPaisa: paisa },
       { account: receivable._id, party, creditPaisa: paisa }
     ];
   }
@@ -160,7 +166,7 @@ export const recordPayment = asyncHandler(async (req, res, next) => {
  * @route  POST /api/v1/finance/salary  (journal:create — scoped)
  */
 export const recordSalary = asyncHandler(async (req, res, next) => {
-  const { business, party, onCredit, method, date, memo } = req.body;
+  const { business, party, onCredit, method, account, date, memo } = req.body;
   const paisa = amountPaisa(req.body.amount);
   if (onCredit && !party)
     return next(new ErrorResponse('Choose the employee this is owed to', 400));
@@ -173,7 +179,7 @@ export const recordSalary = asyncHandler(async (req, res, next) => {
 
   const lines = await salaryLines(business, party, paisa, {
     onCredit,
-    method,
+    money: onCredit ? undefined : await resolveMoney(business, { account, method }, req.user),
     deductAdvancePaisa: toPaisa(req.body.deductAdvance || 0)
   });
 
@@ -227,7 +233,7 @@ export const recordManual = asyncHandler(async (req, res, next) => {
  * @route  POST /api/v1/finance/assets  (journal:create — scoped)
  */
 export const recordAsset = asyncHandler(async (req, res, next) => {
-  const { business, onCredit, party, method, date, memo } = req.body;
+  const { business, onCredit, party, method, account, date, memo } = req.body;
   const paisa = amountPaisa(req.body.amount);
   if (onCredit && !party)
     return next(new ErrorResponse('Choose the supplier this is owed to', 400));
@@ -240,7 +246,10 @@ export const recordAsset = asyncHandler(async (req, res, next) => {
         party,
         creditPaisa: paisa
       }
-    : { account: (await accountByCode(business, methodCode(method)))._id, creditPaisa: paisa };
+    : {
+        account: (await resolveMoney(business, { account, method }, req.user)).account,
+        creditPaisa: paisa
+      };
 
   await respondPosted(res, {
     business,
@@ -258,7 +267,7 @@ export const recordAsset = asyncHandler(async (req, res, next) => {
  * @route  POST /api/v1/finance/loans  (journal:create — scoped)
  */
 export const recordLoan = asyncHandler(async (req, res, next) => {
-  const { business, direction, method, party, date, memo } = req.body;
+  const { business, direction, method, account, party, date, memo } = req.body;
   const paisa = amountPaisa(req.body.amount);
   await ensureChart(business);
 
@@ -268,7 +277,7 @@ export const recordLoan = asyncHandler(async (req, res, next) => {
   const lender = await Party.findOne({ _id: party, business, type: PARTY_TYPES.LENDER });
   if (!lender) return next(new ErrorResponse('That party is not a lender of this business', 400));
 
-  const money = await accountByCode(business, methodCode(method));
+  const money = await resolveMoney(business, { account, method }, req.user);
   const loan = await accountByCode(business, CODES.LOAN_PAYABLE);
 
   let lines;
@@ -285,11 +294,11 @@ export const recordLoan = asyncHandler(async (req, res, next) => {
         debitPaisa: interestPaisa
       });
     }
-    lines.push({ account: money._id, creditPaisa: paisa + interestPaisa });
+    lines.push({ account: money.account, creditPaisa: paisa + interestPaisa });
   } else {
     // Take a loan: money in, and we now owe it — owed to this lender.
     lines = [
-      { account: money._id, debitPaisa: paisa },
+      { account: money.account, debitPaisa: paisa },
       { account: loan._id, party, creditPaisa: paisa }
     ];
   }
@@ -630,6 +639,10 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
   if (entry.source?.kind === JOURNAL_SOURCES.COURIER_SETTLEMENT) {
     await unsettleCourier(entry._id);
   }
+  // Undoing a courier invoice reopens its CODs and the charges it billed.
+  if (entry.source?.kind === JOURNAL_SOURCES.COURIER_INVOICE) {
+    await undoCourierInvoice(entry._id);
+  }
   res.status(201).json({ success: true, data: reversal });
 });
 
@@ -643,8 +656,9 @@ const parseDateParam = (value, name) => {
 
 /**
  * @desc   Cash book: opening balance, every movement in and out, closing balance
- *         of Cash (or Bank) for a date range — the ledger read as a rokar.
- * @route  GET /api/v1/finance/cashbook?business=&account=cash|bank&from=&to=
+ *         of one money account (or a partner's running account) for a date
+ *         range — the ledger read as a rokar.
+ * @route  GET /api/v1/finance/cashbook?business=&account=<id>|partner:<id>|cash|bank&from=&to=
  *         (journal:read — scoped)
  */
 export const getCashbook = asyncHandler(async (req, res, next) => {
@@ -652,12 +666,18 @@ export const getCashbook = asyncHandler(async (req, res, next) => {
   if (!business) return next(new ErrorResponse('Select a business', 400));
   // Out of scope reads as not found, never forbidden (CLAUDE.md §6).
   if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
-  if (account && account !== 'cash' && account !== 'bank') {
-    return next(new ErrorResponse('Account must be cash or bank', 400));
-  }
+
+  // 'cash' / 'bank' still name the original two; anything else is a money
+  // account id or a partner, checked like any other money reference.
+  const legacy = account === 'cash' || account === 'bank' || !account;
+  const money = await resolveMoney(
+    business,
+    legacy ? { method: account || 'cash' } : { account },
+    req.user
+  );
 
   const book = await cashbook(business, {
-    account: account || 'cash',
+    accountId: money.account,
     from: parseDateParam(req.query.from, 'from'),
     to: parseDateParam(req.query.to, 'to')
   });
@@ -688,15 +708,18 @@ export const getMoneySummary = asyncHandler(async (req, res, next) => {
   if (!business) return next(new ErrorResponse('Select a business', 400));
   if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
 
-  const s = await moneySummary(business);
+  const s = await moneySummary(business, req.user);
   res.status(200).json({
     success: true,
     data: {
       ...s,
       cash: fromPaisa(s.cashPaisa),
       bank: fromPaisa(s.bankPaisa),
+      wallet: fromPaisa(s.walletPaisa),
       receivable: fromPaisa(s.receivablePaisa),
-      payable: fromPaisa(s.payablePaisa)
+      payable: fromPaisa(s.payablePaisa),
+      partnersHolding: fromPaisa(s.partnersHoldingPaisa),
+      owedToPartners: fromPaisa(s.owedToPartnersPaisa)
     }
   });
 });

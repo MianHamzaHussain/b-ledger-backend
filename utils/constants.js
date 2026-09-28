@@ -117,8 +117,27 @@ export const JOURNAL_SOURCES = {
   // Year-end close: sweeps income/expense into retained earnings.
   CLOSING: 'closing',
   // A courier's lump-sum payment covering many orders (see courierSettlement.js).
-  COURIER_SETTLEMENT: 'courier-settlement'
+  COURIER_SETTLEMENT: 'courier-settlement',
+  // A courier's invoice: the COD it paid and the charges it billed, by parcel.
+  COURIER_INVOICE: 'courier-invoice',
+  // Money moved between two of the business's own places (cash to bank, a
+  // partner handing over what they collected, …) — no income or cost.
+  TRANSFER: 'transfer'
 };
+
+/**
+ * Where money physically sits. Every money account is one of these, so the cash
+ * book and home screen can group them, and each can be checked against its own
+ * statement (the drawer count, the bank statement, the wallet history).
+ */
+export const MONEY_KINDS = {
+  CASH: 'cash',
+  BANK: 'bank',
+  WALLET: 'wallet'
+};
+
+/** How a request names a partner as the place money went to or came from. */
+export const PARTNER_MONEY_PREFIX = 'partner:';
 
 /** In-app notification kinds — drive the bell's icon/colour on the client. */
 export const NOTIFICATION_TYPES = {

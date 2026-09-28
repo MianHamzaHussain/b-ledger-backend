@@ -7,6 +7,7 @@ import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { postEntry, subledgerStatement, accountBalance } from '../utils/ledger.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { getNextSequence } from '../utils/sequence.js';
+import { resolveMoney } from '../utils/moneyAccounts.js';
 import { ACCOUNT_TYPES, JOURNAL_SOURCES } from '../utils/constants.js';
 
 /** A validated, positive paisa amount, or an ErrorResponse-throwing reject. */
@@ -17,11 +18,25 @@ const amountPaisa = raw => {
   return toPaisa(value);
 };
 
-const methodCode = method => (method === 'bank' ? CODES.BANK : CODES.CASH);
-
 /** A partner's capital = the credit balance of their equity account (rupees). */
 const capitalOf = async (business, accountId) =>
   fromPaisa(-(await accountBalance(business, accountId)));
+
+/**
+ * A partner's running balance with the business (rupees): positive = business
+ * money they're holding, negative = what the business owes them.
+ */
+const currentOf = async partner =>
+  partner.currentAccount
+    ? fromPaisa(await accountBalance(partner.business, partner.currentAccount))
+    : 0;
+
+/**
+ * The list's lean projection. Everything getPartners derives from must be in it:
+ * a missing account id reads as a zero balance rather than an error.
+ */
+export const PARTNER_LIST_FIELDS =
+  'name sharePercent isActive capitalAccount currentAccount business createdAt updatedAt';
 
 /**
  * @desc   List partners with their capital balances.
@@ -32,7 +47,8 @@ export const getPartners = asyncHandler(async (req, res) => {
   const data = await Promise.all(
     result.data.map(async p => ({
       ...p.toObject(),
-      capital: await capitalOf(p.business, p.capitalAccount)
+      capital: await capitalOf(p.business, p.capitalAccount),
+      current: await currentOf(p)
     }))
   );
   res.status(200).json({ ...result, data });
@@ -51,6 +67,7 @@ export const getPartner = asyncHandler(async (req, res) => {
     data: {
       ...partner.toObject(),
       capital: await capitalOf(partner.business, partner.capitalAccount),
+      current: await currentOf(partner),
       // Equity is credit-normal, so a credit grows capital — present the running
       // balance from the partner's side (positive = capital in the business).
       rows: rows.map(r => ({
@@ -144,27 +161,42 @@ export const deletePartner = asyncHandler(async (req, res, next) => {
   res.status(200).json({ success: true, data: {} });
 });
 
-/** Shared by invest/withdraw: move cash/bank against the partner's capital. */
-const postCapitalMove = async (partner, { amountRaw, method, invest, date, memo, userId }) => {
+/**
+ * Shared by invest/withdraw: move money against the partner's capital. The money
+ * side is any money account — or the partner's OWN running account, which is
+ * how their personal dealings settle into their stake:
+ *   withdraw from their own account → they keep business money they collected
+ *   invest from their own account   → what the business owes them becomes capital
+ */
+const postCapitalMove = async (
+  partner,
+  { amountRaw, method, account, invest, date, memo, user }
+) => {
   const paisa = amountPaisa(amountRaw);
   await ensureChart(partner.business);
-  const money = (await accountByCode(partner.business, methodCode(method)))._id;
+  const money = await resolveMoney(partner.business, { account, method }, user);
+  const own = money.partner && String(money.partner) === String(partner._id);
   const lines = invest
     ? [
-        { account: money, debitPaisa: paisa },
+        { account: money.account, debitPaisa: paisa },
         { account: partner.capitalAccount, creditPaisa: paisa }
       ]
     : [
         { account: partner.capitalAccount, debitPaisa: paisa },
-        { account: money, creditPaisa: paisa }
+        { account: money.account, creditPaisa: paisa }
       ];
+  const defaultMemo = own
+    ? invest
+      ? `Money owed to ${partner.name} made capital`
+      : `${partner.name} kept business money`
+    : `${invest ? 'Put money in' : 'Took money out'} — ${partner.name}`;
   return postEntry({
     business: partner.business,
     date,
-    memo: memo || `${invest ? 'Capital in' : 'Drawings'} — ${partner.name}`,
+    memo: memo || defaultMemo,
     source: { kind: JOURNAL_SOURCES.CAPITAL },
     lines,
-    userId
+    userId: user.id
   });
 };
 
@@ -177,10 +209,11 @@ export const investPartner = asyncHandler(async (req, res) => {
   await postCapitalMove(partner, {
     amountRaw: req.body.amount,
     method: req.body.method,
+    account: req.body.account,
     date: req.body.date,
     memo: req.body.memo,
     invest: true,
-    userId: req.user.id
+    user: req.user
   });
   res.status(201).json({
     success: true,
@@ -197,10 +230,11 @@ export const withdrawPartner = asyncHandler(async (req, res) => {
   await postCapitalMove(partner, {
     amountRaw: req.body.amount,
     method: req.body.method,
+    account: req.body.account,
     date: req.body.date,
     memo: req.body.memo,
     invest: false,
-    userId: req.user.id
+    user: req.user
   });
   res.status(201).json({
     success: true,

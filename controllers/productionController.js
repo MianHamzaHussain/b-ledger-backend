@@ -7,11 +7,17 @@ import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { postEntry, reverseEntry } from '../utils/ledger.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { weightedAverageCost } from '../utils/inventory.js';
-import { JOURNAL_SOURCES } from '../utils/constants.js';
+import { JOURNAL_SOURCES, PARTNER_MONEY_PREFIX } from '../utils/constants.js';
+import { resolveMoney } from '../utils/moneyAccounts.js';
+
+/** A cost paid from a chosen money account names it as `money:<accountId>`. */
+const MONEY_PREFIX = 'money:';
 
 const DETAIL_POPULATE = [
   { path: 'product', select: 'name articleNumber variants lowStockThreshold' },
-  { path: 'lines.costLines.party', select: 'name' }
+  { path: 'lines.costLines.party', select: 'name' },
+  // Which account paid each cost — shown by name on the batch.
+  { path: 'lines.costLines.moneyAccount', select: 'name' }
 ];
 
 /**
@@ -46,10 +52,15 @@ const buildBatchLines = (product, lines) => {
       if (!label) throw new ErrorResponse('Every cost needs a label (e.g. Cloth, Tailor)', 400);
       const amount = Number(c.amount);
       if (!(amount > 0)) throw new ErrorResponse(`"${label}" must be greater than zero`, 400);
-      // `fund` is 'cash', 'bank', or a supplier party id (→ on credit to them).
+      // `fund` is 'cash' / 'bank' (the original two), `money:<accountId>` or
+      // `partner:<id>` (resolved in resolveCostMoney), or a supplier party id —
+      // on credit to them.
       const fund = c.fund || 'cash';
       if (fund === 'cash' || fund === 'bank') {
         return { label, amountPaisa: toPaisa(amount), method: fund, onCredit: false };
+      }
+      if (fund.startsWith(MONEY_PREFIX) || fund.startsWith(PARTNER_MONEY_PREFIX)) {
+        return { label, amountPaisa: toPaisa(amount), onCredit: false, moneyRef: fund };
       }
       return { label, amountPaisa: toPaisa(amount), onCredit: true, party: fund };
     });
@@ -63,6 +74,24 @@ const buildBatchLines = (product, lines) => {
       salePrice
     };
   });
+};
+
+/**
+ * Resolve each cost paid from a chosen money account or partner to its ledger
+ * account — checked like any other money reference (this business's, open, and
+ * a partner only for people who may read Partners).
+ */
+const resolveCostMoney = async (business, batchLines, user) => {
+  for (const line of batchLines) {
+    for (const c of line.costLines) {
+      if (!c.moneyRef) continue;
+      const ref = c.moneyRef.startsWith(MONEY_PREFIX)
+        ? c.moneyRef.slice(MONEY_PREFIX.length)
+        : c.moneyRef;
+      c.moneyAccount = (await resolveMoney(business, { account: ref }, user)).account;
+    }
+  }
+  return batchLines;
 };
 
 /** Every on-credit cost must name a party that belongs to this business. */
@@ -116,6 +145,9 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
       if (c.onCredit) {
         key = `payable:${c.party}`;
         cl = { account: payable._id, party: c.party, creditPaisa: 0 };
+      } else if (c.moneyAccount) {
+        key = `money:${c.moneyAccount}`;
+        cl = { account: c.moneyAccount, creditPaisa: 0 };
       } else if (c.method === 'bank') {
         key = 'bank';
         cl = { account: bank._id, creditPaisa: 0 };
@@ -167,6 +199,7 @@ export const createBatch = asyncHandler(async (req, res, next) => {
 
   const batchLines = buildBatchLines(prod, lines);
   await validateCostParties(business, batchLines);
+  await resolveCostMoney(business, batchLines, req.user);
   await ensureChart(business);
 
   const batch = await ProductionBatch.create({
@@ -193,6 +226,7 @@ export const updateBatch = asyncHandler(async (req, res, next) => {
 
   const batchLines = buildBatchLines(prod, req.body.lines);
   await validateCostParties(batch.business, batchLines);
+  await resolveCostMoney(batch.business, batchLines, req.user);
   batch.lines = batchLines;
   batch.updatedBy = req.user.id;
   await batch.save();
@@ -242,6 +276,7 @@ const correctClosedBatch = async (req, res, next) => {
     );
   }
   await validateCostParties(batch.business, corrected);
+  await resolveCostMoney(batch.business, corrected, req.user);
 
   // Per variant: old vs corrected total, split by how much of the batch is left.
   const costOf = line => (line.costLines || []).reduce((s, c) => s + (c.amountPaisa || 0), 0);

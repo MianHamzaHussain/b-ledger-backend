@@ -18,7 +18,7 @@ const cogsPaisaOf = order =>
   order.items.reduce((sum, i) => sum + toPaisa(i.unitCost) * i.quantity, 0);
 
 /** "Order #0034 · TCS0349912345" — the courier statement row label. */
-const orderLabel = order =>
+export const orderLabel = order =>
   `Order #${order.orderNumber}${order.trackingId ? ` · ${order.trackingId}` : ''}`;
 
 /**

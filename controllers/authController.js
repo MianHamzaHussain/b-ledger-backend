@@ -43,9 +43,12 @@ export const login = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Please provide an email/phone and password', 400));
   }
 
+  // tokenVersion is hidden by default; without it the token is stamped 0, which
+  // `protect` rejects for anyone whose sessions were ever revoked (a password
+  // set or changed) — every sign-in would then need a silent refresh to work.
   const user = await User.findOne({
     $or: [{ email: identifier.toLowerCase() }, { phone: identifier }]
-  }).select('+password +mustChangePassword');
+  }).select('+password +mustChangePassword +tokenVersion');
 
   // Same message and same code path for "no such user" and "wrong password",
   // so the response cannot be used to enumerate accounts.

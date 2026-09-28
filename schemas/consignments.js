@@ -34,5 +34,7 @@ export const consignmentSellSchema = z.object({
 
 export const consignmentPaymentSchema = z.object({
   amount: z.coerce.number().positive('Amount must be greater than zero').optional(),
-  method: z.enum(['cash', 'bank']).optional()
+  method: z.enum(['cash', 'bank']).optional(),
+  /** A money account id, or `partner:<id>` — wins over `method`. */
+  account: z.string().min(1).optional()
 });

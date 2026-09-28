@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { ACCOUNT_TYPES, NORMAL_BALANCE } from '../utils/constants.js';
+import { ACCOUNT_TYPES, MONEY_KINDS, NORMAL_BALANCE } from '../utils/constants.js';
 
 /**
  * One line of the chart of accounts, scoped to a business. Seeded with a
@@ -44,6 +44,14 @@ const AccountSchema = new mongoose.Schema(
     isControl: { type: Boolean, default: false },
     isSystem: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
+    /**
+     * Set only on a money account — a real place money sits: the shop's cash,
+     * one bank account, one JazzCash/Easypaisa number. Everything that moves
+     * money names one of these (or a partner), never a bare "cash"/"bank".
+     */
+    moneyKind: { type: String, enum: Object.values(MONEY_KINDS) },
+    /** Bank account / wallet number as the owner reads it, e.g. "…4521". */
+    number: { type: String, trim: true, maxlength: [40, 'Number is too long'] },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
   },

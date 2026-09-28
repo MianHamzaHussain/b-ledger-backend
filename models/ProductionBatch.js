@@ -29,7 +29,15 @@ const CostLineSchema = new mongoose.Schema(
      */
     method: { type: String, enum: ['cash', 'bank'], default: 'cash' },
     onCredit: { type: Boolean, default: false },
-    party: { type: mongoose.Schema.ObjectId, ref: 'Party' }
+    party: { type: mongoose.Schema.ObjectId, ref: 'Party' },
+    /**
+     * Paid from a chosen money account (or by a partner personally) rather than
+     * the original cash/bank: `moneyRef` is what the owner picked (`money:<id>`
+     * or `partner:<id>`, kept so the form shows it again), `moneyAccount` the
+     * ledger account it resolved to.
+     */
+    moneyRef: { type: String },
+    moneyAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' }
   },
   { _id: true }
 );

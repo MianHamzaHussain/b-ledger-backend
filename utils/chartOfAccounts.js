@@ -1,5 +1,5 @@
 import Account from '../models/Account.js';
-import { ACCOUNT_TYPES } from './constants.js';
+import { ACCOUNT_TYPES, MONEY_KINDS } from './constants.js';
 import ErrorResponse from './errorResponse.js';
 
 const { ASSET, LIABILITY, EQUITY, INCOME, EXPENSE } = ACCOUNT_TYPES;
@@ -49,8 +49,10 @@ export const CODES = {
 
 /** The standard chart every business is seeded with. `control` = detail by party. */
 export const DEFAULT_CHART = [
-  { code: CODES.CASH, name: 'Cash', type: ASSET },
-  { code: CODES.BANK, name: 'Bank', type: ASSET },
+  // The two money accounts every business starts with. More banks and wallets
+  // are added by the owner (utils/moneyAccounts.js).
+  { code: CODES.CASH, name: 'Cash', type: ASSET, moneyKind: MONEY_KINDS.CASH },
+  { code: CODES.BANK, name: 'Main bank', type: ASSET, moneyKind: MONEY_KINDS.BANK },
   { code: CODES.ACCOUNTS_RECEIVABLE, name: 'Accounts Receivable', type: ASSET, control: true },
   { code: CODES.COD_RECEIVABLE, name: 'COD Receivable — Courier', type: ASSET, control: true },
   { code: CODES.WHT_RECEIVABLE, name: 'Advance Tax (WHT Receivable)', type: ASSET },
@@ -97,7 +99,8 @@ export const ensureChart = async businessId => {
     name: a.name,
     type: a.type,
     isControl: Boolean(a.control),
-    isSystem: true
+    isSystem: true,
+    ...(a.moneyKind ? { moneyKind: a.moneyKind } : {})
   }));
 
   if (missing.length) await Account.insertMany(missing);

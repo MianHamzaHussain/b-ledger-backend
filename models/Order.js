@@ -1,6 +1,27 @@
 import mongoose from 'mongoose';
 import { ORDER_STATUS, PAYMENT_STATUS, SALES_CHANNELS } from '../utils/constants.js';
 import { getNextSequence } from '../utils/sequence.js';
+import { pakistanDay } from '../utils/pakistanDay.js';
+
+/** One step in an order's life — what it became, when, by whom, and why. */
+const StatusEventSchema = new mongoose.Schema(
+  {
+    status: { type: String, enum: Object.values(ORDER_STATUS), required: true },
+    note: { type: String, trim: true, maxlength: 300 },
+    at: { type: Date, default: Date.now },
+    by: { type: mongoose.Schema.ObjectId, ref: 'User' }
+  },
+  { _id: false }
+);
+
+/** The date field each status stamps, so lists can filter "delivered 1–15 Sep". */
+const STATUS_DATE_FIELD = {
+  dispatched: 'dispatchedAt',
+  delivered: 'deliveredAt',
+  returned: 'returnedAt',
+  cancelled: 'cancelledAt',
+  exchanged: 'exchangedAt'
+};
 
 /**
  * One line of an order — a specific SKU at a negotiated price.
@@ -36,6 +57,14 @@ const OrderSchema = new mongoose.Schema(
   {
     /** Sequential, zero-padded, unique — generated in the pre-save hook. */
     orderNumber: { type: String, unique: true },
+    /**
+     * The order's place in its day — "today's #7" — restarting at midnight in
+     * Pakistan, per business. For reading the day's orders at a glance only;
+     * `orderNumber` stays the one number that never repeats (search, couriers,
+     * phone calls).
+     */
+    orderDay: { type: String }, // YYYY-MM-DD, Pakistan
+    dailySerial: { type: Number },
     business: {
       type: mongoose.Schema.ObjectId,
       ref: 'Business',
@@ -105,6 +134,15 @@ const OrderSchema = new mongoose.Schema(
       enum: Object.values(PAYMENT_STATUS),
       default: PAYMENT_STATUS.UNPAID
     },
+    /** Every status change with its optional reason — the order's timeline. */
+    statusHistory: { type: [StatusEventSchema], default: [] },
+    dispatchedAt: { type: Date },
+    deliveredAt: { type: Date },
+    returnedAt: { type: Date },
+    cancelledAt: { type: Date },
+    exchangedAt: { type: Date },
+    /** A free note on the order — editable at any status, even after dispatch. */
+    note: { type: String, trim: true, maxlength: 1000 },
 
     // ── Ledger links (Phase 3 accounting) ─────────────────────────────────
     /** The Sale + COGS entry, posted once on delivery. Its presence = "already booked". */
@@ -135,6 +173,13 @@ const OrderSchema = new mongoose.Schema(
      * so an exchanged order records both legs.
      */
     returnChargePaisa: { type: Number },
+    /**
+     * The courier invoice entries that billed this parcel's charges. A charge is
+     * open (still to come on an invoice) while its amount above is unset; when
+     * an invoice sets it, the entry is kept so reversing that invoice reopens it.
+     */
+    deliveryChargeEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
+    returnChargeEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
 
     // ── Exchange links ────────────────────────────────────────────────────
     /** On the replacement order: the original it replaces. */
@@ -150,16 +195,41 @@ const OrderSchema = new mongoose.Schema(
 
 OrderSchema.index({ business: 1, status: 1 });
 OrderSchema.index({ business: 1, createdAt: -1 });
+OrderSchema.index({ business: 1, dispatchedAt: -1 });
+OrderSchema.index({ business: 1, deliveredAt: -1 });
 // Scan-to-find: a courier tracking number resolves to its order. Sparse — most
 // orders have no tracking id until they are dispatched.
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
 OrderSchema.index({ 'items.product': 1, 'items.variantId': 1 }); // price-hint lookup
 
-/** Generate the order number once, and keep the money fields derived. */
+/**
+ * Generate the order numbers once, log every status change, and keep the money
+ * fields derived. Logging here rather than in each controller means no path that
+ * changes a status (status endpoint, exchange, cancel) can skip the timeline.
+ * The reason travels in `order.$locals.statusNote`; the actor is `updatedBy`
+ * (or `createdBy` for a new order).
+ */
 OrderSchema.pre('save', async function () {
   if (this.isNew && !this.orderNumber) {
     const seq = await getNextSequence('order');
     this.orderNumber = String(seq).padStart(4, '0');
+  }
+  if (this.isNew && !this.dailySerial) {
+    this.orderDay = pakistanDay(this.createdAt || new Date());
+    this.dailySerial = await getNextSequence(`order-day:${this.business}:${this.orderDay}`);
+  }
+
+  if (this.isNew || this.isModified('status')) {
+    const at = new Date();
+    this.statusHistory.push({
+      status: this.status,
+      note: this.$locals.statusNote || undefined,
+      at,
+      by: this.isNew ? this.createdBy : this.updatedBy
+    });
+    const dateField = STATUS_DATE_FIELD[this.status];
+    if (dateField) this[dateField] = at;
+    this.$locals.statusNote = undefined;
   }
 
   this.subtotal = this.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);

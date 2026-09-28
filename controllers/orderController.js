@@ -90,15 +90,20 @@ export const getOrder = asyncHandler(async (req, res) => {
   await order.populate([
     { path: 'courier', select: 'name' },
     { path: 'customerParty', select: 'name phone' },
-    { path: 'customer', select: 'name phone' }
+    { path: 'customer', select: 'name phone' },
+    // The timeline names who made each change.
+    { path: 'statusHistory.by', select: 'name' }
   ]);
 
   const codPaisa = toPaisa(order.codAmount);
 
   // A walk-in / counter sale has no courier: no delivery fee, no COD taxes — the
   // buyer simply owes the full balance, so the net receivable is the balance.
+  // An order that merely hasn't been dispatched yet has no courier either, but it
+  // will be collected on delivery — so it's a counter sale only if it came in as
+  // a walk-in.
   let remittance;
-  if (!order.courier) {
+  if (!order.courier && order.source === SALES_CHANNELS.WALK_IN) {
     // Part-payments made from the customer's party page come off what is owed.
     const paidPaisa = order.paidPaisa || 0;
     remittance = {
@@ -471,11 +476,14 @@ export const exchangeOrder = asyncHandler(async (req, res, next) => {
         memo: `Refund on exchange — order ${original.orderNumber}`
       });
     }
-    // Collecting the original parcel is a courier leg of its own, billed now.
-    const returnChargePaisa = toPaisa(req.body.returnCharge);
-    original.returnChargePaisa = returnChargePaisa;
-    if (returnChargePaisa > 0) {
-      await postReturnCharge(original, fromPaisa(returnChargePaisa), req.user.id);
+    // Collecting the original parcel is a courier leg of its own. Its charge is
+    // usually billed on the courier invoice; given here, it is booked now.
+    if (req.body.returnCharge != null) {
+      const returnChargePaisa = toPaisa(req.body.returnCharge);
+      original.returnChargePaisa = returnChargePaisa;
+      if (returnChargePaisa > 0) {
+        await postReturnCharge(original, fromPaisa(returnChargePaisa), req.user.id);
+      }
     }
 
     // The replacement — same customer, new items, linked back to the original.
@@ -549,15 +557,15 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     order.trackingId = trackingId;
   }
 
-  // The outcome is where the courier's bill is final, so it is required — an
-  // explicit 0 means "no charge", a missing value means the step was skipped.
+  // The courier's charge is normally only known when its invoice arrives, so it
+  // is optional here: left out, the charge stays open and is billed on the
+  // courier invoice. Given (e.g. already on the courier's portal), it is booked
+  // now, with 0 meaning "no charge".
   const isOutcome = status === ORDER_STATUS.DELIVERED || status === ORDER_STATUS.RETURNED;
-  if (isOutcome && req.body.deliveryCharge === undefined) {
-    return next(new ErrorResponse("Enter the courier's charge for this parcel (0 if none)", 400));
-  }
-  const chargePaisa = isOutcome ? toPaisa(req.body.deliveryCharge) : 0;
+  const chargeKnown = isOutcome && req.body.deliveryCharge !== undefined;
+  const chargePaisa = chargeKnown ? toPaisa(req.body.deliveryCharge) : 0;
 
-  if (status === ORDER_STATUS.DELIVERED) {
+  if (status === ORDER_STATUS.DELIVERED && chargeKnown) {
     // The fee may exceed the COD — a fully prepaid parcel still costs a fee,
     // which the courier takes out of what it owes us on other orders.
     order.deliveryChargePaisa = chargePaisa;
@@ -583,11 +591,31 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
         memo: `Return of order ${order.orderNumber}`
       });
     }
-    order.returnChargePaisa = chargePaisa;
-    if (chargePaisa > 0) await postReturnCharge(order, fromPaisa(chargePaisa), req.user.id);
+    if (chargeKnown) {
+      order.returnChargePaisa = chargePaisa;
+      if (chargePaisa > 0) await postReturnCharge(order, fromPaisa(chargePaisa), req.user.id);
+    }
   }
 
   order.status = status;
+  order.updatedBy = req.user.id;
+  // The optional reason ("customer refused", "cancelled on call") lands on the
+  // timeline entry the model writes for this change.
+  order.$locals.statusNote = req.body.note;
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Set the order's free note. Allowed at any status, even after dispatch
+ *         or payment — it changes nothing but the note.
+ * @route  PUT /api/v1/orders/:id/note  (orders:update — scoped)
+ */
+export const updateOrderNote = asyncHandler(async (req, res) => {
+  const order = req.resource;
+
+  order.note = req.body.note || undefined;
   order.updatedBy = req.user.id;
   await order.save();
 
@@ -624,6 +652,11 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     // You can only be paid for something that was actually delivered.
     if (order.status !== ORDER_STATUS.DELIVERED) {
       return next(new ErrorResponse('Only delivered orders can be marked paid', 400));
+    }
+    // Without its delivery charge the net can't be known — the courier's invoice
+    // is where both arrive together.
+    if (order.courier && order.deliveryChargePaisa == null) {
+      return next(new ErrorResponse("Record this parcel's payment on the courier's invoice", 400));
     }
 
     // Post the courier's remittance once — Bank in, delivery fee expensed. The

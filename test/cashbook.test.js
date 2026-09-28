@@ -127,7 +127,8 @@ test('summary: cash in hand, bank, to get and to give', async () => {
 
 test('rejects a bad account or date, and hides other businesses', async () => {
   const biz = await makeBusiness();
-  await assert.rejects(book(biz, { account: 'wallet' }), /cash or bank/);
+  // Anything that isn't cash, bank, or one of its money accounts is refused.
+  await assert.rejects(book(biz, { account: 'wallet' }), /money accounts/);
   await assert.rejects(book(biz, { from: 'yesterday-ish' }), /Invalid from/);
   await assert.rejects(
     runHandler(getCashbook, {

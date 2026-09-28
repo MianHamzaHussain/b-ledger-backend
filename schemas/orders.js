@@ -47,9 +47,15 @@ export const orderStatusSchema = z.object({
   status: z.enum(['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled', 'returned']),
   courier: id.optional(),
   /** The courier's bill for the outcome — the delivery fee on `delivered`, the
-   *  return fee on `returned`. The controller requires it on those two. */
+   *  return fee on `returned`. Optional: usually billed on the courier invoice. */
   deliveryCharge: z.coerce.number().min(0, 'Delivery charge can not be negative').optional(),
-  trackingId: z.string().optional()
+  trackingId: z.string().optional(),
+  /** Optional reason for the change — shown on the order's timeline. */
+  note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+});
+
+export const orderNoteSchema = z.object({
+  note: z.string().trim().max(1000, 'Keep the note under 1000 characters')
 });
 
 export const orderPaymentSchema = z.object({
@@ -59,10 +65,8 @@ export const orderPaymentSchema = z.object({
 export const orderExchangeSchema = z.object({
   items: z.array(orderItem).min(1, 'Add at least one replacement item'),
   courier: id.optional(),
-  /** What the courier billed to collect the original parcel. */
-  returnCharge: z.coerce
-    .number({ error: "Enter the courier's return charge (0 if none)" })
-    .min(0, 'Return charge can not be negative')
+  /** What the courier billed to collect the original parcel — usually left for its invoice. */
+  returnCharge: z.coerce.number().min(0, 'Return charge can not be negative').optional()
 });
 
 export const orderTrackingSchema = z.object({

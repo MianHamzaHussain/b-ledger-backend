@@ -39,6 +39,13 @@ const PartnerSchema = new mongoose.Schema(
     isActive: { type: Boolean, default: true },
     /** The partner's own equity account — set by the controller on create. */
     capitalAccount: { type: mongoose.Schema.ObjectId, ref: 'Account', required: true },
+    /**
+     * The partner's running account with the business, apart from their stake:
+     * a debit balance is business money they are holding (a customer paid into
+     * their JazzCash), a credit balance is what the business owes them (they
+     * paid a bill from their own pocket). Created on first use.
+     */
+    currentAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
   },

@@ -3,7 +3,6 @@ import Business from '../models/Business.js';
 import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
 import { postEntry, partyAccountBalance } from './ledger.js';
 import { computeRemittance } from './orderPosting.js';
-import { methodCode } from './partyPosting.js';
 import { toPaisa } from './money.js';
 import { JOURNAL_SOURCES, ORDER_STATUS, PAYMENT_STATUS } from './constants.js';
 
@@ -32,11 +31,10 @@ import { JOURNAL_SOURCES, ORDER_STATUS, PAYMENT_STATUS } from './constants.js';
 const netPaisaOf = (order, codTax) =>
   computeRemittance(toPaisa(order.codAmount), order.deliveryChargePaisa || 0, codTax).bankPaisa;
 
-export const settleCourier = async (courier, paisa, { method, date, memo, userId }) => {
+export const settleCourier = async (courier, paisa, { money, date, memo, userId }) => {
   const business = courier.business;
   await ensureChart(business);
   const cod = await accountByCode(business, CODES.COD_RECEIVABLE);
-  const money = await accountByCode(business, methodCode(method));
 
   const entry = await postEntry({
     business,
@@ -44,7 +42,7 @@ export const settleCourier = async (courier, paisa, { method, date, memo, userId
     memo: memo || `Payment from ${courier.name}`,
     source: { kind: JOURNAL_SOURCES.COURIER_SETTLEMENT, ref: String(courier._id) },
     lines: [
-      { account: money._id, debitPaisa: paisa },
+      { account: money.account, debitPaisa: paisa },
       { account: cod._id, party: courier._id, creditPaisa: paisa }
     ],
     userId

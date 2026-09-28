@@ -6,6 +6,7 @@ import ErrorResponse from '../utils/errorResponse.js';
 import { reserveStock, releaseStock } from '../utils/stock.js';
 import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { postEntry, reverseEntry, partyBalance } from '../utils/ledger.js';
+import { resolveMoney } from '../utils/moneyAccounts.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
 
@@ -394,14 +395,18 @@ export const recordPayment = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse(`Only ${fromPaisa(outstandingPaisa)} is outstanding`, 400));
   }
 
-  const method = req.body.method === 'bank' ? CODES.BANK : CODES.CASH;
   await ensureChart(consignment.business);
+  const money = await resolveMoney(
+    consignment.business,
+    { account: req.body.account, method: req.body.method },
+    req.user
+  );
   await postEntry({
     business: consignment.business,
     memo: `Payment from reseller — consignment #${consignment.consignmentNumber}`,
     source: { kind: JOURNAL_SOURCES.CONSIGNMENT, ref: String(consignment._id) },
     lines: [
-      { account: (await accountByCode(consignment.business, method))._id, debitPaisa: amountPaisa },
+      { account: money.account, debitPaisa: amountPaisa },
       {
         account: (await accountByCode(consignment.business, CODES.ACCOUNTS_RECEIVABLE))._id,
         party: consignment.party,

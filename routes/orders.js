@@ -1,6 +1,6 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
-import { can, loadScoped, restrictBusinessToScope } from '../middlewares/permissions.js';
+import { can, loadScoped, restrictBusinessToScope, hideCosts } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
 import { validate } from '../middlewares/validate.js';
 import {
@@ -9,7 +9,8 @@ import {
   orderStatusSchema,
   orderPaymentSchema,
   orderExchangeSchema,
-  orderTrackingSchema
+  orderTrackingSchema,
+  orderNoteSchema
 } from '../schemas/orders.js';
 import Order from '../models/Order.js';
 import {
@@ -21,12 +22,15 @@ import {
   updateOrderStatus,
   updateOrderPayment,
   updateOrderTracking,
+  updateOrderNote,
   getPriceHint
 } from '../controllers/orderController.js';
 
 const router = express.Router();
 
 router.use(protect);
+// Order lines carry the cost snapshot — only people who may "See costs" get it.
+router.use(hideCosts);
 
 /**
  * @swagger
@@ -57,6 +61,8 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *       - { in: query, name: status,        schema: { type: string, enum: [pending, confirmed, dispatched, delivered, cancelled, returned] } }
  *       - { in: query, name: paymentStatus, schema: { type: string, enum: [unpaid, paid] } }
  *       - { in: query, name: search,        schema: { type: string } }
+ *       - { in: query, name: "createdAt[gte]",   schema: { type: string, format: date-time }, description: "Date range on any of createdAt / dispatchedAt / deliveredAt, with [gte] and [lte]" }
+ *       - { in: query, name: "deliveredAt[lte]", schema: { type: string, format: date-time } }
  *       - { in: query, name: page,          schema: { type: integer } }
  *       - { in: query, name: limit,         schema: { type: integer } }
  *     responses:
@@ -93,15 +99,15 @@ router
   .route('/')
   .get(
     can('orders', 'read'),
-    // Lean list: the cards show only #, tracking, status, item count, total and
-    // payment. Full details (customer, items, courier, remittance) come from the
-    // detail-by-id endpoint. Search still matches name/phone/tracking — that is
-    // the query filter, independent of the projection.
+    // Lean list: the cards show who it's for, #, today's serial, tracking, status,
+    // item count, total and payment. Full details (items, courier, remittance)
+    // come from the detail-by-id endpoint. Search still matches name/phone/
+    // tracking — that is the query filter, independent of the projection.
     advancedResults(
       Order,
       null,
       ['orderNumber', 'customerName', 'contactNumber', 'trackingId'],
-      'orderNumber trackingId status paymentStatus total itemCount'
+      'orderNumber dailySerial orderDay customerName city trackingId status paymentStatus total itemCount createdAt dispatchedAt deliveredAt'
     ),
     getOrders
   )
@@ -158,6 +164,7 @@ router
  *             properties:
  *               status: { type: string, enum: [confirmed, dispatched, delivered, cancelled, returned] }
  *               trackingId: { type: string, description: "Required on dispatched — the courier consignment number" }
+ *               note: { type: string, description: "Optional reason, shown on the order's timeline (max 300)" }
  *               deliveryCharge: { type: number, description: "Required on delivered (the delivery fee — on a prepaid order it comes off the courier's COD balance) and returned (the return fee, booked as an expense). 0 if none." }
  *     responses:
  *       200: { description: Updated }
@@ -258,6 +265,32 @@ router.put(
   loadScoped(Order),
   validate(orderTrackingSchema),
   updateOrderTracking
+);
+
+/**
+ * @swagger
+ * /orders/{id}/note:
+ *   put:
+ *     summary: Set the order's note (any status — changes nothing else)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               note: { type: string, description: "Free text, max 1000 (empty to clear)" }
+ *     responses:
+ *       200: { description: Updated }
+ */
+router.put(
+  '/:id/note',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderNoteSchema),
+  updateOrderNote
 );
 
 export default router;

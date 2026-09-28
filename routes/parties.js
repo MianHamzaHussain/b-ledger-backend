@@ -7,8 +7,10 @@ import Party from '../models/Party.js';
 import {
   partyCreateSchema,
   partyUpdateSchema,
-  partyTransactionSchema
+  partyTransactionSchema,
+  courierInvoiceSchema
 } from '../schemas/parties.js';
+import { getCourierItems, createCourierInvoice } from '../controllers/courierInvoiceController.js';
 import {
   getParties,
   getParty,
@@ -145,6 +147,59 @@ router.post(
  *       404: { description: Not found or out of scope }
  */
 router.get('/:id/statement', can('parties', 'read'), loadScoped(Party), getPartyStatement);
+
+/**
+ * @swagger
+ * /parties/{id}/courier-items:
+ *   get:
+ *     summary: A courier's open parcels — unpaid CODs and charges not billed yet
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: "{ defaultMoneyAccount, items: [{ order, orderNumber, trackingId, customerName, status, cod: { cod, withholdingTax, salesTax, net } | null, deliveryChargeOpen, returnChargeOpen }] }" }
+ *       400: { description: Not a courier }
+ */
+router.get('/:id/courier-items', can('journal', 'read'), loadScoped(Party), getCourierItems);
+
+/**
+ * @swagger
+ * /parties/{id}/courier-invoices:
+ *   post:
+ *     summary: Record a courier invoice — CODs paid, charges billed per parcel, and what arrived
+ *     description: >
+ *       COD and charges settle independently, so one invoice may pay some parcels'
+ *       COD and bill other parcels' charges. Ticked CODs are marked paid and billed
+ *       charges set on their orders; reversing the entry undoes both. The same
+ *       invoice number can't be recorded twice for a courier.
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [invoiceNumber]
+ *             properties:
+ *               invoiceNumber: { type: string }
+ *               invoiceDate: { type: string }
+ *               received: { type: number, description: "What arrived; 0 if the courier only deducted charges" }
+ *               account: { type: string, description: "Money account id or partner:<id> it arrived in" }
+ *               cod: { type: array, items: { type: string }, description: Order ids whose COD this pays }
+ *               charges: { type: array, items: { type: object, properties: { order: { type: string }, kind: { type: string, enum: [delivery, return] }, amount: { type: number } } } }
+ *     responses:
+ *       201: { description: "Recorded — { expected, received, difference, codCount, chargeCount }" }
+ *       400: { description: Duplicate invoice number, nothing ticked, or a parcel not open with this courier }
+ */
+router.post(
+  '/:id/courier-invoices',
+  can('journal', 'create'),
+  loadScoped(Party),
+  validate(courierInvoiceSchema),
+  createCourierInvoice
+);
 
 /**
  * @swagger
