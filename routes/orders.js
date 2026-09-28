@@ -1,6 +1,12 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
-import { can, loadScoped, restrictBusinessToScope, hideCosts } from '../middlewares/permissions.js';
+import {
+  can,
+  loadScoped,
+  restrictBusinessToScope,
+  hideCosts,
+  requirePermission
+} from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
 import { validate } from '../middlewares/validate.js';
 import {
@@ -8,11 +14,13 @@ import {
   orderUpdateSchema,
   orderStatusSchema,
   orderPaymentSchema,
-  orderExchangeSchema,
+  orderExchangeReturnSchema,
+  orderReplacementSchema,
   orderTrackingSchema,
   orderNoteSchema,
   orderMoneySchema,
-  orderCreditSchema
+  orderCreditSchema,
+  customCostSchema
 } from '../schemas/orders.js';
 import Order from '../models/Order.js';
 import {
@@ -20,7 +28,8 @@ import {
   getOrder,
   createOrder,
   updateOrder,
-  exchangeOrder,
+  exchangeReturn,
+  createReplacement,
   updateOrderStatus,
   updateOrderPayment,
   updateOrderTracking,
@@ -29,7 +38,9 @@ import {
   addOrderRefund,
   deleteOrderMoney,
   getPriceHint,
-  keepOrderCredit
+  keepOrderCredit,
+  addCustomCost,
+  deleteCustomCost
 } from '../controllers/orderController.js';
 
 const router = express.Router();
@@ -205,11 +216,19 @@ router
  *       404: { description: Not found, or outside your businesses }
  */
 router.post(
-  '/:id/exchange',
+  '/:id/exchange-return',
   can('orders', 'update'),
   loadScoped(Order),
-  validate(orderExchangeSchema),
-  exchangeOrder
+  validate(orderExchangeReturnSchema),
+  exchangeReturn
+);
+
+router.post(
+  '/:id/exchange-replacement',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderReplacementSchema),
+  createReplacement
 );
 
 router.put(
@@ -385,6 +404,23 @@ router.post(
   loadScoped(Order),
   validate(orderCreditSchema),
   keepOrderCredit
+);
+
+router.post(
+  '/:id/custom-cost',
+  can('orders', 'update'),
+  requirePermission('costs', 'read'),
+  loadScoped(Order),
+  validate(customCostSchema),
+  addCustomCost
+);
+
+router.delete(
+  '/:id/custom-cost/:costId',
+  can('orders', 'update'),
+  requirePermission('costs', 'read'),
+  loadScoped(Order),
+  deleteCustomCost
 );
 
 export default router;

@@ -68,7 +68,13 @@ export const requirePermission = (resource, action) => (req, res, next) => {
 };
 
 /** Fields that reveal what goods cost to make — a trade secret. */
-const COST_FIELDS = new Set(['costPrice', 'unitCost', 'unitCostPaisa', 'totalCostPaisa']);
+const COST_FIELDS = new Set([
+  'costPrice',
+  'unitCost',
+  'unitCostPaisa',
+  'totalCostPaisa',
+  'customCosts'
+]);
 
 const stripCosts = value => {
   if (Array.isArray(value)) return value.map(stripCosts);

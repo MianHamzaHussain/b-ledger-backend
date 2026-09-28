@@ -84,6 +84,32 @@ const OrderItemSchema = new mongoose.Schema(
   { _id: true }
 );
 
+/** Work done for this customer on top of (or instead of) stock items. */
+const CustomWorkSchema = new mongoose.Schema(
+  {
+    description: { type: String, required: true, trim: true, maxlength: 300 },
+    /** What the customer pays for it (rupees). */
+    price: { type: Number, required: true, min: 0 },
+    /** Made from scratch — no stock item behind it. */
+    fromScratch: { type: Boolean, default: false }
+  },
+  { _id: true }
+);
+
+/** Material bought for this order's custom work — booked the day it was spent. */
+const CustomCostSchema = new mongoose.Schema(
+  {
+    description: { type: String, required: true, trim: true, maxlength: 200 },
+    amountPaisa: { type: Number, required: true, min: 1 },
+    /** Where the money came from, as it read at the time. */
+    accountName: { type: String },
+    date: { type: Date, default: Date.now },
+    entry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry', required: true },
+    by: { type: mongoose.Schema.ObjectId, ref: 'User' }
+  },
+  { _id: true }
+);
+
 const OrderSchema = new mongoose.Schema(
   {
     /** Sequential, zero-padded, unique — generated in the pre-save hook. */
@@ -136,12 +162,19 @@ const OrderSchema = new mongoose.Schema(
     items: {
       type: [OrderItemSchema],
       validate: {
-        validator: v => Array.isArray(v) && v.length > 0,
-        message: 'An order needs at least one item'
+        validator: function (v) {
+          return (Array.isArray(v) && v.length > 0) || (this.customWork?.length ?? 0) > 0;
+        },
+        message: 'An order needs at least one item or custom work'
       }
     },
 
     // ── Money ──────────────────────────────────────────────────────────────
+    customWork: { type: [CustomWorkSchema], default: [] },
+    /** Material for the custom work (only people who "See costs" get this back). */
+    customCosts: { type: [CustomCostSchema], default: [] },
+    /** The write-off posted when the order was cancelled/returned — reversed on reopen. */
+    customCostWriteOff: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
     subtotal: { type: Number, default: 0 }, // derived
     advanceAmount: {
       type: Number,
@@ -278,10 +311,12 @@ OrderSchema.pre('save', async function () {
     this.$locals.statusNote = undefined;
   }
 
-  this.subtotal = this.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
+  this.subtotal =
+    this.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0) +
+    this.customWork.reduce((sum, w) => sum + w.price, 0);
   this.total = this.subtotal;
   deriveCustomerMoney(this);
-  this.itemCount = this.items.length;
+  this.itemCount = this.items.length + this.customWork.length;
 });
 
 /** A walk-in counter sale — its "advance" is the cash taken at the counter. */

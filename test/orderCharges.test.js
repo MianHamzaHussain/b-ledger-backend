@@ -14,11 +14,15 @@ import {
 import Order from '../models/Order.js';
 import JournalEntry from '../models/JournalEntry.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { updateOrderStatus, exchangeOrder } from '../controllers/orderController.js';
+import {
+  updateOrderStatus,
+  exchangeReturn,
+  createReplacement
+} from '../controllers/orderController.js';
 import { accountBalance, partyBalance } from '../utils/ledger.js';
 import Party from '../models/Party.js';
 import { getPartyStatement } from '../controllers/partyController.js';
-import { orderExchangeSchema, orderStatusSchema } from '../schemas/orders.js';
+import { orderExchangeReturnSchema, orderStatusSchema } from '../schemas/orders.js';
 import { toPaisa } from '../utils/money.js';
 import { recordAdvance } from '../utils/customerMoney.js';
 
@@ -132,12 +136,11 @@ test('returned with a known charge books it as a return expense', async () => {
 });
 
 test('exchange schema takes an optional, non-negative pickup charge', () => {
-  const items = [{ product: 'p', variantId: 'v', quantity: 1, unitPrice: 100 }];
-  const open = orderExchangeSchema.safeParse({ items });
+  const open = orderExchangeReturnSchema.safeParse({});
   assert.equal(open.success, true);
   assert.equal(open.data.returnCharge, undefined);
-  assert.equal(orderExchangeSchema.safeParse({ items, returnCharge: -1 }).success, false);
-  const ok = orderExchangeSchema.safeParse({ items, returnCharge: 0 });
+  assert.equal(orderExchangeReturnSchema.safeParse({ returnCharge: -1 }).success, false);
+  const ok = orderExchangeReturnSchema.safeParse({ returnCharge: 0 });
   assert.equal(ok.success, true);
   assert.equal(ok.data.returnCharge, 0);
 });
@@ -147,18 +150,9 @@ test('exchange keeps the forward delivery fee and books the pickup charge', asyn
   await setStatus(order, { status: 'delivered', deliveryCharge: 180 });
 
   const delivered = await Order.findById(order._id);
-  const item = delivered.items[0];
-  await runHandler(exchangeOrder, {
+  await runHandler(exchangeReturn, {
     resource: delivered,
-    body: orderExchangeSchema.parse({
-      items: [
-        {
-          product: String(item.product),
-          variantId: String(item.variantId),
-          quantity: 1,
-          unitPrice: 2000
-        }
-      ],
+    body: orderExchangeReturnSchema.parse({
       returnCharge: 120
     })
   });
@@ -184,18 +178,9 @@ test('a charge row on the courier statement carries no COD breakdown', async () 
   const { courier, order } = await makeOrder('dispatched');
   await setStatus(order, { status: 'delivered', deliveryCharge: 150 });
   const delivered = await Order.findById(order._id);
-  const item = delivered.items[0];
-  await runHandler(exchangeOrder, {
+  await runHandler(exchangeReturn, {
     resource: delivered,
-    body: orderExchangeSchema.parse({
-      items: [
-        {
-          product: String(item.product),
-          variantId: String(item.variantId),
-          quantity: 1,
-          unitPrice: 2000
-        }
-      ],
+    body: orderExchangeReturnSchema.parse({
       returnCharge: 120
     })
   });
@@ -226,4 +211,20 @@ test('a fully prepaid parcel: the fee comes off what the courier owes us', async
   assert.equal(await accountBalance(biz._id, await acc(CODES.CASH)), toPaisa(2000), 'advance');
   // The courier keeps 200 out of the COD it sends us for other parcels.
   assert.equal(await partyBalance(biz._id, courier._id), -toPaisa(200));
+});
+
+test("createReplacement on a delivered order (the item hasn't come back) is rejected", async () => {
+  const { order } = await makeOrder('dispatched');
+  await setStatus(order, { status: 'delivered', deliveryCharge: 100 });
+  const delivered = await Order.findById(order._id);
+
+  try {
+    await runHandler(createReplacement, {
+      resource: delivered,
+      body: { items: [{ product: oid(), variantId: oid(), quantity: 1, unitPrice: 500 }] }
+    });
+    assert.fail('Should have thrown');
+  } catch (err) {
+    assert.match(err.message, /must be exchanged first/i);
+  }
 });

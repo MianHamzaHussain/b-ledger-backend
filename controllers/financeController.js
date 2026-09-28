@@ -632,6 +632,7 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
   // An order's advance or refund is undone on the order, so the order and its
   // refund-due stay in step with the books.
   if (
+    entry.source?.kind === JOURNAL_SOURCES.CUSTOM_COST ||
     entry.source?.kind === JOURNAL_SOURCES.ORDER_ADVANCE ||
     entry.source?.kind === JOURNAL_SOURCES.ORDER_REFUND
   ) {

@@ -19,30 +19,48 @@ const orderItem = z.object({
   unitPrice: money
 });
 
-export const orderCreateSchema = z.object({
-  business: id,
-  customerName: z.string().trim().min(1, 'Customer name is required'),
-  contactNumber: z.string().trim().min(1, 'Contact number is required'),
-  city: z.string().optional(),
-  deliveryAddress: z.string().optional(),
-  advanceAmount: z.coerce.number().min(0).optional(),
-  /** Where the advance (or a counter sale's "paid now") went — a money account or partner:<id>. */
-  advanceAccount: z.string().optional(),
-  source: source.optional(),
-  customerParty: id.optional(),
-  newCustomerParty: z.boolean().optional(),
-  items: z.array(orderItem).min(1, 'Add at least one item')
+const customWork = z.object({
+  description: z.string().trim().min(1, 'Describe the work').max(300),
+  price: money,
+  fromScratch: z.boolean().optional()
 });
 
-export const orderUpdateSchema = z.object({
-  business: id.optional(),
-  customerName: z.string().trim().min(1, 'Customer name is required'),
-  contactNumber: z.string().trim().min(1, 'Contact number is required'),
-  city: z.string().optional(),
-  deliveryAddress: z.string().optional(),
-  source: source.optional(),
-  items: z.array(orderItem).min(1, 'Add at least one item')
-});
+export const orderCreateSchema = z
+  .object({
+    business: id,
+    customerName: z.string().trim().min(1, 'Customer name is required'),
+    contactNumber: z.string().trim().min(1, 'Contact number is required'),
+    city: z.string().optional(),
+    deliveryAddress: z.string().optional(),
+    advanceAmount: z.coerce.number().min(0).optional(),
+    /** Where the advance (or a counter sale's "paid now") went — a money account or partner:<id>. */
+    advanceAccount: z.string().optional(),
+    source: source.optional(),
+    customerParty: id.optional(),
+    newCustomerParty: z.boolean().optional(),
+    items: z.array(orderItem).default([]),
+    customWork: z.array(customWork).max(20).default([])
+  })
+  .refine(v => v.items.length + v.customWork.length > 0, {
+    message: 'Add at least one item or custom work',
+    path: ['items']
+  });
+
+export const orderUpdateSchema = z
+  .object({
+    business: id.optional(),
+    customerName: z.string().trim().min(1, 'Customer name is required'),
+    contactNumber: z.string().trim().min(1, 'Contact number is required'),
+    city: z.string().optional(),
+    deliveryAddress: z.string().optional(),
+    source: source.optional(),
+    items: z.array(orderItem).default([]),
+    customWork: z.array(customWork).max(20).default([])
+  })
+  .refine(v => v.items.length + v.customWork.length > 0, {
+    message: 'Add at least one item or custom work',
+    path: ['items']
+  });
 
 export const orderStatusSchema = z.object({
   status: z.enum(['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled', 'returned']),
@@ -63,11 +81,15 @@ export const orderPaymentSchema = z.object({
   paymentStatus: z.enum(['unpaid', 'paid'])
 });
 
-export const orderExchangeSchema = z.object({
-  items: z.array(orderItem).min(1, 'Add at least one replacement item'),
-  courier: id.optional(),
+export const orderExchangeReturnSchema = z.object({
   /** What the courier billed to collect the original parcel — usually left for its invoice. */
-  returnCharge: z.coerce.number().min(0, 'Return charge can not be negative').optional()
+  returnCharge: z.coerce.number().min(0, 'Return charge can not be negative').optional(),
+  note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+});
+
+export const orderReplacementSchema = z.object({
+  items: z.array(orderItem).min(1, 'Add at least one replacement item'),
+  courier: id.optional()
 });
 
 /** An advance the customer sent, or a refund we paid them. */
@@ -84,4 +106,10 @@ export const orderTrackingSchema = z.object({
 
 export const orderCreditSchema = z.object({
   amount: z.coerce.number().positive('Must be more than 0')
+});
+
+export const customCostSchema = z.object({
+  description: z.string().trim().min(1, 'Describe the cost').max(200),
+  amount: z.coerce.number().positive('Must be more than 0'),
+  account: z.string().min(1, 'Choose where the money came from')
 });

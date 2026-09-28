@@ -47,7 +47,11 @@ export const CODES = {
   SALARIES: '5300',
   RENT: '5400',
   UTILITIES: '5410',
-  MISC_EXPENSE: '5900'
+  MISC_EXPENSE: '5900',
+  // Material bought for one order's custom work, held until that order is sold.
+  CUSTOM_WIP: '1330',
+  // Custom work whose order was cancelled or returned — the material is a loss.
+  CUSTOM_WRITE_OFF: '5130'
 };
 
 /** The standard chart every business is seeded with. `control` = detail by party. */
@@ -60,6 +64,7 @@ export const DEFAULT_CHART = [
   { code: CODES.COD_RECEIVABLE, name: 'COD Receivable — Courier', type: ASSET, control: true },
   { code: CODES.WHT_RECEIVABLE, name: 'Advance Tax (WHT Receivable)', type: ASSET },
   { code: CODES.INVENTORY, name: 'Inventory — Finished', type: ASSET },
+  { code: CODES.CUSTOM_WIP, name: 'Custom work in progress', type: ASSET },
   { code: CODES.WIP, name: 'Work in Progress', type: ASSET },
   { code: CODES.GOODS_ON_APPROVAL, name: 'Goods on Approval', type: ASSET, control: true },
   { code: CODES.FIXED_ASSETS, name: 'Fixed Assets', type: ASSET },
@@ -85,7 +90,8 @@ export const DEFAULT_CHART = [
   { code: CODES.SALARIES, name: 'Salaries', type: EXPENSE },
   { code: CODES.RENT, name: 'Rent', type: EXPENSE },
   { code: CODES.UTILITIES, name: 'Utilities', type: EXPENSE },
-  { code: CODES.MISC_EXPENSE, name: 'Miscellaneous', type: EXPENSE }
+  { code: CODES.MISC_EXPENSE, name: 'Miscellaneous', type: EXPENSE },
+  { code: CODES.CUSTOM_WRITE_OFF, name: 'Custom work written off', type: EXPENSE }
 ];
 
 /**

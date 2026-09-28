@@ -120,6 +120,8 @@ export const JOURNAL_SOURCES = {
   // A customer's advance on an order, and money paid back to them.
   ORDER_ADVANCE: 'order-advance',
   ORDER_REFUND: 'order-refund',
+  // Material bought for an order's custom work, and where it went at the outcome.
+  CUSTOM_COST: 'custom-cost',
   // A courier's invoice: the COD it paid and the charges it billed, by parcel.
   COURIER_INVOICE: 'courier-invoice',
   // Money moved between two of the business's own places (cash to bank, a
