@@ -13,7 +13,6 @@ import {
   postOrderSale,
   postOrderRemittance,
   postReturnCharge,
-  postDeliveryCharge,
   computeRemittance
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
@@ -33,6 +32,13 @@ import {
   writeOffCustomWip
 } from '../utils/customCost.js';
 import { upsertCustomerParty } from '../utils/customerParty.js';
+import {
+  assertExchangeable,
+  convertSaleToCredit,
+  receiveReturnedGoods,
+  creditForReplacement,
+  markCreditMoved
+} from '../utils/exchange.js';
 import {
   ORDER_STATUS,
   ORDER_TRANSITIONS,
@@ -260,6 +266,8 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   const total =
     lineItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0) +
     customWork.reduce((s, w) => s + w.price, 0);
+  // A reduction ("no dupatta") can lower the price, but never below nothing.
+  if (total < 0) return next(new ErrorResponse("The order total can't be below 0", 400));
   const owed = Math.max(0, total - advanceAmount);
   if (advanceAmount > total) {
     return next(new ErrorResponse('The advance is more than the order total', 400));
@@ -394,6 +402,7 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   const newTotal =
     newItems.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0) +
     customWork.reduce((s, w) => s + w.price, 0);
+  if (newTotal < 0) return next(new ErrorResponse("The order total can't be below 0", 400));
   if (order.advanceAmount > newTotal) {
     return next(
       new ErrorResponse(
@@ -444,113 +453,134 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   res.status(200).json({ success: true, data: order });
 });
 
-/**
- * @desc   Exchange Step 1: reverse the original delivered order (put goods back,
- *         reverse sale, refund COD, book return charge). Leaves it in EXCHANGED status.
- * @route  POST /api/v1/orders/:id/exchange-return  (orders:update — scoped)
- */
-export const exchangeReturn = asyncHandler(async (req, res, next) => {
-  const original = req.resource;
-
-  if (original.status !== ORDER_STATUS.DELIVERED) {
-    return next(new ErrorResponse('Only a delivered order can be exchanged.', 400));
-  }
-  if (original.exchangedFor) {
-    return next(new ErrorResponse('This order has already been exchanged.', 400));
-  }
-
-  // Unwind the original: goods back to inventory, sale reversed, COD refunded.
-  await releaseStock(original.items);
-  if (original.saleEntry) {
-    await reverseEntry(original.saleEntry, {
-      userId: req.user.id,
-      memo: `Exchange of order ${original.orderNumber}`
-    });
-    // The reversal took the forward delivery fee out with the sale, but the
-    // courier did deliver the parcel — that cost stands, so re-book it.
-    if (original.courier && original.deliveryChargePaisa > 0) {
-      await postDeliveryCharge(original, fromPaisa(original.deliveryChargePaisa), req.user.id);
-    }
-  }
-  if (original.paymentEntry) {
-    await reverseEntry(original.paymentEntry, {
-      userId: req.user.id,
-      memo: `Refund on exchange — order ${original.orderNumber}`
-    });
-  }
-  // Collecting the original parcel is a courier leg of its own. Its charge is
-  // usually billed on the courier invoice; given here, it is booked now.
-  if (req.body.returnCharge != null) {
-    const returnChargePaisa = toPaisa(req.body.returnCharge);
-    original.returnChargePaisa = returnChargePaisa;
-    if (returnChargePaisa > 0) {
-      await postReturnCharge(original, fromPaisa(returnChargePaisa), req.user.id);
-    }
-  }
-
-  original.status = ORDER_STATUS.EXCHANGED;
-  original.$locals.statusNote = req.body.note;
-  original.updatedBy = req.user.id;
-  await original.save();
-
-  res.status(200).json({ success: true, data: original });
-});
+/** Book the pickup charge now, when the courier's bill is already known. */
+const bookReturnCharge = async (order, returnCharge, userId) => {
+  if (returnCharge == null) return;
+  const returnChargePaisa = toPaisa(returnCharge);
+  order.returnChargePaisa = returnChargePaisa;
+  if (returnChargePaisa > 0) await postReturnCharge(order, fromPaisa(returnChargePaisa), userId);
+};
 
 /**
- * @desc   Exchange Step 2: create the linked replacement order for the new items.
- * @route  POST /api/v1/orders/:id/exchange-replacement  (orders:update — scoped)
+ * Create the replacement for an exchanged order — same customer, new items —
+ * carrying the original's credit, so its COD is only the price difference.
+ * Stock is reserved first, then `beforeCreate` runs (a swap turns the sale into
+ * credit there); if anything fails the stock is given back and that step undone.
  */
-export const createReplacement = asyncHandler(async (req, res, next) => {
-  const original = req.resource;
-
-  if (original.status !== ORDER_STATUS.EXCHANGED) {
-    return next(new ErrorResponse('The original order must be exchanged first.', 400));
-  }
-  if (original.exchangedFor) {
-    return next(new ErrorResponse('This order has already been replaced.', 400));
-  }
-
-  const { items } = req.body;
-  if (!Array.isArray(items) || items.length === 0) {
-    return next(new ErrorResponse('Add at least one replacement item', 400));
-  }
-
+const makeReplacement = async (original, { items, courier }, userId, beforeCreate) => {
   const business = original.business;
   // The replacement inherits the original's courier unless a new one is chosen.
-  const courier = req.body.courier
-    ? await resolveCourier(business, req.body.courier)
-    : original.courier;
-
+  const replacementCourier = courier ? await resolveCourier(business, courier) : original.courier;
   const newItems = await buildLineItems(business, items);
-
-  // Reserve the replacement stock
   await reserveStock(newItems);
-
+  let undo;
   try {
-    // The replacement — same customer, new items, linked back to the original.
+    undo = beforeCreate ? await beforeCreate() : null;
+    const credit = creditForReplacement(original, userId);
     const replacement = await Order.create({
       business,
       customer: original.customer,
-      courier,
+      courier: replacementCourier,
       source: original.source,
       customerName: original.customerName,
       contactNumber: original.contactNumber,
       city: original.city,
       deliveryAddress: original.deliveryAddress,
       items: newItems,
+      customerMoney: credit ? [credit] : [],
       exchangeOf: original._id,
-      createdBy: req.user.id
+      createdBy: userId
     });
-
-    original.exchangedFor = replacement._id;
-    original.updatedBy = req.user.id;
-    await original.save();
-
-    res.status(201).json({ success: true, data: replacement });
+    markCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
+    return replacement;
   } catch (err) {
     await releaseStock(newItems);
-    next(err);
+    if (undo) await undo();
+    throw err;
   }
+};
+
+/**
+ * @desc   Exchange, return first: the old item is back. Its stock returns and its
+ *         sale becomes the customer's credit, waiting for the replacement. The
+ *         courier's COD, delivery charge and taxes stand — they happened.
+ * @route  POST /api/v1/orders/:id/exchange-return  (orders:update — scoped)
+ */
+export const exchangeReturn = asyncHandler(async (req, res) => {
+  const original = req.resource;
+  assertExchangeable(original);
+
+  await convertSaleToCredit(original, req.user.id);
+  await receiveReturnedGoods(original, req.user.id);
+  await bookReturnCharge(original, req.body.returnCharge, req.user.id);
+  if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
+  original.$locals.statusNote = req.body.note;
+  await original.save();
+
+  res.status(200).json({ success: true, data: original });
+});
+
+/**
+ * @desc   Exchange, step 2 of return first: send the replacement, carrying the credit.
+ * @route  POST /api/v1/orders/:id/exchange-replacement  (orders:update — scoped)
+ */
+export const createReplacement = asyncHandler(async (req, res, next) => {
+  const original = req.resource;
+  if (original.status !== ORDER_STATUS.EXCHANGED) {
+    return next(new ErrorResponse('Record the item coming back first', 400));
+  }
+  if (original.exchangedFor) {
+    return next(new ErrorResponse('A replacement was already sent for this order', 400));
+  }
+
+  const replacement = await makeReplacement(original, req.body, req.user.id);
+  await original.save();
+  res.status(201).json({ success: true, data: replacement });
+});
+
+/**
+ * @desc   Exchange, swap at the door: the replacement goes out now and the rider
+ *         brings the old item back on the courier's reversal tracking number.
+ *         The sale becomes credit at once (the replacement's COD needs it); the
+ *         stock comes back when the old item is received.
+ * @route  POST /api/v1/orders/:id/swap  (orders:update — scoped)
+ */
+export const swapOrder = asyncHandler(async (req, res) => {
+  const original = req.resource;
+  assertExchangeable(original);
+
+  // The sale turns into credit only once the replacement stock is reserved, so
+  // a shortfall leaves the original untouched.
+  const replacement = await makeReplacement(original, req.body, req.user.id, async () => {
+    const entry = await convertSaleToCredit(original, req.user.id);
+    return entry
+      ? () => reverseEntry(entry._id, { userId: req.user.id, memo: 'Swap not completed' })
+      : null;
+  });
+  original.awaitingReturn = true;
+  if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
+  original.$locals.statusNote = req.body.note;
+  await original.save();
+
+  res.status(201).json({ success: true, data: replacement });
+});
+
+/**
+ * @desc   Swap at the door: the old item has arrived back — its stock returns.
+ * @route  POST /api/v1/orders/:id/receive-return  (orders:update — scoped)
+ */
+export const receiveReturn = asyncHandler(async (req, res, next) => {
+  const original = req.resource;
+  if (!original.awaitingReturn) {
+    return next(new ErrorResponse('This order is not waiting for an item to come back', 400));
+  }
+  await receiveReturnedGoods(original, req.user.id);
+  await bookReturnCharge(original, req.body.returnCharge, req.user.id);
+  if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
+  original.updatedBy = req.user.id;
+  await original.save();
+
+  res.status(200).json({ success: true, data: original });
 });
 
 /**

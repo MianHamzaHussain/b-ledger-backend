@@ -10,7 +10,8 @@ import {
   getBusiness,
   createBusiness,
   updateBusiness,
-  deleteBusiness
+  deleteBusiness,
+  getGettingStarted
 } from '../controllers/businessController.js';
 
 const router = express.Router();
@@ -103,6 +104,25 @@ router
  *     responses:
  *       200: { description: Business deleted }
  */
+/**
+ * @openapi
+ * /businesses/{id}/getting-started:
+ *   get:
+ *     summary: Getting-started checklist — which setup steps this business has done
+ *     tags: [Businesses]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "{ category, business, moneyAccounts, capital, khataPeople, khataEntry, products, production, order, delivered, courierInvoice } booleans" }
+ */
+router.get(
+  '/:id/getting-started',
+  can('businesses', 'read'),
+  loadScoped(Business),
+  getGettingStarted
+);
+
 router
   .route('/:id')
   .get(can('businesses', 'read'), loadScoped(Business), getBusiness)

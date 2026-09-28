@@ -4,7 +4,7 @@ import { postEntry, reverseEntry } from './ledger.js';
 import { orderLabel } from './orderPosting.js';
 import { toPaisa } from './money.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
-import { isCounterSale } from '../models/Order.js';
+import { isCounterSale, heldPaisaOf } from '../models/Order.js';
 import { upsertCustomerParty } from './customerParty.js';
 /**
  * Money that passes directly between the customer and us on an order — an
@@ -31,11 +31,6 @@ const TAKES_ADVANCE = new Set([
 const NOT_SOLD = new Set([ORDER_STATUS.CANCELLED, ORDER_STATUS.RETURNED, ORDER_STATUS.EXCHANGED]);
 
 const formatRupees = rupees => `Rs ${Number(rupees).toLocaleString('en-PK')}`;
-const heldPaisaOf = order =>
-  order.customerMoney.reduce(
-    (s, m) => s + (m.kind === 'advance' ? m.amountPaisa : -m.amountPaisa),
-    0
-  );
 
 /**
  * Record an advance the customer sent. Before dispatch it lowers the COD; after
@@ -122,6 +117,9 @@ export const recordRefund = async (order, { amount, money, date, note, userId })
 export const removeCustomerMoney = async (order, rowId, userId) => {
   const row = order.customerMoney.id(rowId);
   if (!row) throw new ErrorResponse('That payment is not on this order', 404);
+  if (row.kind.startsWith('transfer')) {
+    throw new ErrorResponse("An exchange credit can't be removed on its own", 400);
+  }
 
   const heldAfter = heldPaisaOf(order) + (row.kind === 'advance' ? -1 : 1) * row.amountPaisa;
   if (heldAfter < 0) {

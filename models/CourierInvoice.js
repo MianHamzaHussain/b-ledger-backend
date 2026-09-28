@@ -11,7 +11,8 @@ const CourierInvoiceSchema = new mongoose.Schema(
   {
     business: { type: mongoose.Schema.ObjectId, ref: 'Business', required: true },
     courier: { type: mongoose.Schema.ObjectId, ref: 'Party', required: true },
-    invoiceNumber: { type: String, required: true, trim: true, maxlength: 60 },
+    /** Optional — some invoices carry none (a TCS week can have a blank number). */
+    invoiceNumber: { type: String, trim: true, maxlength: 60 },
     invoiceDate: { type: Date },
     /**
      * The one ledger entry the invoice posted — absent only for an invoice that
@@ -35,8 +36,18 @@ const CourierInvoiceSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// One record per courier invoice number — entering the same invoice twice would
-// pay its orders twice. (A reversed invoice's record is removed, freeing it.)
-CourierInvoiceSchema.index({ business: 1, courier: 1, invoiceNumber: 1 }, { unique: true });
+// A typed invoice number is unique per courier, so the same invoice can't be entered
+// twice. Partial: invoices without a number aren't held to it (a missing value
+// would otherwise count as a duplicate null); the per-parcel checks still stop a
+// COD or charge being settled twice. A reversed invoice's record is removed,
+// freeing its number.
+CourierInvoiceSchema.index(
+  { business: 1, courier: 1, invoiceNumber: 1 },
+  {
+    unique: true,
+    name: 'invoice_number_per_courier',
+    partialFilterExpression: { invoiceNumber: { $type: 'string' } }
+  }
+);
 
 export default mongoose.model('CourierInvoice', CourierInvoiceSchema);

@@ -242,3 +242,23 @@ test('a material cost entry is undone on its order, never from the journal', asy
     /from its order/
   );
 });
+
+test('a reduction lowers the price ("no dupatta"), and a free change is allowed', async () => {
+  const ctx = await setup();
+  const order = await newOrder(ctx, {
+    customWork: [
+      { description: 'No dupatta', price: -800 },
+      { description: 'Better stitching', price: 0 }
+    ]
+  });
+  assert.equal(order.total, 2200);
+  assert.equal(order.codAmount, 2200, 'the courier collects the lower price');
+});
+
+test('a reduction can not take the total below 0', async () => {
+  const ctx = await setup();
+  await assert.rejects(
+    newOrder(ctx, { customWork: [{ description: 'Everything off', price: -5000 }] }),
+    /can't be below 0/
+  );
+});

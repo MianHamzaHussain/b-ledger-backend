@@ -179,9 +179,9 @@ router.get('/:id/courier-items', can('journal', 'read'), loadScoped(Party), getC
  *         application/json:
  *           schema:
  *             type: object
- *             required: [invoiceNumber]
+ *             required: []
  *             properties:
- *               invoiceNumber: { type: string }
+ *               invoiceNumber: { type: string, description: "Optional — some invoices carry none" }
  *               invoiceDate: { type: string }
  *               received: { type: number, description: "What arrived; 0 if the courier only deducted charges" }
  *               account: { type: string, description: "Money account id or partner:<id> it arrived in" }

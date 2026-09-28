@@ -106,10 +106,15 @@ export const recordCourierInvoice = async ({
   userId
 }) => {
   const business = courier.business;
-  const number = String(invoiceNumber).trim();
-  if (await CourierInvoice.exists({ business, courier: courier._id, invoiceNumber: number })) {
+  const number = invoiceNumber ? String(invoiceNumber).trim() : '';
+  if (
+    number &&
+    (await CourierInvoice.exists({ business, courier: courier._id, invoiceNumber: number }))
+  ) {
     throw new ErrorResponse(`Invoice ${number} from ${courier.name} is already recorded`, 400);
   }
+  // How the entry reads — by number when there is one.
+  const title = number ? `Invoice ${number}` : 'Courier invoice';
   if (codOrderIds.length === 0 && charges.length === 0) {
     throw new ErrorResponse('Tick the parcels this invoice covers', 400);
   }
@@ -170,13 +175,13 @@ export const recordCourierInvoice = async ({
     lines.push({
       account: (await acc(CODES.COD_RECEIVABLE))._id,
       party: courier._id,
-      label: `Invoice ${number}`,
+      label: title,
       creditPaisa
     });
     entry = await postEntry({
       business,
       date: invoiceDate,
-      memo: memo || `Invoice ${number} — ${courier.name}`,
+      memo: memo || `${title} — ${courier.name}`,
       source: { kind: JOURNAL_SOURCES.COURIER_INVOICE, ref: String(courier._id) },
       lines,
       userId
@@ -188,7 +193,7 @@ export const recordCourierInvoice = async ({
     invoice = await CourierInvoice.create({
       business,
       courier: courier._id,
-      invoiceNumber: number,
+      invoiceNumber: number || undefined,
       invoiceDate,
       entry: entry?._id,
       receivedPaisa,
@@ -203,7 +208,7 @@ export const recordCourierInvoice = async ({
     });
   } catch (err) {
     // Someone recorded the same invoice a moment ago — undo ours.
-    if (entry) await reverseEntry(entry._id, { userId, memo: `Duplicate of invoice ${number}` });
+    if (entry) await reverseEntry(entry._id, { userId, memo: `Duplicate of ${title}` });
     if (err?.code === 11000) {
       throw new ErrorResponse(`Invoice ${number} from ${courier.name} is already recorded`, 400);
     }

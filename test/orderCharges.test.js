@@ -225,6 +225,6 @@ test("createReplacement on a delivered order (the item hasn't come back) is reje
     });
     assert.fail('Should have thrown');
   } catch (err) {
-    assert.match(err.message, /must be exchanged first/i);
+    assert.match(err.message, /coming back first/i);
   }
 });

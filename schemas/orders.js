@@ -21,7 +21,8 @@ const orderItem = z.object({
 
 const customWork = z.object({
   description: z.string().trim().min(1, 'Describe the work').max(300),
-  price: money,
+  /** Extra charged (positive), a reduction such as "no dupatta" (negative), or 0 for a free change. */
+  price: z.coerce.number({ error: 'Enter the price' }),
   fromScratch: z.boolean().optional()
 });
 
@@ -81,9 +82,21 @@ export const orderPaymentSchema = z.object({
   paymentStatus: z.enum(['unpaid', 'paid'])
 });
 
+const reversalTrackingId = z.string().trim().max(60).optional();
+
 export const orderExchangeReturnSchema = z.object({
   /** What the courier billed to collect the original parcel — usually left for its invoice. */
   returnCharge: z.coerce.number().min(0, 'Return charge can not be negative').optional(),
+  /** The courier's reversal tracking number for the pickup — it is charged like any parcel. */
+  reversalTrackingId,
+  note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+});
+
+/** Swap at the door: the replacement's items, and the reversal that brings the old one back. */
+export const orderSwapSchema = z.object({
+  items: z.array(orderItem).min(1, 'Add at least one replacement item'),
+  courier: id.optional(),
+  reversalTrackingId,
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
 });
 

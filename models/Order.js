@@ -22,7 +22,16 @@ const StatusEventSchema = new mongoose.Schema(
  */
 const CustomerMoneySchema = new mongoose.Schema(
   {
-    kind: { type: String, enum: ['advance', 'refund', 'credit'], required: true },
+    /**
+     * advance / refund / credit move real money (each has its entry). The two
+     * transfer kinds only move an exchange credit from the original order to its
+     * replacement — the money already sits in Advances from customers.
+     */
+    kind: {
+      type: String,
+      enum: ['advance', 'refund', 'credit', 'transfer-in', 'transfer-out'],
+      required: true
+    },
     amountPaisa: { type: Number, required: true, min: 1 },
     /** The money account it went into / came out of — or a partner, personally. */
     account: { type: mongoose.Schema.ObjectId, ref: 'Account' },
@@ -31,11 +40,27 @@ const CustomerMoneySchema = new mongoose.Schema(
     accountName: { type: String },
     date: { type: Date, default: Date.now },
     note: { type: String, trim: true, maxlength: 300 },
-    entry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry', required: true },
+    entry: {
+      type: mongoose.Schema.ObjectId,
+      ref: 'JournalEntry',
+      required: function () {
+        return !this.kind?.startsWith('transfer');
+      }
+    },
     by: { type: mongoose.Schema.ObjectId, ref: 'User' }
   },
   { _id: true }
 );
+
+/** Kinds that add to what the order holds for the customer. */
+const MONEY_IN = new Set(['advance', 'transfer-in']);
+
+/** What the order holds for the customer (paisa): money in, less refunds, credits and transfers out. */
+export const heldPaisaOf = order =>
+  (order.customerMoney || []).reduce(
+    (s, m) => s + (MONEY_IN.has(m.kind) ? m.amountPaisa : -m.amountPaisa),
+    0
+  );
 
 /** Statuses after which the COD is fixed — the courier has it on the airway bill. */
 const COD_FROZEN = new Set([
@@ -88,8 +113,8 @@ const OrderItemSchema = new mongoose.Schema(
 const CustomWorkSchema = new mongoose.Schema(
   {
     description: { type: String, required: true, trim: true, maxlength: 300 },
-    /** What the customer pays for it (rupees). */
-    price: { type: Number, required: true, min: 0 },
+    /** What it adds to the price (rupees) — negative for a reduction ("no dupatta"). */
+    price: { type: Number, required: true },
     /** Made from scratch — no stock item behind it. */
     fromScratch: { type: Boolean, default: false }
   },
@@ -264,6 +289,13 @@ const OrderSchema = new mongoose.Schema(
     exchangeOf: { type: mongoose.Schema.ObjectId, ref: 'Order' },
     /** On the original order: the replacement created for it. */
     exchangedFor: { type: mongoose.Schema.ObjectId, ref: 'Order' },
+    /**
+     * The courier's reversal tracking number — the pickup that brings the old item
+     * back. It is a parcel of its own (and charged), so it must be findable.
+     */
+    reversalTrackingId: { type: String, trim: true },
+    /** Swap at the door: the replacement went out; the old item is still on its way back. */
+    awaitingReturn: { type: Boolean, default: false },
 
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User', required: true },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
@@ -279,6 +311,7 @@ OrderSchema.index({ business: 1, refundDuePaisa: 1 });
 // Scan-to-find: a courier tracking number resolves to its order. Sparse — most
 // orders have no tracking id until they are dispatched.
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
+OrderSchema.index({ business: 1, reversalTrackingId: 1 }, { sparse: true });
 OrderSchema.index({ 'items.product': 1, 'items.variantId': 1 }); // price-hint lookup
 
 /**
@@ -331,10 +364,7 @@ export const isCounterSale = order => !order.courier && order.source === SALES_C
 function deriveCustomerMoney(order) {
   const totalPaisa = Math.round(order.total * 100);
   if (!isCounterSale(order)) {
-    const heldPaisa = order.customerMoney.reduce(
-      (s, m) => s + (m.kind === 'advance' ? m.amountPaisa : -m.amountPaisa),
-      0
-    );
+    const heldPaisa = heldPaisaOf(order);
     order.advanceAmount = heldPaisa / 100;
     // Before dispatch the COD follows the advance; frozen after.
     if (order.isNew || !COD_FROZEN.has(order.status)) {

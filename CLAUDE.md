@@ -474,7 +474,7 @@ until an invoice bills it (§10.2). `utils/orderPosting.js`:
 | dispatched | courier + **tracking id** (both required) | nothing                                                                                                                                                                              |
 | delivered  | delivery charge (optional, may be 0)      | sale + COGS; COD net of fee + FBR taxes to COD-receivable [courier]. A fee larger than the COD (a **prepaid** order) leaves a _credit_ there — the courier keeps it out of other COD |
 | returned   | return charge (optional, may be 0)        | sale reversed; Dr Return charges / **Cr COD-receivable [courier]** — couriers deduct charges from COD, so cash never moves                                                           |
-| exchanged  | pickup charge (optional, may be 0)        | sale reversed; the original **delivery fee is re-booked** (the courier did deliver); pickup charge as above                                                                          |
+| exchanged  | pickup charge (optional, may be 0)        | the sale becomes customer **credit** for the replacement; COD, delivery fee and taxes stand (§10.2b)                                                                                 |
 
 ### 10.2 Courier invoice
 
@@ -491,7 +491,7 @@ because TCS bills a parcel's charge one week and pays its COD the next.
   Ticked CODs become paid (`courierSettlement` = the entry); charges are stored
   on the orders with their entry. A shortfall simply stays on the courier's
   balance. The courier's `defaultMoneyAccount` remembers where money landed.
-- **Invoice numbers are unique per courier** (`CourierInvoice` record).
+- **Invoice number is optional** (a TCS week can have none). When one is typed it is unique per courier (partial index); the per-parcel checks stop double settling either way.
 - **Reversing** the entry reopens its CODs and charges and frees the number
   (`undoCourierInvoice`). An order paid this way can't be marked unpaid, and a
   courier order is never marked paid by hand.
@@ -524,6 +524,40 @@ delivery. `utils/customerMoney.js` (`POST /orders/:id/advances`, `/refunds`,
   from the journal; they're undone on the order.
 - A **counter sale** is different: its "paid now" goes into the sale itself,
   into `counterAccount`, with no liability.
+
+### 10.2b Exchanges — the customer's payment becomes credit
+
+An exchange never refunds and re-charges. `utils/exchange.js`:
+
+- **Sale → credit**: Dr Sales / Cr Advances from customers (total). The order
+  gets a `transfer-in` row for the COD part, since its advances were already
+  held. The courier's COD receivable, delivery charge and FBR taxes are
+  **untouched** — the courier did deliver and collect.
+- **Goods back**: `releaseStock` + Dr Inventory / Cr COGS.
+- **Replacement** carries the credit (`transfer-in` on it, `transfer-out` on
+  the original; rows only, no entry). Its COD is the price difference. If the new
+  items cost less, the excess is a refund due.
+- **Return first** (`/exchange-return`, then `/exchange-replacement`) does
+  sale → credit and goods back together.
+- **Swap at the door** (`/swap`, then `/receive-return`): sale → credit and the
+  replacement at once (stock reserved first, the credit entry undone if creating
+  fails). `awaitingReturn` stays set until the old item is received.
+- **Reversal tracking**: the courier's pickup is its own tracking number
+  (`reversalTrackingId`, searchable) and its own charge (the original's return
+  charge, billed on the invoice).
+- **Counter sales** aren't exchanged here — only courier parcels.
+
+### 10.2c Custom work and its material
+
+- **Custom work lines** (`order.customWork`) add to the total. A negative price is
+  a reduction ("no dupatta"), 0 is a free change, and the total can't go below 0.
+  Made-from-scratch work needs no stock item.
+- **Material bought for it** (`/custom-costs`, needs "See costs & profit";
+  pending or confirmed only):
+  - when spent: Dr Custom work in progress (1330) / Cr money;
+  - at delivery: moves to COGS;
+  - on cancel or return: written off (5130), and reopening reverses the write-off.
+- These entries are undone on the order, never from the journal.
 
 ### 10.3 Party transactions — "You gave" / "You got"
 

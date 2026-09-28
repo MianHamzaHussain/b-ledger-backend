@@ -14,7 +14,8 @@ import { JOURNAL_SOURCES, SALES_CHANNELS } from './constants.js';
  * an expense at that moment. All amounts convert rupees → integer paisa.
  */
 
-const cogsPaisaOf = order =>
+/** Cost of the goods on an order (paisa) — what the sale moved out of inventory. */
+export const cogsPaisaOf = order =>
   order.items.reduce((sum, i) => sum + toPaisa(i.unitCost) * i.quantity, 0);
 
 /** "Order #0034 · TCS0349912345" — the courier statement row label. */

@@ -36,11 +36,13 @@ export const partyTransactionSchema = z.object({
 
 /** A courier's invoice — what it paid (COD per order) and billed (charge per parcel). */
 export const courierInvoiceSchema = z.object({
+  /** Optional — some courier invoices carry none; the tracking numbers are what settle. */
   invoiceNumber: z
     .string()
     .trim()
-    .min(1, 'Enter the invoice number')
-    .max(60, 'Invoice number is too long'),
+    .max(60, 'Invoice number is too long')
+    .optional()
+    .transform(v => v || undefined),
   invoiceDate: z.union([z.string(), z.date()]).optional(),
   /** What actually arrived — 0 on a week the courier only deducted charges. */
   received: z.coerce.number().min(0, 'Can not be negative').default(0),

@@ -270,3 +270,29 @@ test('profit says how many parcels still wait for the courier to bill them', asy
   });
   assert.equal((await profitAndLoss(ctx.biz._id)).unbilledCharges, 1);
 });
+
+test('an invoice needs no number — the tracking numbers are what settle', async () => {
+  const ctx = await setup();
+  const a = await parcel(ctx);
+  const b = await parcel(ctx);
+  const cash = await cashAccount(ctx.biz);
+
+  // Two weeks, neither with a number (a TCS week can have a blank one).
+  const first = await invoice(ctx.courier, {
+    invoiceNumber: '',
+    received: 1920,
+    account: cash,
+    cod: [String(a._id)]
+  });
+  assert.equal(first.body.data.invoice.invoiceNumber, undefined);
+  await invoice(ctx.courier, {
+    charges: [{ order: String(b._id), kind: 'delivery', amount: 200 }]
+  });
+  assert.equal(await CourierInvoice.countDocuments(), 2);
+
+  // The per-parcel check still stops paying the same COD twice.
+  await assert.rejects(
+    invoice(ctx.courier, { received: 1920, account: cash, cod: [String(a._id)] }),
+    /no unpaid COD/
+  );
+});

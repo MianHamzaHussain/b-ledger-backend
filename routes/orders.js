@@ -15,6 +15,7 @@ import {
   orderStatusSchema,
   orderPaymentSchema,
   orderExchangeReturnSchema,
+  orderSwapSchema,
   orderReplacementSchema,
   orderTrackingSchema,
   orderNoteSchema,
@@ -30,6 +31,8 @@ import {
   updateOrder,
   exchangeReturn,
   createReplacement,
+  swapOrder,
+  receiveReturn,
   updateOrderStatus,
   updateOrderPayment,
   updateOrderTracking,
@@ -123,8 +126,8 @@ router
     advancedResults(
       Order,
       null,
-      ['orderNumber', 'customerName', 'contactNumber', 'trackingId'],
-      'orderNumber dailySerial orderDay customerName city trackingId status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount'
+      ['orderNumber', 'customerName', 'contactNumber', 'trackingId', 'reversalTrackingId'],
+      'orderNumber dailySerial orderDay customerName city trackingId status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount reversalTrackingId awaitingReturn'
     ),
     getOrders
   )
@@ -229,6 +232,44 @@ router.post(
   loadScoped(Order),
   validate(orderReplacementSchema),
   createReplacement
+);
+
+/**
+ * @openapi
+ * /orders/{id}/swap:
+ *   post:
+ *     summary: Exchange by swapping at the door — the replacement goes out now
+ *     description: >
+ *       The original's sale becomes the customer's credit, which the replacement
+ *       carries (its COD is the price difference). The old item comes back on the
+ *       courier's reversal tracking number; its stock returns on receive-return.
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       201: { description: The replacement order }
+ * /orders/{id}/receive-return:
+ *   post:
+ *     summary: Swap at the door — the old item has arrived back (stock returns)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: The original order }
+ */
+router.post(
+  '/:id/swap',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderSwapSchema),
+  swapOrder
+);
+router.post(
+  '/:id/receive-return',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderExchangeReturnSchema),
+  receiveReturn
 );
 
 router.put(
