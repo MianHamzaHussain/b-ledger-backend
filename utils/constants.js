@@ -38,7 +38,8 @@ export const ORDER_TRANSITIONS = {
   // only thing left is payment — delivered is terminal on the fulfillment axis.
   dispatched: ['delivered', 'returned'],
   delivered: [],
-  cancelled: [],
+  // A cancelled order can be reopened
+  cancelled: ['pending'],
   returned: []
 };
 

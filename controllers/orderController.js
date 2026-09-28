@@ -20,7 +20,13 @@ import { notify } from '../utils/notify.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
-import { recordAdvance, recordRefund, removeCustomerMoney } from '../utils/customerMoney.js';
+import {
+  recordAdvance,
+  recordRefund,
+  removeCustomerMoney,
+  keepAsCredit
+} from '../utils/customerMoney.js';
+import { upsertCustomerParty } from '../utils/customerParty.js';
 import {
   ORDER_STATUS,
   ORDER_TRANSITIONS,
@@ -173,30 +179,6 @@ const resolveCustomerParty = async (business, partyId) => {
   const party = await Party.findOne({ _id: partyId, business, type: PARTY_TYPES.CUSTOMER });
   if (!party)
     throw new ErrorResponse('That customer is not a customer party of this business', 400);
-  return party._id;
-};
-
-/**
- * Create a customer party straight from the details already on the order (its
- * name + contact number), so an unpaid walk-in never re-asks for them. Upserts
- * by phone within the business so a repeat credit buyer folds into one running
- * account rather than spawning a duplicate statement each visit.
- */
-const upsertCustomerParty = async (business, name, phone, userId) => {
-  if (!phone)
-    throw new ErrorResponse('A contact number is required to record a customer on credit', 400);
-  // Bake the phone into the party name — a common first name ("Ali") stays
-  // distinguishable everywhere the party is shown by name alone. Phone is still
-  // kept as its own field so dedup-by-phone and phone search keep working.
-  const label = `${name} - ${phone}`;
-  const party = await Party.findOneAndUpdate(
-    { business, type: PARTY_TYPES.CUSTOMER, phone },
-    {
-      $set: { name: label },
-      $setOnInsert: { business, type: PARTY_TYPES.CUSTOMER, phone, createdBy: userId }
-    },
-    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-  );
   return party._id;
 };
 
@@ -606,6 +588,11 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     await releaseStock(order.items);
   }
 
+  // Reopening a cancelled order holds its stock again (throws if it's gone).
+  if (order.status === ORDER_STATUS.CANCELLED && status === ORDER_STATUS.PENDING) {
+    await reserveStock(order.items);
+  }
+
   // Delivery is where revenue and cost of goods are recognised (once).
   if (status === ORDER_STATUS.DELIVERED && !order.saleEntry) {
     const entry = await postOrderSale(order, req.user.id);
@@ -813,4 +800,14 @@ export const deleteOrderMoney = asyncHandler(async (req, res) => {
   const order = req.resource;
   await removeCustomerMoney(order, req.params.rowId, req.user.id);
   res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Keep a cancelled/returned order's refund due as credit on the customer's khata.
+ * @route  POST /api/v1/orders/:id/credit  (orders:update — scoped)
+ */
+export const keepOrderCredit = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  await keepAsCredit(order, { amount: req.body.amount, userId: req.user.id });
+  res.status(201).json({ success: true, data: order });
 });

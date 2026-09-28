@@ -12,17 +12,23 @@ import {
 import Order from '../models/Order.js';
 import JournalEntry from '../models/JournalEntry.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { accountBalance } from '../utils/ledger.js';
+import { accountBalance, partyBalance } from '../utils/ledger.js';
 import {
   createOrder,
   updateOrder,
   updateOrderStatus,
   addOrderAdvance,
   addOrderRefund,
-  deleteOrderMoney
+  deleteOrderMoney,
+  keepOrderCredit
 } from '../controllers/orderController.js';
 import { reverseJournalEntry } from '../controllers/financeController.js';
-import { orderCreateSchema, orderMoneySchema, orderStatusSchema } from '../schemas/orders.js';
+import {
+  orderCreateSchema,
+  orderMoneySchema,
+  orderStatusSchema,
+  orderCreditSchema
+} from '../schemas/orders.js';
 import { toPaisa } from '../utils/money.js';
 
 /**
@@ -224,4 +230,48 @@ test("a counter sale's payment goes into the account chosen, in the sale itself"
   assert.equal(order.customerMoney.length, 0);
   assert.equal(await balance(ctx, ctx.bank), toPaisa(3000));
   assert.equal(await balance(ctx, ctx.liability), 0, 'no advance liability for a counter sale');
+});
+
+test('cancel with advance, then keep as credit', async () => {
+  const ctx = await setup();
+  let order = await newOrder(ctx, { advanceAmount: 800, advanceAccount: ctx.cash });
+  order = await setStatus(order, { status: 'cancelled' });
+
+  const out = await runHandler(keepOrderCredit, {
+    resource: order,
+    body: orderCreditSchema.parse({ amount: 800 })
+  });
+  order = await Order.findById(out.body.data._id);
+
+  assert.equal(order.refundDuePaisa, 0);
+  assert.equal(await balance(ctx, ctx.liability), 0);
+  assert.equal(await partyBalance(ctx.biz._id, order.customerParty), -toPaisa(800));
+});
+
+test('credit on a pending order is refused', async () => {
+  const ctx = await setup();
+  const order = await newOrder(ctx, { advanceAmount: 800, advanceAccount: ctx.cash });
+
+  await assert.rejects(
+    runHandler(keepOrderCredit, {
+      resource: order,
+      body: orderCreditSchema.parse({ amount: 800 })
+    }),
+    /cancelled or returned/
+  );
+});
+
+test('reopen a cancelled order holds its stock again', async () => {
+  const ctx = await setup();
+  let order = await newOrder(ctx, { advanceAmount: 500, advanceAccount: ctx.cash });
+  order = await setStatus(order, { status: 'cancelled' });
+  order = await setStatus(order, { status: 'pending' });
+
+  assert.equal(order.status, 'pending');
+  assert.equal(order.codAmount, 2500);
+  assert.equal(order.refundDuePaisa, 0);
+
+  // product starts with 50 items (from helper), 1 is reserved so it's 49
+  const product = await ctx.product.constructor.findById(ctx.product._id);
+  assert.equal(product.variants[0].stock, 49);
 });

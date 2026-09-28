@@ -11,7 +11,8 @@ import {
   orderExchangeSchema,
   orderTrackingSchema,
   orderNoteSchema,
-  orderMoneySchema
+  orderMoneySchema,
+  orderCreditSchema
 } from '../schemas/orders.js';
 import Order from '../models/Order.js';
 import {
@@ -27,7 +28,8 @@ import {
   addOrderAdvance,
   addOrderRefund,
   deleteOrderMoney,
-  getPriceHint
+  getPriceHint,
+  keepOrderCredit
 } from '../controllers/orderController.js';
 
 const router = express.Router();
@@ -355,6 +357,34 @@ router.delete(
   can('orders', 'update'),
   loadScoped(Order),
   deleteOrderMoney
+);
+
+/**
+ * @swagger
+ * /orders/{id}/credit:
+ *   post:
+ *     summary: Keep a cancelled/returned order's refund due as credit on the customer's khata
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [amount]
+ *             properties:
+ *               amount: { type: number }
+ *     responses:
+ *       201: { description: The order }
+ */
+router.post(
+  '/:id/credit',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderCreditSchema),
+  keepOrderCredit
 );
 
 export default router;

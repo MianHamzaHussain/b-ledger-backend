@@ -5,7 +5,7 @@ import { orderLabel } from './orderPosting.js';
 import { toPaisa } from './money.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 import { isCounterSale } from '../models/Order.js';
-
+import { upsertCustomerParty } from './customerParty.js';
 /**
  * Money that passes directly between the customer and us on an order — an
  * advance (the payment screenshot) or a refund. Each posts on the day it
@@ -160,3 +160,46 @@ const rowOf = (kind, amountPaisa, money, { date, note, entry, userId }) => ({
   entry: entry._id,
   by: userId
 });
+
+/** Keep what's due as credit on the customer's khata instead of paying it back. */
+export const keepAsCredit = async (order, { amount, userId }) => {
+  if (!NOT_SOLD.has(order.status)) {
+    throw new ErrorResponse('Only a cancelled or returned order can keep money as credit', 400);
+  }
+  const amountPaisa = toPaisa(amount);
+  if (amountPaisa <= 0 || amountPaisa > order.refundDuePaisa) {
+    throw new ErrorResponse('Nothing that much is due back on this order', 400);
+  }
+  const party = await upsertCustomerParty(
+    order.business,
+    order.customerName,
+    order.contactNumber,
+    userId
+  );
+  await ensureChart(order.business);
+  const advances = await accountByCode(order.business, CODES.CUSTOMER_ADVANCES);
+  const receivable = await accountByCode(order.business, CODES.ACCOUNTS_RECEIVABLE);
+  const label = `${orderLabel(order)} · ${order.customerName}`;
+  const entry = await postEntry({
+    business: order.business,
+    memo: `Kept as credit — ${label}`,
+    source: { kind: JOURNAL_SOURCES.ORDER_REFUND, ref: String(order._id) },
+    lines: [
+      { account: advances._id, label, debitPaisa: amountPaisa },
+      { account: receivable._id, party, label, creditPaisa: amountPaisa }
+    ],
+    userId
+  });
+  order.customerParty = order.customerParty || party;
+  order.customerMoney.push({
+    kind: 'credit',
+    amountPaisa,
+    accountName: 'Credit on khata',
+    date: new Date(),
+    entry: entry._id,
+    by: userId
+  });
+  order.updatedBy = userId;
+  await order.save();
+  return order;
+};

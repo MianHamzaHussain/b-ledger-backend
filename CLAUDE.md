@@ -514,6 +514,11 @@ delivery. `utils/customerMoney.js` (`POST /orders/:id/advances`, `/refunds`,
   held beyond that is refund due; a cancelled / returned / exchanged order owes
   back everything held.
 - **Refund**: Dr Advances from customers / Cr money, at most the refund due.
+- **Keep as credit** (`POST /orders/:id/credit`, cancelled / returned only):
+  Dr Advances from customers / Cr Accounts Receivable [customer party, upserted
+  by phone] — the customer's khata shows what we owe them.
+- **Reopen**: cancelled → pending re-reserves the stock; any money still held
+  comes off the COD again.
 - **Remove** (a mistake) reverses the row's entry — refused if the order would
   then hold less than the COD was reduced by. Such entries can't be reversed
   from the journal; they're undone on the order.

@@ -81,3 +81,7 @@ export const orderMoneySchema = z.object({
 export const orderTrackingSchema = z.object({
   trackingId: z.string().optional()
 });
+
+export const orderCreditSchema = z.object({
+  amount: z.coerce.number().positive('Must be more than 0')
+});

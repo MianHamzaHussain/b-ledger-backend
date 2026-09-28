@@ -22,7 +22,7 @@ const StatusEventSchema = new mongoose.Schema(
  */
 const CustomerMoneySchema = new mongoose.Schema(
   {
-    kind: { type: String, enum: ['advance', 'refund'], required: true },
+    kind: { type: String, enum: ['advance', 'refund', 'credit'], required: true },
     amountPaisa: { type: Number, required: true, min: 1 },
     /** The money account it went into / came out of — or a partner, personally. */
     account: { type: mongoose.Schema.ObjectId, ref: 'Account' },
