@@ -62,12 +62,13 @@ const unbilledCourierCharges = async (business, { from, to } = {}) => {
     courier: { $exists: true, $ne: null },
     $or: [
       {
-        status: { $in: [ORDER_STATUS.DELIVERED, ORDER_STATUS.EXCHANGED] },
+        status: { $in: [ORDER_STATUS.DELIVERED, ORDER_STATUS.EXCHANGED, ORDER_STATUS.REFUNDED] },
         deliveryChargePaisa: null,
         ...when('deliveredAt')
       },
       { status: ORDER_STATUS.RETURNED, returnChargePaisa: null, ...when('returnedAt') },
-      { status: ORDER_STATUS.EXCHANGED, returnChargePaisa: null, ...when('exchangedAt') }
+      { status: ORDER_STATUS.EXCHANGED, returnChargePaisa: null, ...when('exchangedAt') },
+      { status: ORDER_STATUS.REFUNDED, returnChargePaisa: null, ...when('refundedAt') }
     ]
   });
 };

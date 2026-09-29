@@ -17,6 +17,7 @@ import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import {
   updateOrderStatus,
   exchangeReturn,
+  receiveReturn,
   createReplacement
 } from '../controllers/orderController.js';
 import { accountBalance, partyBalance } from '../utils/ledger.js';
@@ -135,32 +136,38 @@ test('returned with a known charge books it as a return expense', async () => {
   assert.equal(line.debitPaisa, toPaisa(300));
 });
 
-test('exchange schema takes an optional, non-negative pickup charge', () => {
-  const open = orderExchangeReturnSchema.safeParse({});
-  assert.equal(open.success, true);
-  assert.equal(open.data.returnCharge, undefined);
-  assert.equal(orderExchangeReturnSchema.safeParse({ returnCharge: -1 }).success, false);
-  const ok = orderExchangeReturnSchema.safeParse({ returnCharge: 0 });
+test('exchange schema takes the customer’s courier and tracking — never a charge of ours', () => {
+  assert.equal(orderExchangeReturnSchema.safeParse({}).success, true);
+  const ok = orderExchangeReturnSchema.safeParse({
+    returnCourierName: 'Leopards',
+    reversalTrackingId: 'LP-9',
+    returnCharge: 120
+  });
   assert.equal(ok.success, true);
-  assert.equal(ok.data.returnCharge, 0);
+  assert.equal(ok.data.returnCourierName, 'Leopards');
+  assert.equal(ok.data.returnCharge, undefined, 'a charge is not ours to book');
 });
 
-test('exchange keeps the forward delivery fee and books the pickup charge', async () => {
+test('exchange keeps the forward delivery fee; the customer ships it back at their cost', async () => {
   const { biz, order } = await makeOrder('dispatched');
   await setStatus(order, { status: 'delivered', deliveryCharge: 180 });
 
   const delivered = await Order.findById(order._id);
-  await runHandler(exchangeReturn, {
+  const out = await runHandler(exchangeReturn, {
     resource: delivered,
     body: orderExchangeReturnSchema.parse({
-      returnCharge: 120
+      returnCourierName: 'Leopards',
+      reversalTrackingId: 'LP-1'
     })
   });
 
   const acc = async code => (await accountByCode(biz._id, code))._id;
   // Sale reversed, but the courier did deliver: the fee still stands.
   assert.equal(await accountBalance(biz._id, await acc(CODES.DELIVERY_CHARGES)), toPaisa(180));
-  assert.equal(await accountBalance(biz._id, await acc(CODES.RETURN_CHARGES)), toPaisa(120));
+  // Their parcel, their courier: nothing charged to us, nothing left open.
+  assert.equal(await accountBalance(biz._id, await acc(CODES.RETURN_CHARGES)), 0);
+  assert.equal(out.body.data.returnChargePaisa, 0);
+  assert.equal(out.body.data.returnShipping.courierName, 'Leopards');
   assert.equal(await accountBalance(biz._id, await acc(CODES.SALES)), 0, 'sale unwound');
 });
 
@@ -178,11 +185,10 @@ test('a charge row on the courier statement carries no COD breakdown', async () 
   const { courier, order } = await makeOrder('dispatched');
   await setStatus(order, { status: 'delivered', deliveryCharge: 150 });
   const delivered = await Order.findById(order._id);
-  await runHandler(exchangeReturn, {
-    resource: delivered,
-    body: orderExchangeReturnSchema.parse({
-      returnCharge: 120
-    })
+  // A swap: the courier's reversal brings the old item back and bills its pickup.
+  await runHandler(receiveReturn, {
+    resource: Object.assign(delivered, { awaitingReturn: true }),
+    body: { returnCharge: 120 }
   });
 
   const out = await runHandler(getPartyStatement, { resource: await Party.findById(courier._id) });

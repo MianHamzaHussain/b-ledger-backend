@@ -275,3 +275,24 @@ test('reopen a cancelled order holds its stock again', async () => {
   const product = await ctx.product.constructor.findById(ctx.product._id);
   assert.equal(product.variants[0].stock, 49);
 });
+
+test('a refund waits until the parcel is delivered', async () => {
+  const ctx = await setup();
+  let order = await newOrder(ctx);
+  order = await setStatus(order, {
+    status: 'dispatched',
+    courier: String(ctx.courier._id),
+    trackingId: 'TRK-WAIT'
+  });
+  order = await money(addOrderAdvance, order, { amount: 1000, account: ctx.cash });
+  assert.equal(order.refundDuePaisa, toPaisa(1000));
+
+  await assert.rejects(
+    money(addOrderRefund, order, { amount: 1000, account: ctx.cash }),
+    /once the parcel is delivered/
+  );
+
+  order = await setStatus(order, { status: 'delivered' });
+  order = await money(addOrderRefund, order, { amount: 1000, account: ctx.cash });
+  assert.equal(order.refundDuePaisa, 0);
+});

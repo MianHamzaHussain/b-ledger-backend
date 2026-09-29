@@ -1,4 +1,6 @@
+import mongoose from 'mongoose';
 import ProductionBatch from '../models/ProductionBatch.js';
+import Material from '../models/Material.js';
 import Product from '../models/Product.js';
 import Party from '../models/Party.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
@@ -9,6 +11,12 @@ import { toPaisa, fromPaisa } from '../utils/money.js';
 import { weightedAverageCost } from '../utils/inventory.js';
 import { JOURNAL_SOURCES, PARTNER_MONEY_PREFIX } from '../utils/constants.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
+import {
+  roundQty,
+  takeBatchMaterials,
+  putBackMaterial,
+  recordBatchUse
+} from '../utils/materials.js';
 
 /** A cost paid from a chosen money account names it as `money:<accountId>`. */
 const MONEY_PREFIX = 'money:';
@@ -17,7 +25,9 @@ const DETAIL_POPULATE = [
   { path: 'product', select: 'name articleNumber variants lowStockThreshold' },
   { path: 'lines.costLines.party', select: 'name' },
   // Which account paid each cost — shown by name on the batch.
-  { path: 'lines.costLines.moneyAccount', select: 'name' }
+  { path: 'lines.costLines.moneyAccount', select: 'name' },
+  // Lean: just the name and unit, not the material's derived unit cost.
+  { path: 'lines.costLines.material', select: 'name unit', options: { lean: true } }
 ];
 
 /**
@@ -48,6 +58,19 @@ const buildBatchLines = (product, lines) => {
       throw new ErrorResponse(`Add at least one cost for ${variant.label || 'the variant'}`, 400);
     }
     const costLines = l.costLines.map(c => {
+      // From the material store: named and priced by resolveMaterialLines.
+      if (c.material) {
+        const materialQty = roundQty(Number(c.materialQty));
+        if (!(materialQty > 0))
+          throw new ErrorResponse('Enter how much material the batch uses', 400);
+        return {
+          label: 'Material',
+          amountPaisa: 0,
+          onCredit: false,
+          material: c.material,
+          materialQty
+        };
+      }
       const label = String(c.label || '').trim();
       if (!label) throw new ErrorResponse('Every cost needs a label (e.g. Cloth, Tailor)', 400);
       const amount = Number(c.amount);
@@ -94,6 +117,31 @@ const resolveCostMoney = async (business, batchLines, user) => {
   return batchLines;
 };
 
+/**
+ * Name each material line after its material and price it at today's average —
+ * an estimate for the draft; closing fixes it at the average when the stock is
+ * actually taken. Each must be an active material of this business.
+ */
+const resolveMaterialLines = async (business, batchLines) => {
+  const costs = batchLines.flatMap(l => l.costLines.filter(c => c.material));
+  if (!costs.length) return batchLines;
+  const ids = [...new Set(costs.map(c => String(c.material)))];
+  if (!ids.every(id => mongoose.isValidObjectId(id))) {
+    throw new ErrorResponse('A chosen material is not in this business', 400);
+  }
+  const found = await Material.find({ _id: { $in: ids }, business }).lean();
+  const byId = new Map(found.map(m => [String(m._id), m]));
+  for (const c of costs) {
+    const m = byId.get(String(c.material));
+    if (!m) throw new ErrorResponse('A chosen material is not in this business', 400);
+    if (!m.isActive) throw new ErrorResponse(`${m.name} is switched off`, 400);
+    c.label = m.name;
+    c.amountPaisa =
+      m.stock > 0 ? Math.round((m.valuePaisa * Math.min(c.materialQty, m.stock)) / m.stock) : 0;
+  }
+  return batchLines;
+};
+
 /** Every on-credit cost must name a party that belongs to this business. */
 const validateCostParties = async (business, batchLines) => {
   const ids = [
@@ -127,6 +175,7 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
   const payable = await acc(CODES.ACCOUNTS_PAYABLE);
   const cash = await acc(CODES.CASH);
   const bank = await acc(CODES.BANK);
+  const raw = await acc(CODES.RAW_MATERIALS);
 
   const debits = [];
   const groups = new Map();
@@ -138,11 +187,17 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
         account: inventory._id,
         product: batch.product,
         batch: batch._id,
-        label: `${c.label} · ${line.variantLabel}`,
+        label: c.material
+          ? `${c.label} ×${c.materialQty} · ${line.variantLabel}`
+          : `${c.label} · ${line.variantLabel}`,
         debitPaisa: amt
       });
       let key, cl;
-      if (c.onCredit) {
+      if (c.material) {
+        // Out of the material store, not paid: stock became this article.
+        key = 'material';
+        cl = { account: raw._id, creditPaisa: 0 };
+      } else if (c.onCredit) {
         key = `payable:${c.party}`;
         cl = { account: payable._id, party: c.party, creditPaisa: 0 };
       } else if (c.moneyAccount) {
@@ -200,6 +255,7 @@ export const createBatch = asyncHandler(async (req, res, next) => {
   const batchLines = buildBatchLines(prod, lines);
   await validateCostParties(business, batchLines);
   await resolveCostMoney(business, batchLines, req.user);
+  await resolveMaterialLines(business, batchLines);
   await ensureChart(business);
 
   const batch = await ProductionBatch.create({
@@ -227,6 +283,7 @@ export const updateBatch = asyncHandler(async (req, res, next) => {
   const batchLines = buildBatchLines(prod, req.body.lines);
   await validateCostParties(batch.business, batchLines);
   await resolveCostMoney(batch.business, batchLines, req.user);
+  await resolveMaterialLines(batch.business, batchLines);
   batch.lines = batchLines;
   batch.updatedBy = req.user.id;
   await batch.save();
@@ -274,6 +331,31 @@ const correctClosedBatch = async (req, res, next) => {
         400
       )
     );
+  }
+  // The material a closed batch took left the store at that day's average;
+  // changing it would mean re-taking stock at a different price. So material
+  // lines stay exactly as they were and keep their amounts.
+  const materialKey = line =>
+    (line.costLines || [])
+      .filter(c => c.material)
+      .map(c => `${c.material}:${c.materialQty}`)
+      .sort()
+      .join('|');
+  for (const fixed of corrected) {
+    const old = batch.lines.find(l => String(l.variantId) === String(fixed.variantId));
+    if (materialKey(fixed) !== materialKey(old)) {
+      return next(
+        new ErrorResponse(
+          'The material a closed batch used can not be changed — only its other costs',
+          400
+        )
+      );
+    }
+    const oldMaterial = old.costLines.filter(c => c.material);
+    fixed.costLines = [
+      ...fixed.costLines.filter(c => !c.material),
+      ...oldMaterial.map(c => c.toObject())
+    ];
   }
   await validateCostParties(batch.business, corrected);
   await resolveCostMoney(batch.business, corrected, req.user);
@@ -358,13 +440,32 @@ export const closeBatch = asyncHandler(async (req, res, next) => {
   }
 
   await ensureChart(batch.business);
+  // Take the batch's material from the store now, fixing each line's amount at
+  // today's average — all or nothing, so a short material closes nothing.
+  const taken = await takeBatchMaterials(batch);
+  const putBack = async () => {
+    for (const t of taken) {
+      await putBackMaterial(batch.business, t.cost.material, t.qty, t.valuePaisa);
+    }
+  };
+
   // Actual cost = the sum of every variant's itemised cost lines.
   const allCosts = batch.lines.flatMap(l => l.costLines || []);
   const totalPaisa = allCosts.reduce((s, c) => s + (c.amountPaisa || 0), 0);
-  if (totalPaisa <= 0) return next(new ErrorResponse('Batch cost must be greater than zero', 400));
+  if (totalPaisa <= 0) {
+    await putBack();
+    return next(new ErrorResponse('Batch cost must be greater than zero', 400));
+  }
 
   const prod = await Product.findById(batch.product);
-  const entry = await postBatchEntry(batch, prod, req.user.id);
+  let entry;
+  try {
+    entry = await postBatchEntry(batch, prod, req.user.id);
+  } catch (err) {
+    await putBack();
+    throw err;
+  }
+  await recordBatchUse(batch, taken, entry._id, req.user.id);
 
   // Per variant: independent stock, moving-average cost, and sale price.
   if (prod) {

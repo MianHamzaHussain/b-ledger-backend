@@ -246,3 +246,47 @@ test('a counter sale is not exchanged through the courier flow', async () => {
   const sale = await Order.findById(out.body.data._id);
   await assert.rejects(runHandler(exchangeReturn, { resource: sale, body: {} }), /counter/);
 });
+
+test('a replacement is a new order: custom work, another courier, a new address', async () => {
+  const ctx = await setup();
+  const leopards = await makeParty(ctx.biz._id, 'courier', { name: 'Leopards' });
+  let original = await delivered(ctx);
+  await runHandler(exchangeReturn, {
+    resource: original,
+    body: orderExchangeReturnSchema.parse({
+      returnCourierName: 'TCS',
+      reversalTrackingId: 'CUST-1'
+    })
+  });
+  original = await Order.findById(original._id);
+  assert.equal(original.returnChargePaisa, 0, 'their courier — never on our invoice');
+
+  const out = await runHandler(createReplacement, {
+    resource: original,
+    body: orderReplacementSchema.parse({
+      customWork: [{ description: 'Kurta, made to measure', price: 2000, fromScratch: true }],
+      courier: String(leopards._id),
+      deliveryAddress: 'House 5, New Town'
+    })
+  });
+  const replacement = await Order.findById(out.body.data._id);
+  assert.equal(replacement.customWork.length, 1);
+  assert.equal(String(replacement.courier), String(leopards._id));
+  assert.equal(replacement.deliveryAddress, 'House 5, New Town');
+  // 3,000 credit against a 2,000 piece: nothing to collect, 1,000 owed back.
+  assert.equal(replacement.codAmount, 0);
+  assert.equal(replacement.refundDuePaisa, toPaisa(1000));
+});
+
+test('a dearer replacement: the courier collects only the difference', async () => {
+  const ctx = await setup();
+  const original = await delivered(ctx);
+  const out = await runHandler(swapOrder, {
+    resource: original,
+    body: orderSwapSchema.parse({
+      items: [line(ctx, 1)],
+      customWork: [{ description: 'Extra embroidery', price: 1500 }]
+    })
+  });
+  assert.equal((await Order.findById(out.body.data._id)).codAmount, 1500);
+});

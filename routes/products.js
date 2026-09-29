@@ -74,7 +74,7 @@ router
       Product,
       null,
       ['name', 'articleNumber'],
-      'articleNumber name status variantCount totalStock'
+      'articleNumber name status variantCount totalStock customized'
     ),
     getProducts
   )

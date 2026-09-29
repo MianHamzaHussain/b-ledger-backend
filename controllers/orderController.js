@@ -27,11 +27,14 @@ import {
 } from '../utils/customerMoney.js';
 import {
   recordCustomCost,
+  recordCustomCostFromMaterial,
   removeCustomCost,
   moveCustomWipToCogs,
   writeOffCustomWip
 } from '../utils/customCost.js';
 import { upsertCustomerParty } from '../utils/customerParty.js';
+import { refundQuote, refundReturn } from '../utils/refundReturn.js';
+import { putScratchInStock, scratchLines, takeScratchBack } from '../utils/scratchStock.js';
 import {
   assertExchangeable,
   convertSaleToCredit,
@@ -467,11 +470,16 @@ const bookReturnCharge = async (order, returnCharge, userId) => {
  * Stock is reserved first, then `beforeCreate` runs (a swap turns the sale into
  * credit there); if anything fails the stock is given back and that step undone.
  */
-const makeReplacement = async (original, { items, courier }, userId, beforeCreate) => {
+const makeReplacement = async (original, body, userId, beforeCreate) => {
+  const { items = [], customWork = [], courier } = body;
   const business = original.business;
   // The replacement inherits the original's courier unless a new one is chosen.
   const replacementCourier = courier ? await resolveCourier(business, courier) : original.courier;
   const newItems = await buildLineItems(business, items);
+  const total =
+    newItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0) +
+    customWork.reduce((s, w) => s + w.price, 0);
+  if (total < 0) throw new ErrorResponse("The replacement total can't be below 0", 400);
   await reserveStock(newItems);
   let undo;
   try {
@@ -482,11 +490,13 @@ const makeReplacement = async (original, { items, courier }, userId, beforeCreat
       customer: original.customer,
       courier: replacementCourier,
       source: original.source,
-      customerName: original.customerName,
-      contactNumber: original.contactNumber,
-      city: original.city,
-      deliveryAddress: original.deliveryAddress,
+      // A replacement is a new order: the customer may have moved.
+      customerName: body.customerName || original.customerName,
+      contactNumber: body.contactNumber || original.contactNumber,
+      city: body.city ?? original.city,
+      deliveryAddress: body.deliveryAddress ?? original.deliveryAddress,
       items: newItems,
+      customWork,
       customerMoney: credit ? [credit] : [],
       exchangeOf: original._id,
       createdBy: userId
@@ -512,12 +522,36 @@ export const exchangeReturn = asyncHandler(async (req, res) => {
 
   await convertSaleToCredit(original, req.user.id);
   await receiveReturnedGoods(original, req.user.id);
-  await bookReturnCharge(original, req.body.returnCharge, req.user.id);
+  // The customer sent it back on their own courier, at their cost — it is never
+  // on our invoice, so its charge is closed now rather than left open.
+  original.returnShipping = { by: 'customer', courierName: req.body.returnCourierName };
+  original.returnChargePaisa = 0;
   if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
   original.$locals.statusNote = req.body.note;
   await original.save();
 
   res.status(200).json({ success: true, data: original });
+});
+
+/**
+ * @desc   What a refund would normally keep back: delivery charge (if billed) + tax.
+ * @route  GET /api/v1/orders/:id/refund-quote  (orders:read — scoped)
+ */
+export const getRefundQuote = asyncHandler(async (req, res) => {
+  res.status(200).json({ success: true, data: await refundQuote(req.resource) });
+});
+
+/**
+ * @desc   Delivered, then sent back for a refund: goods back in stock, the sale
+ *         becomes what's owed back, less what's kept. Pay it with "Refund paid".
+ * @route  POST /api/v1/orders/:id/refund-return  (orders:update — scoped)
+ */
+export const refundReturnOrder = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  await refundReturn(order, req.body, req.user.id);
+  order.$locals.statusNote = req.body.note;
+  await order.save();
+  res.status(200).json({ success: true, data: order });
 });
 
 /**
@@ -644,6 +678,9 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   }
 
   if (order.status === ORDER_STATUS.CANCELLED && status === ORDER_STATUS.PENDING) {
+    // Its made-from-scratch pieces come back out of stock first — refused if one
+    // was sold meanwhile, before anything else changes.
+    await takeScratchBack(order, req.user.id);
     await reserveStock(order.items);
     if (order.customCostWriteOff) {
       await reverseEntry(order.customCostWriteOff, {
@@ -676,12 +713,15 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     }
   }
 
-  if (
-    (status === ORDER_STATUS.CANCELLED || status === ORDER_STATUS.RETURNED) &&
-    !order.customCostWriteOff
-  ) {
-    const entry = await writeOffCustomWip(order, req.user.id);
-    if (entry) order.customCostWriteOff = entry._id;
+  // A made-from-scratch piece is still a finished piece: into stock, not a loss.
+  // Other custom work (an alteration on a stock item) was spent — written off.
+  if (status === ORDER_STATUS.CANCELLED || status === ORDER_STATUS.RETURNED) {
+    if (scratchLines(order).length) {
+      await putScratchInStock(order, req.body.scratchPieces, req.user.id);
+    } else if (!order.customCostWriteOff) {
+      const entry = await writeOffCustomWip(order, req.user.id);
+      if (entry) order.customCostWriteOff = entry._id;
+    }
   }
 
   order.status = status;
@@ -893,10 +933,13 @@ export const addCustomCost = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Costs can only be added before the order is dispatched', 400));
   }
 
-  const { description, amount, account } = req.body;
-  const money = await resolveMoney(order.business, { account }, req.user);
-
-  await recordCustomCost(order, description, toPaisa(amount), money, req.user.id);
+  const { description, amount, account, material, materialQty } = req.body;
+  if (material) {
+    await recordCustomCostFromMaterial(order, material, materialQty, req.user.id);
+  } else {
+    const money = await resolveMoney(order.business, { account }, req.user);
+    await recordCustomCost(order, description, toPaisa(amount), money, req.user.id);
+  }
   await order.save();
 
   res.status(200).json({ success: true, data: order });

@@ -29,7 +29,9 @@ const CustomerMoneySchema = new mongoose.Schema(
      */
     kind: {
       type: String,
-      enum: ['advance', 'refund', 'credit', 'transfer-in', 'transfer-out'],
+      // kept     — held back from a refund (delivery charge, tax): out
+      // shipping — our share of the customer's return shipping, added: in
+      enum: ['advance', 'refund', 'credit', 'transfer-in', 'transfer-out', 'kept', 'shipping'],
       required: true
     },
     amountPaisa: { type: Number, required: true, min: 1 },
@@ -53,7 +55,7 @@ const CustomerMoneySchema = new mongoose.Schema(
 );
 
 /** Kinds that add to what the order holds for the customer. */
-const MONEY_IN = new Set(['advance', 'transfer-in']);
+const MONEY_IN = new Set(['advance', 'transfer-in', 'shipping']);
 
 /** What the order holds for the customer (paisa): money in, less refunds, credits and transfers out. */
 export const heldPaisaOf = order =>
@@ -67,7 +69,8 @@ const COD_FROZEN = new Set([
   ORDER_STATUS.DISPATCHED,
   ORDER_STATUS.DELIVERED,
   ORDER_STATUS.RETURNED,
-  ORDER_STATUS.EXCHANGED
+  ORDER_STATUS.EXCHANGED,
+  ORDER_STATUS.REFUNDED
 ]);
 
 /** The date field each status stamps, so lists can filter "delivered 1–15 Sep". */
@@ -76,7 +79,8 @@ const STATUS_DATE_FIELD = {
   delivered: 'deliveredAt',
   returned: 'returnedAt',
   cancelled: 'cancelledAt',
-  exchanged: 'exchangedAt'
+  exchanged: 'exchangedAt',
+  refunded: 'refundedAt'
 };
 
 /**
@@ -125,7 +129,11 @@ const CustomWorkSchema = new mongoose.Schema(
 const CustomCostSchema = new mongoose.Schema(
   {
     description: { type: String, required: true, trim: true, maxlength: 200 },
-    amountPaisa: { type: Number, required: true, min: 1 },
+    // 0 is possible for material the store holds at no cost.
+    amountPaisa: { type: Number, required: true, min: 0 },
+    /** Taken from the raw-material store rather than paid for: how much of what. */
+    material: { type: mongoose.Schema.ObjectId, ref: 'Material' },
+    materialQty: { type: Number },
     /** Where the money came from, as it read at the time. */
     accountName: { type: String },
     date: { type: Date, default: Date.now },
@@ -244,6 +252,7 @@ const OrderSchema = new mongoose.Schema(
     returnedAt: { type: Date },
     cancelledAt: { type: Date },
     exchangedAt: { type: Date },
+    refundedAt: { type: Date },
     /** A free note on the order — editable at any status, even after dispatch. */
     note: { type: String, trim: true, maxlength: 1000 },
 
@@ -296,6 +305,32 @@ const OrderSchema = new mongoose.Schema(
     reversalTrackingId: { type: String, trim: true },
     /** Swap at the door: the replacement went out; the old item is still on its way back. */
     awaitingReturn: { type: Boolean, default: false },
+    /**
+     * A refund return: who sent the parcel back. `customer` — their own courier
+     * (named here, for reference), never on our invoice; `us` — a pickup on our
+     * courier, billed on its invoice. `sharePaisa` is the part the other side
+     * agreed to carry.
+     */
+    returnShipping: {
+      by: { type: String, enum: ['customer', 'us'] },
+      courierName: { type: String, trim: true, maxlength: 60 },
+      sharePaisa: { type: Number, min: 0 }
+    },
+    /**
+     * Made-from-scratch pieces that went into stock when the order was cancelled,
+     * returned or refunded — each its own product, so a later customer can buy it.
+     * Reopening the order takes them back out (if still unsold).
+     */
+    scratchStock: [
+      {
+        product: { type: mongoose.Schema.ObjectId, ref: 'Product' },
+        variantId: { type: mongoose.Schema.ObjectId },
+        name: { type: String },
+        costPaisa: { type: Number },
+        created: { type: Boolean },
+        entry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' }
+      }
+    ],
 
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User', required: true },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
@@ -373,7 +408,8 @@ function deriveCustomerMoney(order) {
     const usedPaisa =
       order.status === ORDER_STATUS.CANCELLED ||
       order.status === ORDER_STATUS.RETURNED ||
-      order.status === ORDER_STATUS.EXCHANGED
+      order.status === ORDER_STATUS.EXCHANGED ||
+      order.status === ORDER_STATUS.REFUNDED
         ? 0
         : totalPaisa - Math.round(order.codAmount * 100);
     order.refundDuePaisa = Math.max(0, heldPaisa - usedPaisa);

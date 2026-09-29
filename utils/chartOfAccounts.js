@@ -34,6 +34,9 @@ export const CODES = {
   DRAWINGS: '3100',
   RETAINED_EARNINGS: '3900',
   SALES: '4000',
+  // What was kept back from a customer's refund — the delivery charge and tax
+  // on a parcel they sent back, or their share of the return pickup.
+  CHARGES_KEPT: '4100',
   COGS: '5000',
   RAW_MATERIAL: '5100',
   TAILORING: '5110',
@@ -51,8 +54,29 @@ export const CODES = {
   // Material bought for one order's custom work, held until that order is sold.
   CUSTOM_WIP: '1330',
   // Custom work whose order was cancelled or returned — the material is a loss.
-  CUSTOM_WRITE_OFF: '5130'
+  CUSTOM_WRITE_OFF: '5130',
+  // Material bought in bulk (dye, thread cones, embroidered pieces) before any
+  // article uses it — stock, not an expense, until a batch takes it.
+  RAW_MATERIALS: '1340',
+  // Material lost, wasted, or found short at a count — the one way it hits profit
+  // other than through a sold article.
+  MATERIAL_LOSS: '5140'
 };
+
+/**
+ * What goods cost to make — material and tailoring. These belong on a production
+ * batch (or in the raw-material store), where they reach profit once, when the
+ * article sells. Booked as an everyday expense or a supplier bill as well, they
+ * would count twice, so those everyday paths refuse them. The accounts stay for
+ * history and the accountant's own entries.
+ */
+export const PRODUCTION_COST_CODES = new Set([CODES.RAW_MATERIAL, CODES.TAILORING]);
+
+export const productionCostError = () =>
+  new ErrorResponse(
+    'Material goes into stock on Raw materials, and tailoring on the production batch — so it is counted once',
+    400
+  );
 
 /** The standard chart every business is seeded with. `control` = detail by party. */
 export const DEFAULT_CHART = [
@@ -65,6 +89,7 @@ export const DEFAULT_CHART = [
   { code: CODES.WHT_RECEIVABLE, name: 'Advance Tax (WHT Receivable)', type: ASSET },
   { code: CODES.INVENTORY, name: 'Inventory — Finished', type: ASSET },
   { code: CODES.CUSTOM_WIP, name: 'Custom work in progress', type: ASSET },
+  { code: CODES.RAW_MATERIALS, name: 'Raw materials', type: ASSET },
   { code: CODES.WIP, name: 'Work in Progress', type: ASSET },
   { code: CODES.GOODS_ON_APPROVAL, name: 'Goods on Approval', type: ASSET, control: true },
   { code: CODES.FIXED_ASSETS, name: 'Fixed Assets', type: ASSET },
@@ -77,6 +102,7 @@ export const DEFAULT_CHART = [
   { code: CODES.DRAWINGS, name: 'Drawings', type: EQUITY },
   { code: CODES.RETAINED_EARNINGS, name: 'Retained Earnings', type: EQUITY },
   { code: CODES.SALES, name: 'Sales', type: INCOME },
+  { code: CODES.CHARGES_KEPT, name: 'Charges kept from refunds', type: INCOME },
   { code: CODES.COGS, name: 'Cost of Goods Sold', type: EXPENSE },
   { code: CODES.RAW_MATERIAL, name: 'Raw Material', type: EXPENSE },
   { code: CODES.TAILORING, name: 'Tailoring', type: EXPENSE },
@@ -91,7 +117,8 @@ export const DEFAULT_CHART = [
   { code: CODES.RENT, name: 'Rent', type: EXPENSE },
   { code: CODES.UTILITIES, name: 'Utilities', type: EXPENSE },
   { code: CODES.MISC_EXPENSE, name: 'Miscellaneous', type: EXPENSE },
-  { code: CODES.CUSTOM_WRITE_OFF, name: 'Custom work written off', type: EXPENSE }
+  { code: CODES.CUSTOM_WRITE_OFF, name: 'Custom work written off', type: EXPENSE },
+  { code: CODES.MATERIAL_LOSS, name: 'Material wasted or lost', type: EXPENSE }
 ];
 
 /**

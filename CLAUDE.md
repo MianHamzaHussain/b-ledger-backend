@@ -534,18 +534,49 @@ An exchange never refunds and re-charges. `utils/exchange.js`:
   held. The courier's COD receivable, delivery charge and FBR taxes are
   **untouched** — the courier did deliver and collect.
 - **Goods back**: `releaseStock` + Dr Inventory / Cr COGS.
-- **Replacement** carries the credit (`transfer-in` on it, `transfer-out` on
-  the original; rows only, no entry). Its COD is the price difference. If the new
-  items cost less, the excess is a refund due.
+- **The replacement is a new order**, made on the order form:
+  - it holds stock items and/or custom work (including made from scratch), the
+    courier chosen for it, and the customer's details (which may be new);
+  - it carries the credit: a `transfer-in` row on it and a `transfer-out` on
+    the original — rows only, no entry;
+  - its COD is the difference; if it costs less, the excess is a refund due.
 - **Return first** (`/exchange-return`, then `/exchange-replacement`) does
   sale → credit and goods back together.
+  - The customer sends it on a courier of their choice, at their cost. Its name
+    and tracking number are kept for reference (`returnShipping.courierName`,
+    `reversalTrackingId`).
+  - `returnChargePaisa = 0`: it is never on our invoice.
 - **Swap at the door** (`/swap`, then `/receive-return`): sale → credit and the
-  replacement at once (stock reserved first, the credit entry undone if creating
-  fails). `awaitingReturn` stays set until the old item is received.
-- **Reversal tracking**: the courier's pickup is its own tracking number
-  (`reversalTrackingId`, searchable) and its own charge (the original's return
-  charge, billed on the invoice).
+  replacement at once. Stock is reserved first, and the credit entry is undone
+  if creating fails.
+  - Our courier handles the reversal on its own tracking number
+    (`reversalTrackingId`, searchable).
+  - Its charge is billed on the invoice, or closed at 0 with "No charge" when
+    the old item is received.
+  - `awaitingReturn` stays set until the old item is received.
 - **Counter sales** aren't exchanged here — only courier parcels.
+
+### 10.2b-2 Refund after delivery (`utils/refundReturn.js`)
+
+A delivered order sent back for the customer's money: status **refunded**.
+
+- It starts like an exchange: the sale becomes credit, and the goods go back to
+  stock.
+- **Kept back** (normally the delivery charge + FBR tax, from `/refund-quote`):
+  Dr Advances / Cr Charges kept from refunds (4100). It shows as a `kept`
+  customer-money row.
+- **Return shipping — `returnShipping.by`:**
+  - `customer` (normal): their own courier, named for reference only. Setting
+    `returnChargePaisa = 0` means it never waits on our invoice. Our agreed share
+    of their shipping is Dr Return charges / Cr Advances, a `shipping` row that
+    adds to the refund.
+  - `us`: a pickup on our courier, left open for its invoice. Their agreed share
+    is also kept back.
+- The rest is the refund due, paid with the order's **Refund paid** (or kept as
+  credit).
+- `kept` / `shipping` rows can't be removed on their own.
+- Exchanged and refunded parcels were still delivered, so their COD and delivery
+  charge stay open on the courier invoice until settled (`DELIVERED_ONCE`).
 
 ### 10.2c Custom work and its material
 
@@ -555,9 +586,56 @@ An exchange never refunds and re-charges. `utils/exchange.js`:
 - **Material bought for it** (`/custom-costs`, needs "See costs & profit";
   pending or confirmed only):
   - when spent: Dr Custom work in progress (1330) / Cr money;
+  - or **from the material store** (`material` + `materialQty`): Dr 1330 / Cr Raw
+    materials (1340) at the average — no money moves; removing it puts the stock
+    back at what it was taken at;
   - at delivery: moves to COGS;
-  - on cancel or return: written off (5130), and reopening reverses the write-off.
+  - on cancel or return of a **made-from-scratch** order: never a loss. Each piece
+    goes into stock as its own product (`customized: true`), named and priced
+    in the cancel / return / refund dialog (`utils/scratchStock.js`).
+    - Accounting: Dr Inventory / Cr Custom WIP, or Cr COGS if the order was
+      already delivered.
+    - A second piece with the same name joins the first as more stock.
+    - Reopening takes it back out, and is refused if the piece has been sold
+      since.
+  - on cancel or return of other custom work (an alteration on a stock item):
+    written off (5130), and reopening reverses the write-off.
 - These entries are undone on the order, never from the journal.
+
+### 10.2d Raw materials — bought in bulk, stock until used
+
+Dye, thread cones, lace and ready embroidered pieces are often bought before
+any article exists. They are **stock, not an expense**, so they hit profit only
+once, when the article made from them sells.
+
+- **Buy** (`POST /materials/:id/purchases`): Dr Raw materials (1340) / Cr money
+  or the supplier's payable. No profit effect.
+- **A batch uses it** (a cost line with `material` + `materialQty`):
+  - while the batch is a draft, the amount is only an estimate at today's average;
+  - at close the stock is taken, and the amount is fixed at that moment's
+    average;
+  - the close entry credits 1340 instead of money.
+  - All or nothing: if one material is short, nothing is taken and the batch
+    stays open.
+- **Waste / shelf count** (`/adjust`): the difference goes to Material wasted or
+  lost (5140), in either direction. This is the only way materials reach profit
+  directly.
+- **Valuation** is moving average. `Material.valuePaisa` stores the total, not a
+  unit cost, so the last unit out takes exactly what is left.
+- **Invariant:** Σ `valuePaisa` = the 1340 balance. All stock changes go through
+  `utils/materials.js` (optimistic writes, so two closes can't both take the last
+  cone).
+- **Undo:** only a material's latest purchase or adjustment can be undone, on the
+  material. Material entries are never reversed from the journal.
+- **Correcting a closed batch** keeps its material lines exactly as they were.
+- **Permission:** `materials` covers quantities. Prices are cost fields, hidden
+  without "See costs & profit".
+- **Counted once — enforced.** What goods cost to make has exactly one way into
+  profit, through the article. Material is bought into 1340 (Raw materials page,
+  or "Material for stock" on a Shop expense or a supplier bill in Khata);
+  tailoring goes on the batch. The everyday expense and supplier-bill paths
+  refuse Raw Material (5100) and Tailoring (5110) — `PRODUCTION_COST_CODES`.
+  Those accounts stay for history and accountant entries only.
 
 ### 10.3 Party transactions — "You gave" / "You got"
 

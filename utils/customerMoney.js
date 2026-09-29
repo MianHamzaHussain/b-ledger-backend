@@ -28,7 +28,12 @@ const TAKES_ADVANCE = new Set([
 ]);
 
 /** Statuses whose sale won't use the advance — it is all owed back. */
-const NOT_SOLD = new Set([ORDER_STATUS.CANCELLED, ORDER_STATUS.RETURNED, ORDER_STATUS.EXCHANGED]);
+const NOT_SOLD = new Set([
+  ORDER_STATUS.CANCELLED,
+  ORDER_STATUS.RETURNED,
+  ORDER_STATUS.EXCHANGED,
+  ORDER_STATUS.REFUNDED
+]);
 
 const formatRupees = rupees => `Rs ${Number(rupees).toLocaleString('en-PK')}`;
 
@@ -78,6 +83,11 @@ export const recordAdvance = async (order, { amount, money, date, note, userId }
 
 /** Pay the customer back — at most what is due to them. */
 export const recordRefund = async (order, { amount, money, date, note, userId }) => {
+  // The parcel is still out: it may yet come back, and the customer is refunded
+  // once it's delivered (or returned) — never while the courier has it.
+  if (order.status === ORDER_STATUS.DISPATCHED) {
+    throw new ErrorResponse('Refund it once the parcel is delivered or returned', 400);
+  }
   const amountPaisa = toPaisa(amount);
   if (amountPaisa > order.refundDuePaisa) {
     throw new ErrorResponse(
@@ -117,7 +127,7 @@ export const recordRefund = async (order, { amount, money, date, note, userId })
 export const removeCustomerMoney = async (order, rowId, userId) => {
   const row = order.customerMoney.id(rowId);
   if (!row) throw new ErrorResponse('That payment is not on this order', 404);
-  if (row.kind.startsWith('transfer')) {
+  if (row.kind.startsWith('transfer') || row.kind === 'kept' || row.kind === 'shipping') {
     throw new ErrorResponse("An exchange credit can't be removed on its own", 400);
   }
 

@@ -5,7 +5,13 @@ import PeriodLock from '../models/PeriodLock.js';
 import Party from '../models/Party.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
-import { ensureChart, accountByCode, CODES } from '../utils/chartOfAccounts.js';
+import {
+  ensureChart,
+  accountByCode,
+  CODES,
+  PRODUCTION_COST_CODES,
+  productionCostError
+} from '../utils/chartOfAccounts.js';
 import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledger.js';
 import { salaryLines } from '../utils/partyPosting.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
@@ -86,6 +92,7 @@ export const recordExpense = asyncHandler(async (req, res, next) => {
   const paisa = amountPaisa(req.body.amount);
   await ensureChart(business);
 
+  if (PRODUCTION_COST_CODES.has(category)) return next(productionCostError());
   const expense = await accountByCode(business, category || CODES.MISC_EXPENSE);
   if (expense.type !== ACCOUNT_TYPES.EXPENSE) {
     return next(new ErrorResponse('That is not an expense account', 400));
@@ -637,6 +644,10 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
     entry.source?.kind === JOURNAL_SOURCES.ORDER_REFUND
   ) {
     return next(new ErrorResponse('Remove this payment from its order instead', 400));
+  }
+  // Material stock moves with its entries — undone on the material, not here.
+  if (entry.source?.kind === JOURNAL_SOURCES.MATERIAL) {
+    return next(new ErrorResponse('Undo this on the material instead', 400));
   }
 
   const reversal = await reverseEntry(entry._id, {

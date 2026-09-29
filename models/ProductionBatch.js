@@ -21,7 +21,16 @@ const CostLineSchema = new mongoose.Schema(
       trim: true,
       maxlength: [60, 'Label can not be more than 60 characters']
     },
-    amountPaisa: { type: Number, required: true, min: [1, 'Amount must be greater than zero'] },
+    // A material line may be worth 0 (stock bought for nothing); the controller
+    // requires every other cost to be above zero.
+    amountPaisa: { type: Number, required: true, min: [0, 'Amount can not be negative'] },
+    /**
+     * Taken from the raw-material store rather than paid: `materialQty` of
+     * `material`. Its amount is an estimate at the average while the batch is a
+     * draft, and fixed at the average when the batch closes and the stock is taken.
+     */
+    material: { type: mongoose.Schema.ObjectId, ref: 'Material' },
+    materialQty: { type: Number, min: [0, 'Quantity can not be negative'] },
     /**
      * How THIS cost is funded — so cloth can be owed to one supplier while packing
      * is paid cash. `onCredit` grows the `party`'s payable (shows on their
