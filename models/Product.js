@@ -92,6 +92,13 @@ const ProductSchema = new mongoose.Schema(
      */
     totalStock: { type: Number, default: 0 },
     variantCount: { type: Number, default: 0 },
+    /**
+     * A made-from-scratch piece whose order fell through, put into stock so a
+     * later customer can buy it. Listed under Customized.
+     */
+    customized: { type: Boolean, default: false },
+    /** The order it was made for. */
+    fromOrder: { type: mongoose.Schema.ObjectId, ref: 'Order' },
     status: {
       type: String,
       enum: ['active', 'inactive'],

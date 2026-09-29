@@ -46,15 +46,17 @@ const codParts = (order, codTax) => {
   return { codPaisa: toPaisa(order.codAmount), whtPaisa, salesTaxPaisa, netPaisa: bankPaisa };
 };
 
+// An exchanged or refunded parcel was still delivered and its COD collected —
+// the courier owes it until an invoice pays it.
+const DELIVERED_ONCE = [ORDER_STATUS.DELIVERED, ORDER_STATUS.EXCHANGED, ORDER_STATUS.REFUNDED];
 const isCodOpen = o =>
-  o.status === ORDER_STATUS.DELIVERED &&
+  DELIVERED_ONCE.includes(o.status) &&
   o.paymentStatus === PAYMENT_STATUS.UNPAID &&
   (o.codAmount || 0) > 0;
 const isDeliveryChargeOpen = o =>
-  (o.status === ORDER_STATUS.DELIVERED || o.status === ORDER_STATUS.EXCHANGED) &&
-  o.deliveryChargePaisa == null;
+  DELIVERED_ONCE.includes(o.status) && o.deliveryChargePaisa == null;
 const isReturnChargeOpen = o =>
-  (o.status === ORDER_STATUS.RETURNED || o.status === ORDER_STATUS.EXCHANGED) &&
+  [ORDER_STATUS.RETURNED, ORDER_STATUS.EXCHANGED, ORDER_STATUS.REFUNDED].includes(o.status) &&
   o.returnChargePaisa == null;
 
 /**
@@ -66,7 +68,14 @@ export const openCourierItems = async (business, courierId) => {
     Order.find({
       business,
       courier: courierId,
-      status: { $in: [ORDER_STATUS.DELIVERED, ORDER_STATUS.RETURNED, ORDER_STATUS.EXCHANGED] }
+      status: {
+        $in: [
+          ORDER_STATUS.DELIVERED,
+          ORDER_STATUS.RETURNED,
+          ORDER_STATUS.EXCHANGED,
+          ORDER_STATUS.REFUNDED
+        ]
+      }
     })
       .select(ITEM_FIELDS)
       .sort({ createdAt: 1 })

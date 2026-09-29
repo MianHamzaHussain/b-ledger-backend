@@ -15,6 +15,7 @@ import {
   orderStatusSchema,
   orderPaymentSchema,
   orderExchangeReturnSchema,
+  orderRefundReturnSchema,
   orderSwapSchema,
   orderReplacementSchema,
   orderTrackingSchema,
@@ -30,6 +31,8 @@ import {
   createOrder,
   updateOrder,
   exchangeReturn,
+  getRefundQuote,
+  refundReturnOrder,
   createReplacement,
   swapOrder,
   receiveReturn,
@@ -218,6 +221,25 @@ router
  *       400: { description: Not delivered, already exchanged, or not enough stock }
  *       404: { description: Not found, or outside your businesses }
  */
+/**
+ * @swagger
+ * /orders/{id}/refund-return:
+ *   post:
+ *     summary: Delivered, then sent back for a refund — goods back, money owed back less what's kept
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Order now refunded; pay it with Refund paid }
+ */
+router.get('/:id/refund-quote', can('orders', 'read'), loadScoped(Order), getRefundQuote);
+router.post(
+  '/:id/refund-return',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderRefundReturnSchema),
+  refundReturnOrder
+);
+
 router.post(
   '/:id/exchange-return',
   can('orders', 'update'),

@@ -41,7 +41,7 @@ export const assertExchangeable = order => {
  * everything the customer paid for it — its advances plus the COD — as money
  * waiting for the replacement.
  */
-export const convertSaleToCredit = async (order, userId) => {
+export const convertSaleToCredit = async (order, userId, reason = 'Exchange') => {
   const totalPaisa = toPaisa(order.total);
   const codPaisa = toPaisa(order.codAmount);
   let entry = null;
@@ -50,7 +50,7 @@ export const convertSaleToCredit = async (order, userId) => {
     const label = `${orderLabel(order)} · ${order.customerName}`;
     entry = await postEntry({
       business: order.business,
-      memo: `Exchange — ${label}: sale becomes credit`,
+      memo: `${reason} — ${label}: sale becomes credit`,
       source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
       lines: [
         {
@@ -86,7 +86,7 @@ export const convertSaleToCredit = async (order, userId) => {
 };
 
 /** The old item is back: its stock returns and its cost comes off the sale's COGS. */
-export const receiveReturnedGoods = async (order, userId) => {
+export const receiveReturnedGoods = async (order, userId, reason = 'Exchange') => {
   await releaseStock(order.items);
   const cogsPaisa = cogsPaisaOf(order);
   if (cogsPaisa > 0) {
@@ -94,7 +94,7 @@ export const receiveReturnedGoods = async (order, userId) => {
     const label = orderLabel(order);
     await postEntry({
       business: order.business,
-      memo: `Exchange — ${label}: goods back in stock`,
+      memo: `${reason} — ${label}: goods back in stock`,
       source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
       lines: [
         {

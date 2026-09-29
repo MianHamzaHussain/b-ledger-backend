@@ -84,6 +84,13 @@ export const RESOURCES = {
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
   },
+  materials: {
+    // Raw materials bought in bulk and used by production batches. Quantities
+    // are everyday stock-keeping; their prices are costs (hidden without `costs`).
+    label: 'Raw materials',
+    scopable: true,
+    ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
+  },
   consignments: {
     // Sale-or-return: goods out with a reseller until kept/paid or returned.
     label: 'Sale or Return',

@@ -10,8 +10,11 @@ import {
   runHandler
 } from './helpers/db.js';
 import { getGettingStarted } from '../controllers/businessController.js';
-import { recordPartyTransaction } from '../controllers/partyController.js';
-import { partyTransactionSchema } from '../schemas/parties.js';
+import {
+  recordPartyTransaction,
+  recordPartyOpeningBalance
+} from '../controllers/partyController.js';
+import { partyTransactionSchema, partyOpeningSchema } from '../schemas/parties.js';
 
 /**
  * The getting-started checklist ticks itself off from real data, so a new
@@ -32,6 +35,7 @@ test('a fresh business has only itself', async () => {
     'moneyAccounts',
     'capital',
     'khataPeople',
+    'opening',
     'khataEntry',
     'products',
     'production',
@@ -58,4 +62,11 @@ test('steps tick as the data appears', async () => {
   });
   s = await steps(biz);
   assert.equal(s.khataEntry, true);
+  assert.equal(s.opening, false);
+
+  await runHandler(recordPartyOpeningBalance, {
+    resource: supplier,
+    body: partyOpeningSchema.parse({ owesUs: false, amount: 1000 })
+  });
+  assert.equal((await steps(biz)).opening, true);
 });

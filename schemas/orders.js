@@ -63,6 +63,16 @@ export const orderUpdateSchema = z
     path: ['items']
   });
 
+/**
+ * A made-from-scratch piece going into stock: what to call the product and its
+ * sale price. Left out, the work's own description and price are used.
+ */
+const scratchPiece = z.object({
+  workId: id,
+  name: z.string().trim().min(1, 'Name the product').max(120),
+  salePrice: z.coerce.number().min(0, 'Price can not be negative')
+});
+
 export const orderStatusSchema = z.object({
   status: z.enum(['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled', 'returned']),
   courier: id.optional(),
@@ -71,6 +81,23 @@ export const orderStatusSchema = z.object({
   deliveryCharge: z.coerce.number().min(0, 'Delivery charge can not be negative').optional(),
   trackingId: z.string().optional(),
   /** Optional reason for the change — shown on the order's timeline. */
+  note: z.string().trim().max(300, 'Keep the note under 300 characters').optional(),
+  /** Cancelling or returning a made-from-scratch order puts its pieces into stock. */
+  scratchPieces: z.array(scratchPiece).max(20).optional()
+});
+
+/** Delivered, then sent back for a refund. Amounts in rupees. */
+export const orderRefundReturnSchema = z.object({
+  /** Who sent the parcel back: the customer on their own courier, or us (a pickup). */
+  returnBy: z.enum(['customer', 'us']),
+  /** Their courier's name, for reference — never on our invoice. */
+  returnCourierName: z.string().trim().max(60).optional(),
+  reversalTrackingId: z.string().trim().max(60).optional(),
+  /** Held back from the refund — normally the delivery charge and tax. */
+  keep: z.coerce.number().min(0, 'Can not be negative').default(0),
+  /** Our part of their shipping (customer), or their part of our pickup (us). */
+  shippingShare: z.coerce.number().min(0, 'Can not be negative').optional(),
+  scratchPieces: z.array(scratchPiece).max(20).optional(),
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
 });
 
@@ -84,26 +111,53 @@ export const orderPaymentSchema = z.object({
 
 const reversalTrackingId = z.string().trim().max(60).optional();
 
+/**
+ * Exchange, item back first: the customer sends it on a courier of their choice,
+ * at their cost — named here for reference, never on our invoice.
+ */
 export const orderExchangeReturnSchema = z.object({
-  /** What the courier billed to collect the original parcel — usually left for its invoice. */
-  returnCharge: z.coerce.number().min(0, 'Return charge can not be negative').optional(),
-  /** The courier's reversal tracking number for the pickup — it is charged like any parcel. */
+  returnCourierName: z.string().trim().max(60).optional(),
+  /** Their parcel's tracking number, for reference and search. */
   reversalTrackingId,
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
 });
 
-/** Swap at the door: the replacement's items, and the reversal that brings the old one back. */
-export const orderSwapSchema = z.object({
-  items: z.array(orderItem).min(1, 'Add at least one replacement item'),
-  courier: id.optional(),
-  reversalTrackingId,
-  note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
-});
+/**
+ * The replacement is a new order of its own: stock items and/or custom work, a
+ * courier of your choice, and the customer's details (a new address, say). The
+ * original's credit counts towards it.
+ */
+const swapOrder = {
+  items: z.array(orderItem).default([]),
+  customWork: z.array(customWork).max(20).default([]),
+  customerName: z.string().trim().min(1).optional(),
+  contactNumber: z.string().trim().min(1).optional(),
+  city: z.string().optional(),
+  deliveryAddress: z.string().optional()
+};
+/** Sent back first: the replacement may go with any courier. */
+const replacementOrder = { ...swapOrder, courier: id.optional() };
+const hasSomething = [
+  v => v.items.length + v.customWork.length > 0,
+  { message: 'Add at least one item or custom work', path: ['items'] }
+];
 
-export const orderReplacementSchema = z.object({
-  items: z.array(orderItem).min(1, 'Add at least one replacement item'),
-  courier: id.optional()
-});
+/**
+ * Swap at the door: the replacement, and the reversal that brings the old one
+ * back. Same courier as the original (it swaps both at once), no COD — a
+ * difference the customer owes is paid to us directly, into `differenceAccount`.
+ */
+export const orderSwapSchema = z
+  .object({
+    ...swapOrder,
+    /** Where the customer paid the difference — a money account or partner:<id>. */
+    differenceAccount: z.string().min(1).optional(),
+    reversalTrackingId,
+    note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+  })
+  .refine(...hasSomething);
+
+export const orderReplacementSchema = z.object(replacementOrder).refine(...hasSomething);
 
 /** An advance the customer sent, or a refund we paid them. */
 export const orderMoneySchema = z.object({
@@ -121,8 +175,15 @@ export const orderCreditSchema = z.object({
   amount: z.coerce.number().positive('Must be more than 0')
 });
 
-export const customCostSchema = z.object({
-  description: z.string().trim().min(1, 'Describe the cost').max(200),
-  amount: z.coerce.number().positive('Must be more than 0'),
-  account: z.string().min(1, 'Choose where the money came from')
-});
+/** Paid for (what, how much, from where) — or taken from the material store. */
+export const customCostSchema = z.union([
+  z.object({
+    description: z.string().trim().min(1, 'Describe the cost').max(200),
+    amount: z.coerce.number().positive('Must be more than 0'),
+    account: z.string().min(1, 'Choose where the money came from')
+  }),
+  z.object({
+    material: z.string().min(1, 'Choose the material'),
+    materialQty: z.coerce.number().positive('Enter how much')
+  })
+]);

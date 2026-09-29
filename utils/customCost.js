@@ -2,6 +2,8 @@ import { CODES, accountByCode, ensureChart } from './chartOfAccounts.js';
 import { postEntry, reverseEntry } from './ledger.js';
 import { JOURNAL_SOURCES } from './constants.js';
 import { orderLabel } from './orderPosting.js';
+import MaterialMove from '../models/MaterialMove.js';
+import { takeMaterial, putBackMaterial, qtyText } from './materials.js';
 
 /**
  * Record a material/labor cost for a custom order.
@@ -33,14 +35,77 @@ export const recordCustomCost = async (order, description, amountPaisa, money, u
 };
 
 /**
+ * Take material for a custom order from the raw-material store, at today's
+ * average: Dr CUSTOM_WIP / Cr Raw materials. No money moves — it was paid for
+ * when it was bought — so it is counted once, through this order.
+ */
+export const recordCustomCostFromMaterial = async (order, materialId, qty, userId) => {
+  await ensureChart(order.business);
+  const take = await takeMaterial(order.business, materialId, qty);
+  const amountPaisa = -take.valuePaisa;
+  const description = `${take.material.name} × ${qtyText(qty, take.material.unit)}`;
+  const label = `${orderLabel(order)} · ${description}`;
+
+  let entry;
+  try {
+    entry = await postEntry({
+      business: order.business,
+      memo: `Custom work material — ${label}`,
+      source: { kind: JOURNAL_SOURCES.CUSTOM_COST, ref: String(order._id) },
+      lines: [
+        {
+          account: (await accountByCode(order.business, CODES.CUSTOM_WIP))._id,
+          label,
+          debitPaisa: amountPaisa
+        },
+        {
+          account: (await accountByCode(order.business, CODES.RAW_MATERIALS))._id,
+          label,
+          creditPaisa: amountPaisa
+        }
+      ],
+      userId
+    });
+  } catch (err) {
+    await putBackMaterial(order.business, materialId, qty, amountPaisa);
+    throw err;
+  }
+
+  await MaterialMove.create({
+    business: order.business,
+    material: materialId,
+    kind: 'use',
+    quantity: -qty,
+    valuePaisa: -amountPaisa,
+    order: order._id,
+    entry: entry._id,
+    createdBy: userId
+  });
+  order.customCosts.push({
+    description,
+    amountPaisa,
+    material: materialId,
+    materialQty: qty,
+    accountName: 'From materials',
+    entry: entry._id,
+    by: userId
+  });
+};
+
+/**
  * Remove a custom cost that was logged by mistake.
- * Reverses the journal entry and removes the item from the array.
+ * Reverses the journal entry and removes the item from the array. Material
+ * taken from the store goes back on the shelf at what it was taken at.
  */
 export const removeCustomCost = async (order, costId, userId) => {
   const costIndex = order.customCosts.findIndex(c => String(c._id) === String(costId));
   if (costIndex === -1) return;
   const cost = order.customCosts[costIndex];
 
+  if (cost.material) {
+    await putBackMaterial(order.business, cost.material, cost.materialQty, cost.amountPaisa);
+    await MaterialMove.deleteOne({ entry: cost.entry });
+  }
   await reverseEntry(cost.entry, {
     userId,
     memo: `Reverse custom cost — order ${order.orderNumber}`

@@ -73,7 +73,9 @@ const COST_FIELDS = new Set([
   'unitCost',
   'unitCostPaisa',
   'totalCostPaisa',
-  'customCosts'
+  'customCosts',
+  // Raw material: what the stock on hand, or one purchase / use of it, is worth.
+  'valuePaisa'
 ]);
 
 const stripCosts = value => {

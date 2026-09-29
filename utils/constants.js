@@ -26,7 +26,11 @@ export const ORDER_STATUS = {
   RETURNED: 'returned',
   // Set only by the exchange endpoint — the original order whose goods came back
   // and were swapped for a linked replacement order. Not a manual transition.
-  EXCHANGED: 'exchanged'
+  EXCHANGED: 'exchanged',
+  // Set only by the refund-return endpoint — delivered, then sent back by the
+  // customer for their money. The goods are back in stock; what they paid is
+  // owed back, less what was kept (delivery charge and tax, normally).
+  REFUNDED: 'refunded'
 };
 
 /** Allowed fulfillment transitions. Terminal states have no exits. */
@@ -40,7 +44,8 @@ export const ORDER_TRANSITIONS = {
   delivered: [],
   // A cancelled order can be reopened
   cancelled: ['pending'],
-  returned: []
+  returned: [],
+  refunded: []
 };
 
 /** Statuses whose stock is held out of inventory (decremented). */
@@ -126,7 +131,9 @@ export const JOURNAL_SOURCES = {
   COURIER_INVOICE: 'courier-invoice',
   // Money moved between two of the business's own places (cash to bank, a
   // partner handing over what they collected, …) — no income or cost.
-  TRANSFER: 'transfer'
+  TRANSFER: 'transfer',
+  // Raw material bought into stock, or written off / found at a count.
+  MATERIAL: 'material'
 };
 
 /**
@@ -152,3 +159,19 @@ export const NOTIFICATION_TYPES = {
 
 /** Name of the protected, full-access role created by the seeder. */
 export const ADMIN_ROLE_NAME = 'Admin';
+
+/** How a raw material is counted. Quantities may be fractional (2.5 metres). */
+export const MATERIAL_UNITS = [
+  'piece',
+  'metre',
+  'yard',
+  'cone',
+  'kg',
+  'gram',
+  'litre',
+  'bottle',
+  'packet',
+  'roll',
+  'dozen',
+  'set'
+];

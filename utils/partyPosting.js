@@ -1,6 +1,11 @@
 import Order from '../models/Order.js';
 import ErrorResponse from './errorResponse.js';
-import { accountByCode, CODES } from './chartOfAccounts.js';
+import {
+  accountByCode,
+  CODES,
+  PRODUCTION_COST_CODES,
+  productionCostError
+} from './chartOfAccounts.js';
 import { partyAccountBalance } from './ledger.js';
 import { toPaisa, fromPaisa } from './money.js';
 import {
@@ -161,6 +166,7 @@ export const partyTransactionLines = async (
       // A bill: the supplier sold us something on credit. What it was for decides
       // which expense it is — without that, profit can't be right.
       if (!category) throw new ErrorResponse('Choose what this bill was for', 400);
+      if (PRODUCTION_COST_CODES.has(category)) throw productionCostError();
       const expense = await accountByCode(business, category);
       if (expense.type !== ACCOUNT_TYPES.EXPENSE) {
         throw new ErrorResponse('That is not an expense category', 400);
