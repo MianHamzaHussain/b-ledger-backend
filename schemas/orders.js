@@ -127,24 +127,31 @@ export const orderExchangeReturnSchema = z.object({
  * courier of your choice, and the customer's details (a new address, say). The
  * original's credit counts towards it.
  */
-const replacementOrder = {
+const swapOrder = {
   items: z.array(orderItem).default([]),
   customWork: z.array(customWork).max(20).default([]),
-  courier: id.optional(),
   customerName: z.string().trim().min(1).optional(),
   contactNumber: z.string().trim().min(1).optional(),
   city: z.string().optional(),
   deliveryAddress: z.string().optional()
 };
+/** Sent back first: the replacement may go with any courier. */
+const replacementOrder = { ...swapOrder, courier: id.optional() };
 const hasSomething = [
   v => v.items.length + v.customWork.length > 0,
   { message: 'Add at least one item or custom work', path: ['items'] }
 ];
 
-/** Swap at the door: the replacement, and the reversal that brings the old one back. */
+/**
+ * Swap at the door: the replacement, and the reversal that brings the old one
+ * back. Same courier as the original (it swaps both at once), no COD — a
+ * difference the customer owes is paid to us directly, into `differenceAccount`.
+ */
 export const orderSwapSchema = z
   .object({
-    ...replacementOrder,
+    ...swapOrder,
+    /** Where the customer paid the difference — a money account or partner:<id>. */
+    differenceAccount: z.string().min(1).optional(),
     reversalTrackingId,
     note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
   })

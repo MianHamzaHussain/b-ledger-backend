@@ -549,6 +549,12 @@ An exchange never refunds and re-charges. `utils/exchange.js`:
 - **Swap at the door** (`/swap`, then `/receive-return`): sale → credit and the
   replacement at once. Stock is reserved first, and the credit entry is undone
   if creating fails.
+  - The replacement keeps the original's courier (`isSwap`), because it swaps
+    both parcels in one visit. The schema takes no courier, and dispatching it
+    with another courier is refused.
+  - It carries no COD: a difference the customer owes is paid to us directly
+    (`differenceAccount`) and booked as an advance on the replacement. The swap
+    is refused until that account is given.
   - Our courier handles the reversal on its own tracking number
     (`reversalTrackingId`, searchable).
   - Its charge is billed on the invoice, or closed at 0 with "No charge" when

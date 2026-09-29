@@ -296,6 +296,12 @@ const OrderSchema = new mongoose.Schema(
     // ── Exchange links ────────────────────────────────────────────────────
     /** On the replacement order: the original it replaces. */
     exchangeOf: { type: mongoose.Schema.ObjectId, ref: 'Order' },
+    /**
+     * On a swap-at-the-door replacement: the courier that delivered the original
+     * swaps it at the door, so this order keeps that courier and collects no COD —
+     * any difference is paid to us directly, as an advance.
+     */
+    isSwap: { type: Boolean, default: false },
     /** On the original order: the replacement created for it. */
     exchangedFor: { type: mongoose.Schema.ObjectId, ref: 'Order' },
     /**

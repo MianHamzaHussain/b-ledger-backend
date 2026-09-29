@@ -1,6 +1,6 @@
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
-import Order from '../models/Order.js';
+import Order, { heldPaisaOf } from '../models/Order.js';
 import Product from '../models/Product.js';
 import Business from '../models/Business.js';
 import Customer from '../models/Customer.js';
@@ -499,6 +499,7 @@ const makeReplacement = async (original, body, userId, beforeCreate) => {
       customWork,
       customerMoney: credit ? [credit] : [],
       exchangeOf: original._id,
+      isSwap: Boolean(body.isSwap),
       createdBy: userId
     });
     markCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
@@ -579,13 +580,39 @@ export const createReplacement = asyncHandler(async (req, res, next) => {
  *         stock comes back when the old item is received.
  * @route  POST /api/v1/orders/:id/swap  (orders:update — scoped)
  */
-export const swapOrder = asyncHandler(async (req, res) => {
+export const swapOrder = asyncHandler(async (req, res, next) => {
   const original = req.resource;
   assertExchangeable(original);
 
+  // The rider swaps at the door and collects nothing: whatever the replacement
+  // costs beyond the customer's credit is paid to us directly, before it goes.
+  const credit = heldPaisaOf(original) + toPaisa(original.codAmount);
+  const newTotal =
+    (await buildLineItems(original.business, req.body.items)).reduce(
+      (s, i) => s + toPaisa(i.unitPrice) * i.quantity,
+      0
+    ) + (req.body.customWork || []).reduce((s, w) => s + toPaisa(w.price), 0);
+  const differencePaisa = newTotal - credit;
+  const differenceMoney =
+    differencePaisa > 0
+      ? req.body.differenceAccount
+        ? await resolveMoney(original.business, { account: req.body.differenceAccount }, req.user)
+        : null
+      : null;
+  if (differencePaisa > 0 && !differenceMoney) {
+    return next(
+      new ErrorResponse(
+        'The customer pays the difference to you directly — choose where it came in',
+        400
+      )
+    );
+  }
+
+  // Same courier as the original — it swaps both parcels in one visit.
+  const body = { ...req.body, courier: undefined, isSwap: true };
   // The sale turns into credit only once the replacement stock is reserved, so
   // a shortfall leaves the original untouched.
-  const replacement = await makeReplacement(original, req.body, req.user.id, async () => {
+  const replacement = await makeReplacement(original, body, req.user.id, async () => {
     const entry = await convertSaleToCredit(original, req.user.id);
     return entry
       ? () => reverseEntry(entry._id, { userId: req.user.id, memo: 'Swap not completed' })
@@ -595,6 +622,16 @@ export const swapOrder = asyncHandler(async (req, res) => {
   if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
   original.$locals.statusNote = req.body.note;
   await original.save();
+
+  // The difference, paid in directly: an advance on the replacement, so its COD is 0.
+  if (differenceMoney) {
+    await recordAdvance(replacement, {
+      amount: fromPaisa(differencePaisa),
+      money: differenceMoney,
+      note: 'difference for the swap',
+      userId: req.user.id
+    });
+  }
 
   res.status(201).json({ success: true, data: replacement });
 });
@@ -652,7 +689,14 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   // The charge is NOT: the courier bills by weight, city and outcome, so it is
   // taken when the parcel lands (delivered / returned / exchanged) instead.
   if (status === ORDER_STATUS.DISPATCHED) {
-    order.courier = await resolveCourier(order.business, req.body.courier);
+    const courier = await resolveCourier(order.business, req.body.courier);
+    // A swap goes with the courier that takes the old item back at the door.
+    if (order.isSwap && order.courier && String(courier) !== String(order.courier)) {
+      return next(
+        new ErrorResponse('A swap goes with the same courier as the original order', 400)
+      );
+    }
+    order.courier = courier;
     const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
