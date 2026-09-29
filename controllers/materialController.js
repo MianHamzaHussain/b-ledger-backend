@@ -111,13 +111,13 @@ export const deleteMaterial = asyncHandler(async (req, res, next) => {
  */
 export const buyMaterial = asyncHandler(async (req, res, next) => {
   const material = req.resource;
-  const { quantity, amount, onCredit, party, account, method, date, note } = req.body;
+  const { quantity, amount, onCredit, opening, party, account, method, date, note } = req.body;
   const qty = roundQty(Number(quantity));
   const paisa = toPaisa(amount);
   const { business } = material;
 
   if (!material.isActive) return next(new ErrorResponse(`${material.name} is switched off`, 400));
-  if (onCredit) {
+  if (onCredit && !opening) {
     if (!party) return next(new ErrorResponse('Choose the supplier this is owed to', 400));
     if (!(await Party.exists({ _id: party, business }))) {
       return next(new ErrorResponse('That supplier is not a party of this business', 400));
@@ -125,14 +125,20 @@ export const buyMaterial = asyncHandler(async (req, res, next) => {
   }
 
   await ensureChart(business);
-  const money = onCredit ? null : await resolveMoney(business, { account, method }, req.user);
-  const credit = onCredit
+  const money =
+    onCredit || opening ? null : await resolveMoney(business, { account, method }, req.user);
+  const credit = opening
     ? {
-        account: (await accountByCode(business, CODES.ACCOUNTS_PAYABLE))._id,
-        party,
+        account: (await accountByCode(business, CODES.OPENING_BALANCES))._id,
         creditPaisa: paisa
       }
-    : { account: money.account, creditPaisa: paisa };
+    : onCredit
+      ? {
+          account: (await accountByCode(business, CODES.ACCOUNTS_PAYABLE))._id,
+          party,
+          creditPaisa: paisa
+        }
+      : { account: money.account, creditPaisa: paisa };
   const what = `${material.name} × ${qtyText(qty, material.unit)}`;
 
   const entry = await postEntry({
@@ -166,7 +172,7 @@ export const buyMaterial = asyncHandler(async (req, res, next) => {
     quantity: qty,
     valuePaisa: paisa,
     party: onCredit ? party : undefined,
-    paidFrom: onCredit ? undefined : money.name,
+    paidFrom: opening ? 'Already had it (opening)' : onCredit ? undefined : money.name,
     entry: entry._id,
     note,
     date: entry.date,

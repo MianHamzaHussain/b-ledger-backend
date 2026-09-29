@@ -79,6 +79,10 @@ const buildBatchLines = (product, lines) => {
       // `partner:<id>` (resolved in resolveCostMoney), or a supplier party id —
       // on credit to them.
       const fund = c.fund || 'cash';
+      // Stock the business already had when it started — no money moves now.
+      if (fund === 'opening') {
+        return { label, amountPaisa: toPaisa(amount), onCredit: false, opening: true };
+      }
       if (fund === 'cash' || fund === 'bank') {
         return { label, amountPaisa: toPaisa(amount), method: fund, onCredit: false };
       }
@@ -176,6 +180,7 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
   const cash = await acc(CODES.CASH);
   const bank = await acc(CODES.BANK);
   const raw = await acc(CODES.RAW_MATERIALS);
+  const opening = await acc(CODES.OPENING_BALANCES);
 
   const debits = [];
   const groups = new Map();
@@ -197,6 +202,10 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
         // Out of the material store, not paid: stock became this article.
         key = 'material';
         cl = { account: raw._id, creditPaisa: 0 };
+      } else if (c.opening) {
+        // Already on the shelf when the business started: opening, not a payment.
+        key = 'opening';
+        cl = { account: opening._id, creditPaisa: 0 };
       } else if (c.onCredit) {
         key = `payable:${c.party}`;
         cl = { account: payable._id, party: c.party, creditPaisa: 0 };

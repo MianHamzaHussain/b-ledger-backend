@@ -32,6 +32,9 @@ export const CODES = {
   CUSTOMER_ADVANCES: '2300',
   OWNERS_CAPITAL: '3000',
   DRAWINGS: '3100',
+  // How things stood the day the business started on B Ledger — opening stock,
+  // material and Khata balances. Equity, so none of it moves cash or profit.
+  OPENING_BALANCES: '3200',
   RETAINED_EARNINGS: '3900',
   SALES: '4000',
   // What was kept back from a customer's refund — the delivery charge and tax
@@ -100,6 +103,7 @@ export const DEFAULT_CHART = [
   { code: CODES.CUSTOMER_ADVANCES, name: 'Advances from customers', type: LIABILITY },
   { code: CODES.OWNERS_CAPITAL, name: "Owner's Capital", type: EQUITY },
   { code: CODES.DRAWINGS, name: 'Drawings', type: EQUITY },
+  { code: CODES.OPENING_BALANCES, name: 'Opening balances', type: EQUITY },
   { code: CODES.RETAINED_EARNINGS, name: 'Retained Earnings', type: EQUITY },
   { code: CODES.SALES, name: 'Sales', type: INCOME },
   { code: CODES.CHARGES_KEPT, name: 'Charges kept from refunds', type: INCOME },

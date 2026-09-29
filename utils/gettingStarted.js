@@ -32,6 +32,7 @@ export const gettingStarted = async business => {
     moneyAccounts,
     capital,
     khataPeople,
+    openingAccount,
     khataEntry,
     products,
     production,
@@ -50,6 +51,7 @@ export const gettingStarted = async business => {
     ),
     has(JournalEntry.exists({ business, 'source.kind': JOURNAL_SOURCES.CAPITAL })),
     has(Party.exists({ business })),
+    Account.findOne({ business, code: CODES.OPENING_BALANCES }).select('_id').lean(),
     has(
       JournalEntry.exists({
         business,
@@ -64,12 +66,19 @@ export const gettingStarted = async business => {
     has(CourierInvoice.exists({ business }))
   ]);
 
+  // What the business already had — any entry touching Opening balances: a
+  // Khata opening, opening stock or material already on the shelf.
+  const opening = openingAccount
+    ? await has(JournalEntry.exists({ business, 'lines.account': openingAccount._id }))
+    : false;
+
   return {
     category,
     business: true,
     moneyAccounts,
     capital,
     khataPeople,
+    opening,
     khataEntry,
     products,
     production,

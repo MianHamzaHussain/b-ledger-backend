@@ -33,6 +33,8 @@ export const materialPurchaseSchema = z.object({
   /** What the whole lot cost, in rupees. */
   amount: z.coerce.number().positive('Enter what it cost'),
   onCredit: z.boolean().optional(),
+  /** Already on the shelf when the business started — no money moves now. */
+  opening: z.boolean().optional(),
   party: id.optional(),
   /** A money account id, or `partner:<id>` — wins over `method`. */
   account: z.string().min(1).optional(),

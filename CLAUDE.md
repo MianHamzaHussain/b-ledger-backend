@@ -637,6 +637,23 @@ once, when the article made from them sells.
   refuse Raw Material (5100) and Tailoring (5110) — `PRODUCTION_COST_CODES`.
   Those accounts stay for history and accountant entries only.
 
+### 10.2e Opening balances (`utils/opening.js`)
+
+What the business already had and owed the day it starts on B Ledger. It was
+earned or spent before, so it never moves cash or this period's profit. Every
+opening posts against **Opening balances (3200, equity)**:
+
+- **Khata** (`POST /parties/:id/opening`, `owesUs`): the person's own running
+  account against 3200.
+  - Accounts by type: supplier → AP, reseller/customer → AR, employee →
+    Salaries payable, courier → COD receivable, lender → Loan payable.
+  - A lender can only be owed.
+- **Opening stock:** a batch cost line with `fund: 'opening'` (`opening: true`)
+  credits 3200 instead of money.
+- **Material on the shelf:** a material purchase with `opening: true` credits 3200.
+- **Cash and bank** go in as capital ("Owner put money in"), not here.
+- The Getting started step `opening` ticks once any entry touches 3200.
+
 ### 10.3 Party transactions — "You gave" / "You got"
 
 `POST /parties/:id/transactions` — the DigiKhata action. The party's **type**

@@ -12,6 +12,7 @@ import { partyTransactionLines, allocateCustomerPayment } from '../utils/partyPo
 import { resolveMoney } from '../utils/moneyAccounts.js';
 import { computeRemittance } from '../utils/orderPosting.js';
 import { fromPaisa, toPaisa } from '../utils/money.js';
+import { recordPartyOpening } from '../utils/opening.js';
 import { JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
 
 /**
@@ -187,6 +188,21 @@ export const getPartySummary = asyncHandler(async (req, res, next) => {
  *         courier's money is recorded on its invoice instead (courier-invoices).
  * @route  POST /api/v1/parties/:id/transactions  (journal:create — scoped)
  */
+/**
+ * @desc   A person's balance from before — booked against Opening balances, so it
+ *         moves no cash and no profit.
+ * @route  POST /api/v1/parties/:id/opening  (journal:create — scoped)
+ */
+export const recordPartyOpeningBalance = asyncHandler(async (req, res) => {
+  const entry = await recordPartyOpening(req.resource, {
+    owesUs: req.body.owesUs,
+    amountPaisa: toPaisa(req.body.amount),
+    date: req.body.date,
+    userId: req.user.id
+  });
+  res.status(201).json({ success: true, data: entry });
+});
+
 export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
   const party = req.resource;
   const { direction, method, account, category, purpose, date, memo } = req.body;

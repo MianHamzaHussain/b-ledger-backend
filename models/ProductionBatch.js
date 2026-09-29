@@ -30,6 +30,8 @@ const CostLineSchema = new mongoose.Schema(
      * draft, and fixed at the average when the batch closes and the stock is taken.
      */
     material: { type: mongoose.Schema.ObjectId, ref: 'Material' },
+    /** Stock the business already had when it started — booked to Opening balances. */
+    opening: { type: Boolean },
     materialQty: { type: Number, min: [0, 'Quantity can not be negative'] },
     /**
      * How THIS cost is funded — so cloth can be owed to one supplier while packing

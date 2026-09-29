@@ -16,6 +16,16 @@ export const partyCreateSchema = z.object({
 
 export const partyUpdateSchema = partyCreateSchema.partial();
 
+/** A person's balance from before the business started on B Ledger. */
+export const partyOpeningSchema = z.object({
+  /** true — they owed the business; false — the business owed them. */
+  owesUs: z.boolean(),
+  amount: z.coerce
+    .number({ error: 'Enter an amount' })
+    .positive('Enter an amount greater than zero'),
+  date: z.union([z.string(), z.date()]).optional()
+});
+
 export const partyTransactionSchema = z.object({
   direction: z.enum(['gave', 'got']),
   amount: z.coerce

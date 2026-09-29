@@ -8,6 +8,7 @@ import {
   partyCreateSchema,
   partyUpdateSchema,
   partyTransactionSchema,
+  partyOpeningSchema,
   courierInvoiceSchema
 } from '../schemas/parties.js';
 import { getCourierItems, createCourierInvoice } from '../controllers/courierInvoiceController.js';
@@ -19,7 +20,8 @@ import {
   deleteParty,
   getPartyStatement,
   getPartySummary,
-  recordPartyTransaction
+  recordPartyTransaction,
+  recordPartyOpeningBalance
 } from '../controllers/partyController.js';
 
 const router = express.Router();
@@ -114,12 +116,31 @@ router.get('/summary', can('parties', 'read'), getPartySummary);
  *       400: { description: Invalid for this party type (e.g. courier, bill with no category) }
  *       404: { description: Party not found or outside your businesses }
  */
+/**
+ * @swagger
+ * /parties/{id}/opening:
+ *   post:
+ *     summary: A person's balance from before starting on B Ledger (no cash, no profit)
+ *     tags: [Parties]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       201: { description: Opening balance posted }
+ */
+router.post(
+  '/:id/opening',
+  can('journal', 'create'),
+  loadScoped(Party),
+  validate(partyOpeningSchema),
+  recordPartyOpeningBalance
+);
+
 router.post(
   '/:id/transactions',
   can('journal', 'create'),
   loadScoped(Party),
   validate(partyTransactionSchema),
-  recordPartyTransaction
+  recordPartyTransaction,
+  recordPartyOpeningBalance
 );
 
 /**
