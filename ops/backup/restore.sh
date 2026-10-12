@@ -5,14 +5,16 @@
 #   restore.sh <backup file or rclone path> <age key file> <target db name>
 #
 #   restore.sh b2:bledger-backups/hourly/mongo-2026-10-12_1400.archive.gz.age \
-#              ~/bledger-backup.key b_ledger_restored
+#              ~/bledger-backup.key bledger_restored
 set -euo pipefail
 
 SRC="${1:?backup file (local path or remote:path)}"
 KEY="${2:?age private key file}"
-TARGET="${3:?target database name, e.g. b_ledger_restored}"
-# The live database name; override if production uses a different one.
-SOURCE_DB="${SOURCE_DB:-b_ledger}"
+TARGET="${3:?target database name, e.g. bledger_restored}"
+# The live database name, read from the app's .env unless given.
+ENV_FILE="${ENV_FILE:-/var/www/sites/b-ledger-backend/.env}"
+SOURCE_DB="${SOURCE_DB:-$(grep -m1 '^MONGODB_URI=' "$ENV_FILE" | cut -d= -f2- | tr -d "\"'" | sed -E 's|^[^/]*//[^/]*/([^?]*).*|\1|')}"
+# Where to restore to: a throwaway test server, or the real one in a disaster.
 URI_FILE="${URI_FILE:-/etc/bledger-backup/restore.yaml}"
 
 if [ "$TARGET" = "$SOURCE_DB" ]; then

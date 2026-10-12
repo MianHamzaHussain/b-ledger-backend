@@ -44,30 +44,10 @@ winget install FiloSottile.age
 age-keygen -o bledger-backup.key
 ```
 
-It prints `Public key: age1…`. Copy that line; it goes in step 5. Store
+It prints `Public key: age1…`. Copy that line; it goes in step 4. Store
 `bledger-backup.key` safely, as described above.
 
-### 3. Give MongoDB a backup-only user
-
-The backup user can read every database but cannot change anything.
-
-```bash
-mongosh "mongodb://<admin-user>@127.0.0.1:27017/admin"
-```
-
-```js
-db.getSiblingDB('admin').createUser({
-  user: 'bledger_backup',
-  pwd: passwordPrompt(),
-  roles: [{ role: 'backup', db: 'admin' }]
-});
-```
-
-While you are in mongosh, note the live database's name:
-`db.adminCommand({ listDatabases: 1 }).databases.map(d => d.name)`.
-`restore.sh` assumes `b_ledger`; set `SOURCE_DB=` if it is different.
-
-### 4. Set up the B2 bucket
+### 3. Set up the B2 bucket
 
 1. Sign up at backblaze.com → **B2 Cloud Storage**. The first 10 GB are free.
 2. **Create a bucket**:
@@ -88,7 +68,7 @@ While you are in mongosh, note the live database's name:
    - Choose Read and Write.
    - Copy the **keyID** and **applicationKey**. B2 shows the key only once.
 
-### 5. Connect rclone and write the config
+### 4. Connect rclone and write the settings
 
 Cron runs the backup as root, so configure rclone as root too:
 
@@ -96,12 +76,15 @@ Cron runs the backup as root, so configure rclone as root too:
 sudo rclone config
 #   n  (new remote) → name: b2 → storage: b2
 #   account: <keyID>   key: <applicationKey>   everything else: default
-sudo rclone lsd b2:bledger-backups-qamar     # must not error
+sudo rclone lsd b2:                          # must list your bucket
 ```
 
-Then write the config files:
+Then the settings file. **There is no database login to set up:** the script
+reads `MONGODB_URI` from the app's own `.env`, so it dumps the same database
+the app uses, with the same login.
 
 ```bash
+cd /var/www/sites/b-ledger-backend
 sudo install -d -m 700 /etc/bledger-backup
 sudo install -m 600 ops/backup/backup.env.example /etc/bledger-backup/backup.env
 sudo nano /etc/bledger-backup/backup.env
@@ -109,91 +92,131 @@ sudo nano /etc/bledger-backup/backup.env
 #   RCLONE_REMOTE=b2:bledger-backups-qamar
 ```
 
+Check the login works. This throws the data away and prints only the
+`done dumping` lines:
+
 ```bash
-sudo nano /etc/bledger-backup/mongodump.yaml
-#   uri: mongodb://bledger_backup:<password>@127.0.0.1:27017/?authSource=admin
-sudo chmod 600 /etc/bledger-backup/mongodump.yaml
+sudo bash -c 'set -a; . /var/www/sites/b-ledger-backend/.env; mongodump --uri="$MONGODB_URI" --archive=/dev/null' 2>&1 | grep -c "done dumping"
 ```
 
-If the password contains `@ : / ? # %`, URL-encode it. For example, `@`
-becomes `%40`.
+A number above 0 means the login can read the database.
 
-### 6. Install, then run once by hand
+### 5. Install, then run once by hand
 
 ```bash
 sudo install -m 755 ops/backup/backup.sh  /usr/local/bin/bledger-backup
 sudo install -m 755 ops/backup/restore.sh /usr/local/bin/bledger-restore
-sudo install -m 644 ops/backup/bledger-backup.cron /etc/cron.d/bledger-backup
 
 sudo bledger-backup                          # prints "… ok mongo-….age 1.2M"
 sudo rclone ls b2:bledger-backups-qamar      # shows hourly/mongo-….age
 ```
 
-After that, cron runs it at minute 7 of every hour. The log is
-`/var/log/bledger-backup.log`.
-
-### 7. Alerts
+### 6. Alerts
 
 1. Sign up at healthchecks.io (free) → **Add Check**.
 2. Set **Period 1 hour, Grace 30 minutes**.
 3. Add your email, or WhatsApp/Telegram, as an integration.
-4. Put the ping URL in `HEALTHCHECK_URL=` in `/etc/bledger-backup/backup.env`.
+4. Put the ping URL in `HEALTHCHECK_URL=` in `/etc/bledger-backup/backup.env`,
+   then run `sudo bledger-backup` once so the check turns green.
 
 You now get a message if a backup fails or stops arriving.
 
-### 8. Prove the restore works: do this now, then once a month
+### 7. Prove the restore works
 
-Follow **Restoring** below with the newest backup into `b_ledger_restore_test`.
-Check that the counts match the live database, then drop the test database.
+Do this before turning on the schedule, then once a month. See **Testing a
+restore** below. The test never touches the live database.
+
+### 8. Turn on the schedule
+
+```bash
+sudo install -m 644 ops/backup/bledger-backup.cron /etc/cron.d/bledger-backup
+```
+
+Cron runs it at minute 7 of every hour. The log is
+`/var/log/bledger-backup.log`.
 
 ---
 
-## Restoring
+## Testing a restore
 
-Never restore straight over the live database. Restore under a new name,
-check it, and only then switch.
+This restores into a **throwaway MongoDB on port 27018**, so it needs no extra
+users and cannot hurt the live data. Do it after each setup change and once a
+month.
 
-1. **Pick the backup.**
-
-   ```bash
-   sudo rclone ls b2:bledger-backups-qamar | sort -k2
-   ```
-
-2. **Bring the private key to the server for the restore only.** From your
-   laptop:
+1. **Pick the newest backup** and bring the private key up for this test only.
+   From your laptop:
 
    ```powershell
-   scp bledger-backup.key <user>@<vps>:/tmp/k
+   scp $HOME\bledger-keys\bledger-backup.key <user>@<vps>:/tmp/k
    ```
 
-3. **Write `/etc/bledger-backup/restore.yaml`** (chmod 600). It needs a user
-   with the `restore` role, such as your admin user:
-
-   ```yaml
-   uri: mongodb://<admin-user>:<password>@127.0.0.1:27017/?authSource=admin
-   ```
-
-4. **Restore into a new database name:**
+2. **Start the throwaway server** on the VPS:
 
    ```bash
-   sudo bledger-restore b2:bledger-backups-qamar/hourly/mongo-2026-10-12_1400.archive.gz.age /tmp/k b_ledger_restored
-   shred -u /tmp/k
+   mkdir -p /tmp/rt && mongod --dbpath /tmp/rt --port 27018 --bind_ip 127.0.0.1 \
+     --fork --logpath /tmp/rt/mongod.log
+   printf 'uri: mongodb://127.0.0.1:27018\n' | sudo tee /etc/bledger-backup/restore.yaml >/dev/null
+   sudo chmod 600 /etc/bledger-backup/restore.yaml
    ```
 
-5. **Check `b_ledger_restored`.** Look at order counts and the latest
-   payments.
-6. **Switch over.** Either:
-   - point `MONGODB_URI` in `.env` at `b_ledger_restored` and run
-     `pm2 restart bledger-api`; or
-   - stop the API, rename the databases, and start it again.
+3. **Restore the newest backup:**
 
-   Keep the damaged database until you are sure.
+   ```bash
+   sudo rclone ls b2:bledger-backups-qamar/hourly/ | sort -k2 | tail -1
+   sudo chmod 600 /tmp/k
+   sudo bledger-restore b2:bledger-backups-qamar/hourly/<newest file> /tmp/k bledger_restored
+   ```
+
+4. **Check the counts.** The test copy should hold the same collections as
+   the live one:
+
+   ```bash
+   mongosh --port 27018 --quiet --eval \
+     'db.getSiblingDB("bledger_restored").getCollectionNames().forEach(c => print(c, db.getSiblingDB("bledger_restored")[c].countDocuments()))'
+   ```
+
+   Compare a few numbers (orders, parties) with the app. A collection written
+   to since that hour may be slightly lower, which is fine.
+
+5. **Clean up:**
+
+   ```bash
+   mongod --dbpath /tmp/rt --shutdown
+   rm -rf /tmp/rt && sudo shred -u /tmp/k /etc/bledger-backup/restore.yaml
+   ```
+
+---
+
+## Recovering real data
+
+Use this when data was deleted or broken. Take your time and keep the damaged
+copy.
+
+1. **Pick the last good backup** with `sudo rclone ls b2:bledger-backups-qamar`.
+   Choose `hourly/` for the last two days, `daily/` for the last month, and
+   `monthly/` for older.
+2. **Take a safety backup of the damaged state first**: `sudo bledger-backup`.
+3. **Stop the app:** `pm2 stop bledger-api`.
+4. **Restore it over the live database.** `--drop` replaces each collection
+   with the backup's copy:
+
+   ```bash
+   scp bledger-backup.key <user>@<vps>:/tmp/k          # from your laptop
+   sudo bash -c 'set -a; . /var/www/sites/b-ledger-backend/.env
+     rclone cat b2:bledger-backups-qamar/hourly/<file> | age -d -i /tmp/k |
+     mongorestore --uri="$MONGODB_URI" --archive --gzip --drop'
+   sudo shred -u /tmp/k
+   ```
+
+5. **Start the app:** `pm2 start bledger-api`, then check the latest orders and
+   payments in the app.
 
 **If the whole VPS is gone:**
 
-1. Build a new server: Ubuntu, MongoDB 8, Node 24, pm2.
-2. Clone the repo.
-3. Restore the newest `daily/env-….age` with `age -d -i bledger-backup.key`
-   to get `.env` back.
-4. Restore the newest `hourly/` dump as above.
-5. Repeat this setup on the new server.
+1. Build a new server: Ubuntu, MongoDB 8 with a user for the app, Node 24, pm2.
+2. Clone the repo to `/var/www/sites/b-ledger-backend`.
+3. Download the newest `daily/env-….age` from the B2 website, then decrypt it:
+   `age -d -i bledger-backup.key env-….age > .env`.
+4. Restore the newest `hourly/` dump as in step 4 above.
+5. Run `npm ci --omit=dev`, start with pm2, point DNS at the new server, and
+   repeat this setup.
