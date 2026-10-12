@@ -32,8 +32,17 @@ umask 077
 mkdir -p "$LOCAL_DIR"
 TMP="$LOCAL_DIR/.$NAME.partial"
 
-# The URI (with password) lives in mongodump.yaml, so it never shows up in `ps`.
-mongodump --config=/etc/bledger-backup/mongodump.yaml --archive --gzip --quiet |
+# Same login and database as the app, read from its own .env so there is nothing
+# to keep in sync. It goes through a private temp file rather than the command
+# line, so the password never shows up in `ps`.
+URI=$(grep -m1 '^MONGODB_URI=' "$ENV_FILE" | cut -d= -f2- | tr -d "\"'")
+DB_NAME=$(printf %s "$URI" | sed -E 's|^[^/]*//[^/]*/([^?]*).*|\1|')
+[ -n "$URI" ] && [ -n "$DB_NAME" ] || { echo "no MONGODB_URI with a database name in $ENV_FILE" >&2; false; }
+MONGO_CFG=$(mktemp)
+trap 'rm -f "$MONGO_CFG"' EXIT
+printf 'uri: %s\n' "$URI" >"$MONGO_CFG"
+
+mongodump --config="$MONGO_CFG" --db="$DB_NAME" --archive --gzip --quiet |
   age -r "$AGE_RECIPIENT" >"$TMP"
 [ -s "$TMP" ] || { echo "empty dump" >&2; false; }
 mv "$TMP" "$LOCAL_DIR/$NAME"
