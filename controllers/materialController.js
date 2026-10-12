@@ -117,12 +117,15 @@ export const buyMaterial = asyncHandler(async (req, res, next) => {
   const { business } = material;
 
   if (!material.isActive) return next(new ErrorResponse(`${material.name} is switched off`, 400));
-  if (onCredit && !opening) {
-    if (!party) return next(new ErrorResponse('Choose the supplier this is owed to', 400));
-    if (!(await Party.exists({ _id: party, business }))) {
-      return next(new ErrorResponse('That supplier is not a party of this business', 400));
-    }
+  if (onCredit && !opening && !party) {
+    return next(new ErrorResponse('Choose the supplier this is owed to', 400));
   }
+  // A supplier is named on credit, and optionally when paid now (so their Khata
+  // shows the bill and its payment). Either way it must be this business's.
+  if (party && !opening && !(await Party.exists({ _id: party, business }))) {
+    return next(new ErrorResponse('That supplier is not a party of this business', 400));
+  }
+  const paidToSupplier = Boolean(party) && !onCredit && !opening;
 
   await ensureChart(business);
   const money =
@@ -152,6 +155,24 @@ export const buyMaterial = asyncHandler(async (req, res, next) => {
         label: what,
         debitPaisa: paisa
       },
+      // Paid now to a named supplier: their bill and its payment both show in
+      // their Khata, so the balance stays put but the history is complete.
+      ...(paidToSupplier
+        ? [
+            {
+              account: (await accountByCode(business, CODES.ACCOUNTS_PAYABLE))._id,
+              party,
+              label: `Bill — ${what}`,
+              creditPaisa: paisa
+            },
+            {
+              account: (await accountByCode(business, CODES.ACCOUNTS_PAYABLE))._id,
+              party,
+              label: `Paid — ${what}`,
+              debitPaisa: paisa
+            }
+          ]
+        : []),
       { ...credit, label: what }
     ],
     userId: req.user.id
@@ -171,7 +192,7 @@ export const buyMaterial = asyncHandler(async (req, res, next) => {
     kind: 'purchase',
     quantity: qty,
     valuePaisa: paisa,
-    party: onCredit ? party : undefined,
+    party: onCredit || paidToSupplier ? party : undefined,
     paidFrom: opening ? 'Already had it (opening)' : onCredit ? undefined : money.name,
     entry: entry._id,
     note,

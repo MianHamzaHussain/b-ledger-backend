@@ -176,6 +176,8 @@ export const subledgerStatement = async (business, dimension, id) => {
         // What posted this line — lets a caller enrich order-sourced rows with
         // the order's own breakdown (total, advance, taxes) without re-parsing.
         source: entry.source,
+        // Set on a reversal — which entry it undoes.
+        reversalOf: entry.reversalOf,
         debitPaisa: line.debitPaisa || 0,
         creditPaisa: line.creditPaisa || 0,
         balancePaisa: running

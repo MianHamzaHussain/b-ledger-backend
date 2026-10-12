@@ -9,6 +9,7 @@ import { partyBalancesByIds, partyStatement, postEntry } from '../utils/ledger.j
 import { ensureChart } from '../utils/chartOfAccounts.js';
 import { partyLedgerReport } from '../utils/reports.js';
 import { partyTransactionLines, allocateCustomerPayment } from '../utils/partyPosting.js';
+import { KHATA_REVERSIBLE, reverseKhataEntry } from '../utils/khataReverse.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
 import { computeRemittance } from '../utils/orderPosting.js';
 import { fromPaisa, toPaisa } from '../utils/money.js';
@@ -137,6 +138,15 @@ export const getPartyStatement = asyncHandler(async (req, res) => {
   const { rows, balancePaisa } = await partyStatement(party.business, party._id);
   await enrichOrderRows(party.business, rows);
 
+  // Which rows have been undone, and which can still be — one query for the page.
+  const undone = new Set(
+    (
+      await JournalEntry.find({ reversalOf: { $in: [...new Set(rows.map(r => r.entry))] } })
+        .select('reversalOf')
+        .lean()
+    ).map(r => String(r.reversalOf))
+  );
+
   res.status(200).json({
     success: true,
     data: {
@@ -145,6 +155,10 @@ export const getPartyStatement = asyncHandler(async (req, res) => {
       balancePaisa,
       rows: rows.map(r => ({
         ...r,
+        isReversal: Boolean(r.reversalOf),
+        reversed: undone.has(String(r.entry)),
+        canReverse:
+          KHATA_REVERSIBLE.has(r.source?.kind) && !r.reversalOf && !undone.has(String(r.entry)),
         debit: fromPaisa(r.debitPaisa),
         credit: fromPaisa(r.creditPaisa),
         balance: fromPaisa(r.balancePaisa)
@@ -181,14 +195,6 @@ export const getPartySummary = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc   "You gave" / "You got" on a party — DigiKhata's one action, on top of
- *         the double-entry books. The party's type picks the account (see
- *         `partyTransactionLines`), so the user never chooses one. A credit
- *         customer's payment is also applied to their unpaid counter sales. A
- *         courier's money is recorded on its invoice instead (courier-invoices).
- * @route  POST /api/v1/parties/:id/transactions  (journal:create — scoped)
- */
-/**
  * @desc   A person's balance from before — booked against Opening balances, so it
  *         moves no cash and no profit.
  * @route  POST /api/v1/parties/:id/opening  (journal:create — scoped)
@@ -203,6 +209,14 @@ export const recordPartyOpeningBalance = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: entry });
 });
 
+/**
+ * @desc   "You gave" / "You got" on a party — DigiKhata's one action, on top of
+ *         the double-entry books. The party's type picks the account (see
+ *         `partyTransactionLines`), so the user never chooses one. A credit
+ *         customer's payment is also applied to their unpaid counter sales. A
+ *         courier's money is recorded on its invoice instead (courier-invoices).
+ * @route  POST /api/v1/parties/:id/transactions  (journal:create — scoped)
+ */
 export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
   const party = req.resource;
   const { direction, method, account, category, purpose, date, memo } = req.body;
@@ -237,4 +251,14 @@ export const recordPartyTransaction = asyncHandler(async (req, res, next) => {
   }
 
   res.status(201).json({ success: true, data: entry });
+});
+
+/**
+ * @desc   Reverse one of this person's Khata entries — a mistake in a payment,
+ *         bill, salary, loan or opening balance. The entry stays in the history.
+ * @route  POST /api/v1/parties/:id/entries/:entryId/reverse  (journal:create — scoped)
+ */
+export const reversePartyEntry = asyncHandler(async (req, res) => {
+  const reversal = await reverseKhataEntry(req.resource, req.params.entryId, req.user.id);
+  res.status(201).json({ success: true, data: reversal });
 });

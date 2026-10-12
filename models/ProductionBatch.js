@@ -32,6 +32,12 @@ const CostLineSchema = new mongoose.Schema(
     material: { type: mongoose.Schema.ObjectId, ref: 'Material' },
     /** Stock the business already had when it started — booked to Opening balances. */
     opening: { type: Boolean },
+    /**
+     * Stitching: the pieces this line makes came out of another size of the same
+     * product. The line's cost is the source's average cost (set when the batch
+     * closes) and posts nothing — stock moved from one size to another.
+     */
+    fromStock: { type: Boolean },
     materialQty: { type: Number, min: [0, 'Quantity can not be negative'] },
     /**
      * How THIS cost is funded — so cloth can be owed to one supplier while packing
@@ -117,6 +123,13 @@ const ProductionBatchSchema = new mongoose.Schema(
         message: 'Add at least one variant to produce'
       }
     },
+
+    /**
+     * Stitching: closing takes every line's quantity out of this size of the same
+     * product (e.g. Unstitched) instead of adding new stock.
+     */
+    sourceVariantId: { type: mongoose.Schema.ObjectId },
+    sourceVariantLabel: { type: String },
 
     status: { type: String, enum: ['open', 'closed'], default: 'open' },
 

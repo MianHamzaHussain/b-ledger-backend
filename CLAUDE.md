@@ -616,6 +616,9 @@ once, when the article made from them sells.
 
 - **Buy** (`POST /materials/:id/purchases`): Dr Raw materials (1340) / Cr money
   or the supplier's payable. No profit effect.
+  - **Paid now with a named supplier** books four lines: Dr Raw materials /
+    Cr payable (bill) / Dr payable (paid) / Cr money. Their Khata shows both
+    rows and the balance is unchanged.
 - **A batch uses it** (a cost line with `material` + `materialQty`):
   - while the batch is a draft, the amount is only an estimate at today's average;
   - at close the stock is taken, and the amount is fixed at that moment's
@@ -642,6 +645,43 @@ once, when the article made from them sells.
   tailoring goes on the batch. The everyday expense and supplier-bill paths
   refuse Raw Material (5100) and Tailoring (5110) — `PRODUCTION_COST_CODES`.
   Those accounts stay for history and accountant entries only.
+
+### 10.2f Reversing from a person's Khata (`utils/khataReverse.js`)
+
+`POST /parties/:id/entries/:entryId/reverse` (`journal:create`). Only what the
+Khata itself creates is reversible here: sources `payment`, `expense`,
+`salary`, `loan` and `opening` (`KHATA_REVERSIBLE`).
+
+- Order, courier-invoice, material, batch and consignment entries are refused
+  with the place to undo them (`reverseMessage`) — those records must stay in
+  step with the books.
+- A reversal can't be reversed, and an entry can't be reversed twice. The
+  original stays in the history.
+- **Credit customer payment:** reversing takes it back off their counter sales,
+  newest first (`unallocateCustomerPayment`), marking a sale unpaid again once
+  it is no longer covered.
+- **Loan taken:** can't be reversed while part of it is repaid — reverse the
+  repayments first.
+- The statement rows carry `isReversal`, `reversed` and `canReverse`.
+
+### 10.2g Stitching — pieces move between sizes of one product
+
+A batch may name `sourceVariantId` (e.g. Unstitched). Closing it takes every
+line's quantity out of that size instead of adding new stock.
+
+- Each line gets a server-written **from-stock** cost line (`fromStock`),
+  priced at the source's average cost. It posts **nothing** — stock moved from
+  one size to another, so nothing was spent. A client-sent `fromStock` line is
+  ignored.
+- Only the other costs (tailor, lace from materials) post. A stitch with none
+  posts no entry at all.
+- The target size's cost = moved cost + stitching cost, per piece, averaged into
+  its stock. The source size's cost doesn't change.
+- **Close order matters:** the source is reduced (a conditional, atomic update)
+  _before_ the product document is loaded, because that document is saved at the
+  end and an earlier copy would write the source's old stock back. Any later
+  failure puts the pieces (and any material) back.
+- Correcting a closed stitch keeps its from-stock lines exactly as they closed.
 
 ### 10.2e Opening balances (`utils/opening.js`)
 
