@@ -277,3 +277,37 @@ export const allocateCustomerPayment = async (business, customerParty, paisa) =>
     left -= applied;
   }
 };
+
+/**
+ * Undo `allocateCustomerPayment` when that payment is reversed: take `paisa` back
+ * off the customer's counter sales, newest first, and mark a sale unpaid again once
+ * it is no longer fully covered. Same optimistic guard as the allocation.
+ */
+export const unallocateCustomerPayment = async (business, customerParty, paisa) => {
+  const orders = await Order.find({
+    business,
+    customerParty,
+    source: SALES_CHANNELS.WALK_IN,
+    status: ORDER_STATUS.DELIVERED,
+    paidPaisa: { $gt: 0 }
+  })
+    .sort({ createdAt: -1 })
+    .select('codAmount paidPaisa');
+
+  let left = paisa;
+  for (const order of orders) {
+    if (left <= 0) break;
+    const taken = Math.min(left, order.paidPaisa);
+    const remaining = order.paidPaisa - taken;
+    await Order.updateOne(
+      { _id: order._id, paidPaisa: order.paidPaisa },
+      {
+        $set: {
+          paidPaisa: remaining,
+          ...(remaining < toPaisa(order.codAmount) ? { paymentStatus: PAYMENT_STATUS.UNPAID } : {})
+        }
+      }
+    );
+    left -= taken;
+  }
+};

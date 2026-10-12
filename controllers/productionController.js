@@ -36,7 +36,7 @@ const DETAIL_POPULATE = [
  * appear once; each must carry at least one cost line. A missing sale price
  * falls back to the variant's current price. Throws 400 on any bad line.
  */
-const buildBatchLines = (product, lines) => {
+const buildBatchLines = (product, lines, source = null, withFromStock = true) => {
   if (!Array.isArray(lines) || lines.length === 0) {
     throw new ErrorResponse('Add at least one variant to produce', 400);
   }
@@ -44,6 +44,9 @@ const buildBatchLines = (product, lines) => {
   return lines.map(l => {
     const variant = product.variants.id(l.variantId);
     if (!variant) throw new ErrorResponse('A selected variant is not on this product', 400);
+    if (source && String(variant._id) === String(source._id)) {
+      throw new ErrorResponse("A size can't be stitched from itself", 400);
+    }
     if (seen.has(String(variant._id))) {
       throw new ErrorResponse('Each variant can appear only once in a batch', 400);
     }
@@ -54,10 +57,14 @@ const buildBatchLines = (product, lines) => {
       throw new ErrorResponse('Quantity must be a whole number of at least 1', 400);
     }
 
-    if (!Array.isArray(l.costLines) || l.costLines.length === 0) {
+    // A from-stock cost is the server's to write (it is priced from the source
+    // size), never the client's — so any sent is dropped. A stitched line may
+    // carry no other cost at all.
+    const given = Array.isArray(l.costLines) ? l.costLines.filter(c => !c.fromStock) : [];
+    if (!source && given.length === 0) {
       throw new ErrorResponse(`Add at least one cost for ${variant.label || 'the variant'}`, 400);
     }
-    const costLines = l.costLines.map(c => {
+    const costLines = given.map(c => {
       // From the material store: named and priced by resolveMaterialLines.
       if (c.material) {
         const materialQty = roundQty(Number(c.materialQty));
@@ -91,6 +98,17 @@ const buildBatchLines = (product, lines) => {
       }
       return { label, amountPaisa: toPaisa(amount), onCredit: true, party: fund };
     });
+
+    // The pieces moved from the source size, at its average cost right now — an
+    // estimate until the batch closes and the stock is actually taken.
+    if (source && withFromStock) {
+      costLines.unshift({
+        label: `${source.label} × ${quantity} from stock`,
+        amountPaisa: Math.round(toPaisa(source.costPrice) * quantity),
+        onCredit: false,
+        fromStock: true
+      });
+    }
 
     const salePrice = l.salePrice != null ? Number(l.salePrice) : variant.salePrice;
     return {
@@ -162,6 +180,14 @@ const validateCostParties = async (business, batchLines) => {
     throw new ErrorResponse('A cost supplier is not a party of this business', 400);
 };
 
+/** The size a stitching batch takes from — it must be on this product. */
+const sourceFor = (prod, id) => {
+  if (!id) return null;
+  const variant = prod.variants.id(id);
+  if (!variant) throw new ErrorResponse('That size is not on this product', 400);
+  return variant;
+};
+
 /** "Kurta (A1B2)" — how a batch's article reads in ledger memos. */
 const articleOf = prod => (prod ? `${prod.name} (${prod.articleNumber})` : 'production');
 
@@ -186,6 +212,8 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
   const groups = new Map();
   for (const line of batch.lines) {
     for (const c of line.costLines || []) {
+      // Stock moved between sizes: nothing was spent, so nothing posts.
+      if (c.fromStock) continue;
       const amt = c.amountPaisa || 0;
       if (amt <= 0) continue;
       debits.push({
@@ -225,6 +253,9 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
     }
   }
 
+  // A stitch with no other cost moves stock only — there is no entry to post.
+  if (debits.length === 0) return null;
+
   return postEntry({
     business: batch.business,
     memo: `${memoPrefix} — ${articleOf(prod)}`,
@@ -261,7 +292,8 @@ export const createBatch = asyncHandler(async (req, res, next) => {
   const prod = await Product.findOne({ _id: product, business });
   if (!prod) return next(new ErrorResponse('Product not found in this business', 404));
 
-  const batchLines = buildBatchLines(prod, lines);
+  const source = sourceFor(prod, req.body.sourceVariantId);
+  const batchLines = buildBatchLines(prod, lines, source);
   await validateCostParties(business, batchLines);
   await resolveCostMoney(business, batchLines, req.user);
   await resolveMaterialLines(business, batchLines);
@@ -270,6 +302,8 @@ export const createBatch = asyncHandler(async (req, res, next) => {
   const batch = await ProductionBatch.create({
     business,
     product,
+    sourceVariantId: source?._id,
+    sourceVariantLabel: source?.label,
     lines: batchLines,
     createdBy: req.user.id
   });
@@ -289,10 +323,13 @@ export const updateBatch = asyncHandler(async (req, res, next) => {
   const prod = await Product.findOne({ _id: batch.product, business: batch.business });
   if (!prod) return next(new ErrorResponse('Product not found in this business', 404));
 
-  const batchLines = buildBatchLines(prod, req.body.lines);
+  const source = sourceFor(prod, req.body.sourceVariantId);
+  const batchLines = buildBatchLines(prod, req.body.lines, source);
   await validateCostParties(batch.business, batchLines);
   await resolveCostMoney(batch.business, batchLines, req.user);
   await resolveMaterialLines(batch.business, batchLines);
+  batch.sourceVariantId = source?._id;
+  batch.sourceVariantLabel = source?.label;
   batch.lines = batchLines;
   batch.updatedBy = req.user.id;
   await batch.save();
@@ -326,7 +363,12 @@ const correctClosedBatch = async (req, res, next) => {
   const prod = await Product.findOne({ _id: batch.product, business: batch.business });
   if (!prod) return next(new ErrorResponse('Product not found in this business', 404));
 
-  const corrected = buildBatchLines(prod, req.body.lines);
+  // A stitched batch keeps its source and its from-stock lines exactly as they
+  // closed (below) — they were priced when the stock actually moved.
+  const stitchedFrom = batch.sourceVariantId
+    ? { _id: batch.sourceVariantId, label: batch.sourceVariantLabel }
+    : null;
+  const corrected = buildBatchLines(prod, req.body.lines, stitchedFrom, false);
   const sameShape =
     corrected.length === batch.lines.length &&
     corrected.every(c => {
@@ -361,7 +403,9 @@ const correctClosedBatch = async (req, res, next) => {
       );
     }
     const oldMaterial = old.costLines.filter(c => c.material);
+    const oldFromStock = old.costLines.filter(c => c.fromStock);
     fixed.costLines = [
+      ...oldFromStock.map(c => c.toObject()),
       ...fixed.costLines.filter(c => !c.material),
       ...oldMaterial.map(c => c.toObject())
     ];
@@ -420,7 +464,7 @@ const correctClosedBatch = async (req, res, next) => {
   prod.updatedBy = req.user.id;
   await prod.save();
 
-  batch.closeEntry = entry._id;
+  batch.closeEntry = entry?._id;
   batch.updatedBy = req.user.id;
   await batch.save();
 
@@ -452,16 +496,60 @@ export const closeBatch = asyncHandler(async (req, res, next) => {
   // Take the batch's material from the store now, fixing each line's amount at
   // today's average — all or nothing, so a short material closes nothing.
   const taken = await takeBatchMaterials(batch);
+  // Pieces taken out of the source size (stitching) — returned if closing fails.
+  let sourceTaken = 0;
   const putBack = async () => {
     for (const t of taken) {
       await putBackMaterial(batch.business, t.cost.material, t.qty, t.valuePaisa);
     }
+    if (sourceTaken) {
+      await Product.updateOne(
+        { _id: batch.product, 'variants._id': batch.sourceVariantId },
+        { $inc: { 'variants.$.stock': sourceTaken, totalStock: sourceTaken } }
+      );
+    }
   };
+
+  // Stitching: the pieces come out of the source size. This must happen BEFORE
+  // the product is loaded below — that document is saved at the end, and one
+  // loaded earlier would write the source's old stock back over this.
+  if (batch.sourceVariantId) {
+    const total = batch.lines.reduce((s, l) => s + l.quantity, 0);
+    const current = await Product.findById(batch.product).select('variants').lean();
+    const source = current?.variants.find(v => String(v._id) === String(batch.sourceVariantId));
+    if (!source) {
+      await putBack();
+      return next(
+        new ErrorResponse('The size this batch stitches from is no longer on the product', 400)
+      );
+    }
+    const result = await Product.updateOne(
+      {
+        _id: batch.product,
+        variants: { $elemMatch: { _id: batch.sourceVariantId, stock: { $gte: total } } }
+      },
+      { $inc: { 'variants.$.stock': -total, totalStock: -total } }
+    );
+    if (result.modifiedCount !== 1) {
+      await putBack();
+      return next(
+        new ErrorResponse(`Only ${source.stock} ${source.label} in stock — ${total} needed`, 400)
+      );
+    }
+    sourceTaken = total;
+    // Price each line's moved pieces at the source's average cost, now.
+    for (const line of batch.lines) {
+      for (const c of line.costLines) {
+        if (c.fromStock) c.amountPaisa = Math.round(toPaisa(source.costPrice) * line.quantity);
+      }
+    }
+  }
 
   // Actual cost = the sum of every variant's itemised cost lines.
   const allCosts = batch.lines.flatMap(l => l.costLines || []);
   const totalPaisa = allCosts.reduce((s, c) => s + (c.amountPaisa || 0), 0);
-  if (totalPaisa <= 0) {
+  // (A stitch of stock that carried no cost is still just a move between sizes.)
+  if (totalPaisa <= 0 && !batch.sourceVariantId) {
     await putBack();
     return next(new ErrorResponse('Batch cost must be greater than zero', 400));
   }
@@ -474,7 +562,7 @@ export const closeBatch = asyncHandler(async (req, res, next) => {
     await putBack();
     throw err;
   }
-  await recordBatchUse(batch, taken, entry._id, req.user.id);
+  await recordBatchUse(batch, taken, entry?._id, req.user.id);
 
   // Per variant: independent stock, moving-average cost, and sale price.
   if (prod) {
@@ -499,7 +587,7 @@ export const closeBatch = asyncHandler(async (req, res, next) => {
   }
 
   batch.status = 'closed';
-  batch.closeEntry = entry._id;
+  batch.closeEntry = entry?._id;
   batch.closedAt = new Date();
   batch.updatedBy = req.user.id;
   await batch.save();

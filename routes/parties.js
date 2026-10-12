@@ -21,7 +21,8 @@ import {
   getPartyStatement,
   getPartySummary,
   recordPartyTransaction,
-  recordPartyOpeningBalance
+  recordPartyOpeningBalance,
+  reversePartyEntry
 } from '../controllers/partyController.js';
 
 const router = express.Router();
@@ -132,6 +133,26 @@ router.post(
   loadScoped(Party),
   validate(partyOpeningSchema),
   recordPartyOpeningBalance
+);
+
+/**
+ * @swagger
+ * /parties/{id}/entries/{entryId}/reverse:
+ *   post:
+ *     summary: Reverse one of this person's Khata entries (payment, bill, salary, loan, opening)
+ *     description: The entry stays in the history with a matching reversal. Order, courier-invoice, material and batch entries are undone where they were made.
+ *     tags: [Parties]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       201: { description: Reversal posted }
+ *       400: { description: Not reversible here, or already reversed }
+ *       404: { description: Entry is not on this person }
+ */
+router.post(
+  '/:id/entries/:entryId/reverse',
+  can('journal', 'create'),
+  loadScoped(Party),
+  reversePartyEntry
 );
 
 router.post(

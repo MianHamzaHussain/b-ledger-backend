@@ -15,7 +15,7 @@ import MaterialMove from '../models/MaterialMove.js';
 import Product from '../models/Product.js';
 import ProductionBatch from '../models/ProductionBatch.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { accountBalance, partyBalance } from '../utils/ledger.js';
+import { accountBalance, partyBalance, partyStatement } from '../utils/ledger.js';
 import {
   createMaterial,
   buyMaterial,
@@ -375,4 +375,45 @@ test('custom work can not take more material than the store has', async () => {
     /Not enough Base dye/
   );
   assert.equal((await reload(material)).stock, 2);
+});
+
+// ── Paid now, to a named supplier ──
+
+test('paid now to a supplier: their Khata shows the bill and its payment, balance unchanged', async () => {
+  const { biz, material } = await setup();
+  const supplier = await makeParty(biz._id, 'supplier');
+  await buy(material, 10, 5000, { party: String(supplier._id) });
+
+  assert.equal(await partyBalance(biz._id, supplier._id), 0);
+  const { rows } = await partyStatement(biz._id, supplier._id);
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].memo, /^Bill — /);
+  assert.match(rows[1].memo, /^Paid — /);
+  assert.equal(await balance(biz, CODES.CASH), -500000);
+  assert.equal(await balance(biz, CODES.RAW_MATERIALS), 500000);
+});
+
+test('paid now with a supplier of another business is refused', async () => {
+  const { material } = await setup();
+  const other = await makeBusiness({ name: 'Other Biz' });
+  const stranger = await makeParty(other._id, 'supplier');
+  await assert.rejects(
+    buy(material, 10, 5000, { party: String(stranger._id) }),
+    /not a party of this business/
+  );
+});
+
+test('undoing a paid-now purchase leaves the supplier at 0 with the reversal in their statement', async () => {
+  const { biz, material } = await setup();
+  const supplier = await makeParty(biz._id, 'supplier');
+  const bought = await buy(material, 10, 5000, { party: String(supplier._id) });
+
+  await runHandler(undoMaterialMove, {
+    resource: await reload(material),
+    params: { moveId: String(bought.body.data._id) }
+  });
+  assert.equal(await partyBalance(biz._id, supplier._id), 0);
+  const { rows } = await partyStatement(biz._id, supplier._id);
+  assert.equal(rows.length, 4, 'two original rows and their two reversals');
+  assert.equal(await balance(biz, CODES.CASH), 0);
 });

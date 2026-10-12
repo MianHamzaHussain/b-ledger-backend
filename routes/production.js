@@ -88,7 +88,7 @@ router
       ProductionBatch,
       { path: 'product', select: 'name articleNumber' },
       ['product'],
-      'product totalQuantity totalCostPaisa status closedAt createdAt'
+      'product totalQuantity totalCostPaisa status closedAt createdAt sourceVariantLabel'
     ),
     getBatches
   )
