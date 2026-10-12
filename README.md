@@ -309,6 +309,10 @@ Swagger (`/api-docs`) documents every field.
 
 ## Deploying to production
 
+> **Backups:** hourly encrypted `mongodump` to Backblaze B2, with the setup and
+> restore steps in [`ops/backup/README.md`](./ops/backup/README.md). Set it up
+> before real data goes in.
+
 ### Auto-deploy to the VPS
 
 Merging to `master` deploys automatically: the **CI** workflow runs the check,

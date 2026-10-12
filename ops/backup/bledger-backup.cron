@@ -1,0 +1,4 @@
+# Installed as /etc/cron.d/bledger-backup. Minute 7 avoids the top-of-hour rush.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+7 * * * * root /usr/local/bin/bledger-backup >> /var/log/bledger-backup.log 2>&1
