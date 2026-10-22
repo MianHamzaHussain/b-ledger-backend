@@ -75,7 +75,9 @@ const COST_FIELDS = new Set([
   'totalCostPaisa',
   'customCosts',
   // Raw material: what the stock on hand, or one purchase / use of it, is worth.
-  'valuePaisa'
+  'valuePaisa',
+  // A supplier delivery: what was paid now says what the goods cost.
+  'paidNowPaisa'
 ]);
 
 const stripCosts = value => {

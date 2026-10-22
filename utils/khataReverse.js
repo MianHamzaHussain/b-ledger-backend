@@ -31,6 +31,8 @@ export const reverseMessage = kind => {
       return 'Undo this by reversing the courier invoice (Accountant tools)';
     case JOURNAL_SOURCES.MATERIAL:
       return 'Undo this on the material (Raw materials)';
+    case JOURNAL_SOURCES.GOODS_RECEIPT:
+      return 'Undo this on the goods receipt';
     case JOURNAL_SOURCES.BATCH:
       return 'This came from a production batch';
     case JOURNAL_SOURCES.CONSIGNMENT:
