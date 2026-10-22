@@ -197,19 +197,38 @@ copy.
    `monthly/` for older.
 2. **Take a safety backup of the damaged state first**: `sudo bledger-backup`.
 3. **Stop the app:** `pm2 stop bledger-api`.
-4. **Restore it over the live database.** `--drop` replaces each collection
-   with the backup's copy:
+4. **Download and decrypt to files, one step at a time.** A one-line pipe hides
+   which step failed (it did in the 2026-10-12 drill), so do these separately
+   and check each one prints no error:
 
    ```bash
    scp bledger-backup.key <user>@<vps>:/tmp/k          # from your laptop
-   sudo bash -c 'set -a; . /var/www/sites/b-ledger-backend/.env
-     rclone cat b2:bledger-backups-qamar/hourly/<file> | age -d -i /tmp/k |
-     mongorestore --uri="$MONGODB_URI" --archive --gzip --drop'
-   sudo shred -u /tmp/k
+   sudo chmod 600 /tmp/k
+   sudo rclone copyto b2:bledger-backups-qamar/hourly/<file> /tmp/b.age
+   sudo age -d -i /tmp/k -o /tmp/b.archive /tmp/b.age
+   ls -l /tmp/b.age /tmp/b.archive                     # both must be non-empty
    ```
 
-5. **Start the app:** `pm2 start bledger-api`, then check the latest orders and
+5. **Restore it over the live database.** `--drop` replaces each collection
+   with the backup's copy. Look for `0 document(s) failed to restore`:
+
+   ```bash
+   sudo bash -c 'set -a; . /var/www/sites/b-ledger-backend/.env; mongorestore --uri="$MONGODB_URI" --gzip --archive=/tmp/b.archive --drop' 2>&1 | tail -4
+   ```
+
+6. **Delete the key and the decrypted copy**, then start the app:
+
+   ```bash
+   sudo shred -u /tmp/k /tmp/b.age /tmp/b.archive
+   pm2 start bledger-api
+   ```
+
+   Log in again (all sessions are reset), then check the latest orders and
    payments in the app.
+
+> A full wipe-and-restore drill was run on 2026-10-12 while the database held
+> only setup data. Never repeat the "wipe" half once real business data is in;
+> test restores into a throwaway MongoDB instead (see _Testing a restore_).
 
 **If the whole VPS is gone:**
 

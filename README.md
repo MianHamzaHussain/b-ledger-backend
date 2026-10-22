@@ -316,7 +316,7 @@ Swagger (`/api-docs`) documents every field.
 ### Auto-deploy to the VPS
 
 Merging to `master` deploys automatically: the **CI** workflow runs the check,
-and only if it passes does its `deploy` job SSH into the VPS and run `git pull --ff-only`, `npm ci --omit=dev` and `pm2 restart bledger-api` in `/var/www/sites/b-ledger-backend`, then waits for `/api/v1/health` to answer.
+and only if it passes does its `deploy` job SSH into the VPS and run `git pull --ff-only`, `npm ci --omit=dev` and `sudo systemctl restart bledger-api` in `/var/www/sites/b-ledger-backend`, then waits for `/api/v1/health` to answer.
 Every PR runs the same check once — make it required so nothing merges red.
 
 **One-time setup** (do it once per repo — backend and frontend):
@@ -328,8 +328,8 @@ Every PR runs the same check once — make it required so nothing merges red.
    ```
 
    Append `bledger_deploy.pub` to `~/.ssh/authorized_keys` on the VPS, for the
-   **same user that runs pm2** (pm2 processes are per-user). Both repos can
-   share this key.
+   **same user that runs the API** (`User=` in `ops/systemd/bledger-api.service`).
+   Both repos can share this key.
 
 2. **The server's host key**, so the deploy refuses an impostor:
 
@@ -342,7 +342,7 @@ Every PR runs the same check once — make it required so nothing merges red.
    | Kind     | Name              | Value                                  |
    | -------- | ----------------- | -------------------------------------- |
    | Secret   | `VPS_HOST`        | the VPS IP or hostname                 |
-   | Secret   | `VPS_USER`        | the SSH user that owns the app and pm2 |
+   | Secret   | `VPS_USER`        | the SSH user that owns the app         |
    | Secret   | `VPS_SSH_KEY`     | the whole contents of `bledger_deploy` |
    | Secret   | `VPS_KNOWN_HOSTS` | the contents of `known_hosts.txt`      |
    | Secret   | `VPS_PORT`        | only if SSH isn't on 22                |
@@ -355,7 +355,7 @@ Every PR runs the same check once — make it required so nothing merges red.
 
 A failed deploy shows red on the commit in GitHub → Actions, with the server's
 output. If the API doesn't come up healthy the deploy fails — look at
-`pm2 logs bledger-api` on the server.
+`journalctl -u bledger-api -n 50` on the server.
 
 ### First-time server setup
 
@@ -373,6 +373,52 @@ output. If the API doesn't come up healthy the deploy fails — look at
 5. **Start command:** `npm start` (or `node server.js` if the platform injects
    env). Run `npm run seed` **once** to create the first admin.
 6. **Verify:** `GET /api/v1/health` returns `{ success: true, status: "ok" }`.
+
+### Running the API under systemd (VPS)
+
+The API runs as a systemd service, **not** under pm2. On 2026-10-18 pm2's daemon
+was killed by a SIGHUP and nothing restarted it, so the API sat down for four
+days: systemd counts SIGHUP/SIGTERM as a clean exit, so pm2's own unit
+(`Restart=on-failure`) never revives it. `ops/systemd/bledger-api.service` uses
+`Restart=always`, so the API comes back within seconds whatever the reason, and
+at every boot. While it is down the browser shows a **CORS error** on login,
+because nginx has nothing to forward to.
+
+One-time switch, as the deploy user, from `/var/www/sites/b-ledger-backend`:
+
+```bash
+/usr/bin/node -v                                    # must be v24.x (the unit uses this node)
+sudo install -m 644 ops/systemd/bledger-api.service /etc/systemd/system/
+sudo install -m 440 ops/systemd/bledger-api.sudoers /etc/sudoers.d/bledger-api
+sudo visudo -cf /etc/sudoers.d/bledger-api          # must say: parsed OK
+
+pm2 delete bledger-api && pm2 save --force && pm2 kill   # stop the pm2 copy, empty its list
+sudo systemctl disable pm2-mianhamza                     # or a second copy would start at boot
+sudo systemctl daemon-reload
+sudo systemctl enable --now bledger-api
+sudo systemctl enable mongod nginx cron
+sudo loginctl enable-linger mianhamza
+```
+
+Check it:
+
+```bash
+systemctl is-active bledger-api                     # active
+curl -s http://127.0.0.1:5000/api/v1/health         # use the PORT from .env
+journalctl -u bledger-api -n 30 --no-pager          # the API's logs live here now
+```
+
+**Prove it survives a kill.** This is the test that failed on 2026-10-18:
+
+```bash
+sudo kill -HUP "$(systemctl show -p MainPID --value bledger-api)"
+sleep 6; systemctl is-active bledger-api            # active again, new PID
+```
+
+Then `sudo reboot`, wait two minutes, and the health check must answer without
+you touching anything. Add an external uptime check (for example UptimeRobot,
+free) on `https://bledger.org/api/v1/health` so an outage reaches you instead of
+your users.
 
 ---
 
