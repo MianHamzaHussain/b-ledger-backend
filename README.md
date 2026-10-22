@@ -314,6 +314,11 @@ Swagger (`/api-docs`) documents every field.
 > restore steps in [`ops/backup/README.md`](./ops/backup/README.md). Set it up
 > before real data goes in.
 
+> **Uptime:** an external monitor for alerts plus a per-minute on-server log.
+> Run `sudo bledger-uptime` (or `sudo bledger-uptime 30`) to see availability,
+> outages and gaps. Setup and how to read it:
+> [`ops/monitoring/README.md`](./ops/monitoring/README.md).
+
 ### Auto-deploy to the VPS
 
 Merging to `master` deploys automatically: the **CI** workflow runs the check,
