@@ -742,6 +742,40 @@ was recorded (`recordedAt`) — a form's date is stored as midnight UTC, so the
 stored time is not the time to show or sort by. `GET /finance/summary` returns cash, bank, to
 get, to give for the home screen. Both need `journal:read`.
 
+### 10.7 Courier performance (`utils/courierPerformance.js`) — counts, not money
+
+`GET /finance/reports/courier-performance?business=&from=&to=&by=` (`reports:read`;
+`by` = `courier` | `city` | `courier-city`; dates are Pakistan days, at most a
+year). The measure is parcels **dispatched** in the range, per business — a
+courier is a business's own party, so nothing is combined across businesses.
+
+| Term                      | Definition                                                                                                                                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Delivered                 | status `delivered`, `refunded` or `exchanged` — the courier delivered; the customer sent it back **afterwards**                                                                                  |
+| Returned                  | status `returned` (refused at the door, or brought back)                                                                                                                                         |
+| In transit                | status `dispatched`                                                                                                                                                                              |
+| Decided                   | delivered + returned                                                                                                                                                                             |
+| Delivered % / Returned %  | over **decided** only                                                                                                                                                                            |
+| Sent back by customer %   | (refunded + exchanged) ÷ delivered — **informational**; never ranks a courier, because the customer decides and no reason is recorded                                                            |
+| Avg days                  | mean of `deliveredAt − dispatchedAt` over delivered parcels, weighted in the totals                                                                                                              |
+| First-attempt %           | delivered parcels with **no** logged failed attempt ÷ delivered parcels where `attemptsTracked` is true; `null` when none are tracked                                                            |
+| `tooFew`                  | decided under `MIN_DECIDED` (10) — a ratio on a handful of parcels is noise, and the UI says so                                                                                                  |
+| `cancelledBeforeDispatch` | **one number for the period**, by `cancelledAt` — `cancelled` is only reachable from `pending`/`confirmed` (`ORDER_TRANSITIONS`), before a courier is chosen, so it can never be a courier's row |
+
+- **Failed attempts** (`POST /orders/:id/attempts`, `orders:update`, dispatched
+  parcels only) go in `Order.deliveryAttempts`; they change no status and book
+  nothing. `attemptsTracked` is set at dispatch, so a parcel sent before this
+  existed is never mistaken for a first-time delivery.
+- **One city list.** `utils/cities.js` is the source of truth (`GET /system/cities`
+  serves it to the order form). `normalizeCity` is a Mongoose **setter** on
+  `Order.city` and `Customer.city` (so create, edit and update queries agree):
+  listed names and known aliases become the listed name, anything else is only
+  tidied into Title Case — never guessed. Old data is cleaned by
+  `npm run backfill:cities` (dry run by default, `-- --apply` writes; take a backup
+  first). It lists every place the list does not know, for a person to review.
+- A past period can still move: a parcel sent in September and refunded in
+  November changes September's refunded count the next time the report runs.
+
 ---
 
 ## 11. Known Gaps

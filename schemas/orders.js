@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ATTEMPT_REASONS } from '../utils/constants.js';
 
 const id = z.string().min(1, 'Required');
 const money = z.coerce.number().min(0, 'Can not be negative');
@@ -165,6 +166,12 @@ export const orderMoneySchema = z.object({
   account: z.string().min(1, 'Choose where the money went'),
   date: z.coerce.date().optional(),
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+});
+
+/** A failed delivery attempt — the reason from a fixed list, and an optional note. */
+export const orderAttemptSchema = z.object({
+  reason: z.enum(Object.values(ATTEMPT_REASONS), { error: 'Choose why it failed' }),
+  note: z.string().trim().max(200, 'Keep the note under 200 characters').optional()
 });
 
 export const orderTrackingSchema = z.object({

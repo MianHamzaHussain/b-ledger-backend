@@ -3,6 +3,7 @@ import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import User from '../models/User.js';
 import logger from '../utils/logger.js';
+import { PAKISTAN_CITIES } from '../utils/cities.js';
 
 /**
  * Collections that survive a reset. Users need their roles to log in, and their
@@ -12,6 +13,15 @@ const KEPT_COLLECTIONS = new Set(['users', 'roles', 'refreshtokens']);
 
 /** The exact phrase the client must send — a stray request can't wipe data. */
 export const RESET_CONFIRMATION = 'RESET';
+
+/**
+ * @desc   The standard city list the order form offers — one source of truth, so
+ *         the form and the courier report agree on what a city is called.
+ * @route  GET /api/v1/system/cities  (any signed-in user)
+ */
+export const getCities = (req, res) => {
+  res.status(200).json({ success: true, data: PAKISTAN_CITIES });
+};
 
 /**
  * @desc   Wipe every business record — businesses, stock, orders, the ledger,
