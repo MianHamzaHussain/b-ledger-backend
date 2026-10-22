@@ -136,14 +136,15 @@ re-checks, so a token can be revoked server-side.
 
 ### Email (SMTP)
 
-| Variable     | Required | Dev (Mailpit)          | Purpose                                    |
-| ------------ | :------: | ---------------------- | ------------------------------------------ |
-| `SMTP_HOST`  |    –     | `localhost`            | SMTP server.                               |
-| `SMTP_PORT`  |    –     | `1025`                 | `465` = implicit TLS, else STARTTLS/plain. |
-| `SMTP_USER`  |    –     | _(blank)_              | Leave blank for Mailpit (no auth).         |
-| `SMTP_PASS`  |    –     | _(blank)_              |                                            |
-| `FROM_NAME`  |    –     | `B Ledger`             | Sender name.                               |
-| `FROM_EMAIL` |    –     | `no-reply@b-ledger.pk` | Sender address.                            |
+| Variable                   | Required | Dev (Mailpit)          | Purpose                                                                                                |
+| -------------------------- | :------: | ---------------------- | ------------------------------------------------------------------------------------------------------ |
+| `SMTP_HOST`                |    –     | `localhost`            | SMTP server.                                                                                           |
+| `SMTP_PORT`                |    –     | `1025`                 | `465` = implicit TLS, else STARTTLS/plain.                                                             |
+| `SMTP_USER`                |    –     | _(blank)_              | Leave blank for Mailpit (no auth).                                                                     |
+| `SMTP_PASS`                |    –     | _(blank)_              |                                                                                                        |
+| `SMTP_REJECT_UNAUTHORIZED` |    –     | _(unset = verify)_     | The mail server's certificate is checked. `false` turns that off — only for a self-signed certificate. |
+| `FROM_NAME`                |    –     | `B Ledger`             | Sender name.                                                                                           |
+| `FROM_EMAIL`               |    –     | `no-reply@b-ledger.pk` | Sender address.                                                                                        |
 
 ### Web Push (PWA notifications)
 
@@ -182,10 +183,10 @@ npx web-push generate-vapid-keys
 
 ## Running the server (dev & prod)
 
-| Mode            | Command       | What it does                                                       |
-| --------------- | ------------- | ------------------------------------------------------------------ |
-| **Development** | `npm run dev` | `nodemon` + `--env-file=.env`, hot reload, pretty colourised logs. |
-| **Production**  | `npm start`   | `node --env-file=.env`, JSON logs. Set `NODE_ENV=production`.      |
+| Mode            | Command       | What it does                                                                    |
+| --------------- | ------------- | ------------------------------------------------------------------------------- |
+| **Development** | `npm run dev` | `node --watch` + `--env-file=.env`, restarts on change, pretty colourised logs. |
+| **Production**  | `npm start`   | `node --env-file=.env`, JSON logs. Set `NODE_ENV=production`.                   |
 
 On a platform that injects env vars for you (Render, Railway, a Docker image),
 you can run `node server.js` directly and drop `--env-file`.
