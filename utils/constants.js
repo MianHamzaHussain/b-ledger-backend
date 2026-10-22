@@ -145,7 +145,9 @@ export const JOURNAL_SOURCES = {
   // partner handing over what they collected, …) — no income or cost.
   TRANSFER: 'transfer',
   // Raw material bought into stock, or written off / found at a count.
-  MATERIAL: 'material'
+  MATERIAL: 'material',
+  // Finished goods bought from a supplier, and any of them sent back.
+  GOODS_RECEIPT: 'goods-receipt'
 };
 
 /**

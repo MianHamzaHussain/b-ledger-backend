@@ -683,6 +683,54 @@ line's quantity out of that size instead of adding new stock.
   failure puts the pieces (and any material) back.
 - Correcting a closed stitch keeps its from-stock lines exactly as they closed.
 
+### 10.2h Supplier goods — bought outright, sent back if unsold (`utils/goodsReceipt.js`)
+
+Finished goods delivered by a supplier (`/goods-receipts`, resource
+`goodsReceipts`). No purchase-order step: it records what actually arrived.
+
+| Step                         | Posting                                                          |
+| ---------------------------- | ---------------------------------------------------------------- |
+| Goods arrive                 | Dr Inventory (1300) / Cr Payables (2000) [supplier] — the bill   |
+| Paid now (optional, ≤ total) | Dr Payables [supplier] / Cr the chosen money account             |
+| Send pieces back             | Dr Payables [supplier] / Cr Inventory, at the **receipt's** cost |
+
+- **The Khata shows both rows** when paid now (Bill and Paid), so the balance is
+  what is still owed — the same shape as a paid-now material purchase. A delivery
+  is not an expense: it reaches profit only when the article sells (COGS).
+- **A line is an existing size** (`product`, `variantId`, `quantity`, `unitCost`)
+  or **a new article** (`newProduct` with its sizes, prices and quantities), which is
+  created with its generated article number in the same step. Stock goes up with
+  the usual moving-average cost (`weightedAverageCost`).
+- **A send-back is credited at what the supplier billed**, not today's average, and
+  removes exactly that value from the size's stock before re-averaging the rest
+  (nothing left ⇒ cost 0) — so the Inventory account and Σ stock × cost move
+  together. Each line is capped at what arrived, less what already went, **and**
+  at what is on the shelf: sold pieces can not go back. The shelf is looked at
+  **before** anything posts, so a refused send-back leaves nothing in the Khata.
+- **If the supplier was already paid**, a send-back leaves their balance negative
+  ("they owe us"); the money coming back is recorded with **You got** in their
+  Khata — there is no separate refund flow.
+- **Undo** (`POST /goods-receipts/:id/undo`) only while nothing was sent back and
+  every size still holds what arrived. It claims the receipt first (received →
+  reversed, atomically, so two undos can't both run), takes the stock back, then
+  reverses the entry; any failure releases the claim and restores the stock. An
+  article the delivery created **stays, at zero stock** — deleting products is a
+  separate feature.
+- **Stock writes are optimistic** (`changeVariant`): the write only lands if the
+  size's stock and cost are still what was read, and `totalStock` is moved in
+  the same write. The receipt itself has `optimisticConcurrency`, so two
+  send-backs racing on one receipt can't both count the same pieces; the loser is
+  unwound (entry reversed, stock restored).
+- **Order of writes:** the entry first (a locked period refuses before any stock
+  moves), then the shelf; on any failure everything is undone — never goods in
+  the books but not on the shelf, or the reverse.
+- **Khata can't reverse these entries** (`reverseMessage`: "Undo this on the goods
+  receipt"). **Costs:** `unitCostPaisa`, `totalCostPaisa`, `paidNowPaisa` and
+  `valuePaisa` are stripped for anyone without "See costs" (`hideCosts`).
+- **Don't also enter finished goods as a Shop expense** — that counts the cost
+  twice. (Raw materials and tailoring have a refusal for this, §10.2d; finished
+  goods do not.)
+
 ### 10.2e Opening balances (`utils/opening.js`)
 
 What the business already had and owed the day it starts on B Ledger. It was

@@ -97,6 +97,12 @@ export const RESOURCES = {
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
   },
+  goodsReceipts: {
+    // Finished goods delivered by a supplier: stock in, what is owed, and any sent back.
+    label: 'Goods received',
+    scopable: true,
+    ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
+  },
   partners: {
     // Owners/partners — equity stakes, capital contributions, drawings, profit share.
     label: 'Partners & Capital',
