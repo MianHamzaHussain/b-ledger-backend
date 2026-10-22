@@ -28,7 +28,7 @@ that tracks orders, payments, expenses and per-business profit/loss.
 Env is loaded by Node itself (`node --env-file=.env`) — **no `dotenv`**.
 
 ```bash
-npm run dev           # nodemon
+npm run dev           # node --watch (restarts on change)
 npm start             # production
 npm run seed          # create Admin role + first admin (reads SEED_ADMIN_*)
 npm run seed:destroy  # wipe users/roles/businesses (refuses in production)

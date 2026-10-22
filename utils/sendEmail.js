@@ -14,20 +14,29 @@ import logger from './logger.js';
  *     `{ user: '', pass: '' }` makes some servers attempt (and reject) a login;
  *     Mailpit accepts mail with no auth at all.
  */
-const sendEmail = async options => {
-  const port = Number(process.env.SMTP_PORT) || 587;
 
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
+/**
+ * The transport settings for the current environment — separate from sending so
+ * they can be tested without a mail server.
+ *
+ * The mail server's certificate IS checked by default: without that, anyone on the
+ * network path could impersonate it and read the SMTP password. A local catcher or a
+ * provider with a self-signed certificate can opt out with
+ * `SMTP_REJECT_UNAUTHORIZED=false`.
+ */
+export const transportOptions = (env = process.env) => {
+  const port = Number(env.SMTP_PORT) || 587;
+  return {
+    host: env.SMTP_HOST,
     port,
     secure: port === 465,
-    ...(process.env.SMTP_USER
-      ? { auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } }
-      : {}),
-    tls: {
-      rejectUnauthorized: false
-    }
-  });
+    ...(env.SMTP_USER ? { auth: { user: env.SMTP_USER, pass: env.SMTP_PASS } } : {}),
+    tls: { rejectUnauthorized: env.SMTP_REJECT_UNAUTHORIZED !== 'false' }
+  };
+};
+
+const sendEmail = async options => {
+  const transporter = nodemailer.createTransport(transportOptions());
 
   const message = {
     from: `${process.env.FROM_NAME || 'B Ledger'} <${process.env.FROM_EMAIL || process.env.SMTP_USER || 'no-reply@b-ledger.pk'}>`,
