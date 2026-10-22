@@ -444,8 +444,12 @@ Chain order is always `can() → loadScoped()/advancedResults() → controller`.
 ## 9. Adding a Resource — Checklist
 
 1. `models/Thing.js` — `timestamps`, `business` ref, `createdBy`/`updatedBy`.
-2. **`utils/permissions.js`** — register `things` with its `ownFilter`.
-   _Do this first; the middleware 500s on an unregistered resource._
+2. **`utils/permissions.js`** — register `things` with its `ownFilter`, a plain
+   `description`, and a `can` phrase for **every action a route will require**
+   (the Roles screen shows these to non-technical admins).
+   _Do this first; the middleware 500s on an unregistered resource, and
+   `test/permissionDescriptions.test.js` fails if a route needs an action with no
+   phrase._
 3. `controllers/thingController.js` — five handlers, `asyncHandler`-wrapped.
 4. `routes/things.js` — `protect`, then `can()` on every route.
 5. `routes/index.js` — `router.use('/things', thingRoutes)`.
