@@ -80,7 +80,13 @@ jobs:
           # --ff-only: a server with local edits fails loudly instead of being overwritten.
           git pull --ff-only origin master
           npm ci --omit=dev
-          pm2 restart bledger-api
+          # systemd supervises the API (ops/systemd). The pm2 branch is only for a
+          # server that has not been switched over yet; delete it afterwards.
+          if systemctl is-enabled bledger-api >/dev/null 2>&1; then
+            sudo -n systemctl restart bledger-api
+          else
+            pm2 restart bledger-api
+          fi
 
           # Healthy or fail the deploy — a crash on boot shows up here, not in a user report.
           PORT_API=$(grep -E '^PORT=' .env | head -1 | cut -d= -f2 | tr -d ' "' || true)
@@ -91,6 +97,6 @@ jobs:
             fi
             sleep 2
           done
-          echo "API did not become healthy — check: pm2 logs bledger-api" >&2
+          echo "API did not become healthy — check: journalctl -u bledger-api (or pm2 logs bledger-api)" >&2
           exit 1
           REMOTE

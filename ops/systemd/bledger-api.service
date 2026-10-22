@@ -1,0 +1,28 @@
+# Installed as /etc/systemd/system/bledger-api.service. Runbook: README → Running the API under systemd.
+#
+# Why systemd and not pm2: on 2026-10-18 pm2's daemon was killed by a SIGHUP and
+# nothing restarted it, so the API stayed down for four days. systemd treats
+# SIGHUP/SIGTERM as a clean exit, so pm2's own unit (Restart=on-failure) never
+# revives it. Restart=always does, whatever the exit reason.
+[Unit]
+Description=B Ledger API
+After=network-online.target mongod.service
+Wants=network-online.target mongod.service
+
+[Service]
+Type=simple
+User=mianhamza
+WorkingDirectory=/var/www/sites/b-ledger-backend
+# Same command as `npm start`, minus the npm process in between.
+ExecStart=/usr/bin/node --env-file=.env server.js
+Restart=always
+RestartSec=3
+# Never give up: a short Mongo outage must not leave the API permanently dead.
+StartLimitIntervalSec=0
+SyslogIdentifier=bledger-api
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
