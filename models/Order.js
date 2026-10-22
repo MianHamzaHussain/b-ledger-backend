@@ -1,7 +1,13 @@
 import mongoose from 'mongoose';
-import { ORDER_STATUS, PAYMENT_STATUS, SALES_CHANNELS } from '../utils/constants.js';
+import {
+  ATTEMPT_REASONS,
+  ORDER_STATUS,
+  PAYMENT_STATUS,
+  SALES_CHANNELS
+} from '../utils/constants.js';
 import { getNextSequence } from '../utils/sequence.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
+import { normalizeCity } from '../utils/cities.js';
 
 /** One step in an order's life — what it became, when, by whom, and why. */
 const StatusEventSchema = new mongoose.Schema(
@@ -63,6 +69,17 @@ export const heldPaisaOf = order =>
     (s, m) => s + (MONEY_IN.has(m.kind) ? m.amountPaisa : -m.amountPaisa),
     0
   );
+
+/** One failed try at the door — kept apart from `statusHistory` because the status did not change. */
+const DeliveryAttemptSchema = new mongoose.Schema(
+  {
+    reason: { type: String, enum: Object.values(ATTEMPT_REASONS), required: true },
+    note: { type: String, trim: true, maxlength: 200 },
+    at: { type: Date, default: Date.now },
+    by: { type: mongoose.Schema.ObjectId, ref: 'User' }
+  },
+  { _id: false }
+);
 
 /** Statuses after which the COD is fixed — the courier has it on the airway bill. */
 const COD_FROZEN = new Set([
@@ -183,7 +200,9 @@ const OrderSchema = new mongoose.Schema(
     // ── Delivery snapshot (immutable per order) ────────────────────────────
     customerName: { type: String, required: [true, 'Please add a customer name'], trim: true },
     contactNumber: { type: String, required: [true, 'Please add a contact number'], trim: true },
-    city: { type: String, trim: true },
+    // Stored as one canonical spelling ("lhr" → Lahore) so the courier report
+    // groups a place once. A setter, so create, edit and update queries all agree.
+    city: { type: String, trim: true, set: normalizeCity },
     deliveryAddress: { type: String, trim: true },
     /**
      * Courier consignment / tracking number, set at dispatch. Searchable and
@@ -247,6 +266,13 @@ const OrderSchema = new mongoose.Schema(
     },
     /** Every status change with its optional reason — the order's timeline. */
     statusHistory: { type: [StatusEventSchema], default: [] },
+    /**
+     * Failed tries while the parcel was out. `attemptsTracked` is set at dispatch,
+     * so an order sent before staff could log attempts is not mistaken for one
+     * that was delivered first time — the report counts only tracked parcels.
+     */
+    attemptsTracked: { type: Boolean, default: false },
+    deliveryAttempts: { type: [DeliveryAttemptSchema], default: [] },
     dispatchedAt: { type: Date },
     deliveredAt: { type: Date },
     returnedAt: { type: Date },

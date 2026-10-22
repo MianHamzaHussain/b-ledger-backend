@@ -48,6 +48,7 @@ import {
   getProductProfit,
   getPartyReport,
   getCourierRecon,
+  getCourierPerformance,
   getPeriodLock,
   lockPeriod,
   unlockPeriod,
@@ -718,6 +719,29 @@ router.get('/reports/parties', can('reports', 'read'), getPartyReport);
  *                 outstandingPaisa: 220000
  */
 router.get('/reports/courier', can('reports', 'read'), getCourierRecon);
+
+/**
+ * @swagger
+ * /finance/reports/courier-performance:
+ *   get:
+ *     summary: How each courier and city performed — by dispatch date
+ *     description: >
+ *       Parcels sent, delivered (including those later refunded or exchanged),
+ *       returned, still in transit, with delivered/returned ratios over the parcels
+ *       the courier finished, average days, and first-attempt rate. Cancelled orders
+ *       never have a courier, so they are one number for the period.
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: from, required: true, schema: { type: string, example: "2026-10-01" } }
+ *       - { in: query, name: to, required: true, schema: { type: string, example: "2026-10-31" } }
+ *       - { in: query, name: by, schema: { type: string, enum: [courier, city, courier-city], default: courier } }
+ *     responses:
+ *       200: { description: Totals, one row per courier/city, and cancelledBeforeDispatch }
+ *       400: { description: Bad dates, grouping, or a range over a year }
+ */
+router.get('/reports/courier-performance', can('reports', 'read'), getCourierPerformance);
 
 /**
  * @swagger

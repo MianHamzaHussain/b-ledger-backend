@@ -1,11 +1,23 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import ErrorResponse from '../utils/errorResponse.js';
-import { resetData } from '../controllers/systemController.js';
+import { getCities, resetData } from '../controllers/systemController.js';
 
 const router = express.Router();
 
 router.use(protect);
+
+/**
+ * @swagger
+ * /system/cities:
+ *   get:
+ *     summary: The standard city list for the order form
+ *     tags: [System]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: City names, alphabetically }
+ */
+router.get('/cities', getCities);
 
 /**
  * Admin only — not a resource on the permission grid, because it must never be

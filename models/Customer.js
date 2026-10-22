@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { normalizeCity } from '../utils/cities.js';
 
 /**
  * A customer of one business, deduped by phone.
@@ -29,7 +30,9 @@ const CustomerSchema = new mongoose.Schema(
     city: {
       type: String,
       trim: true,
-      maxlength: [60, 'City can not be more than 60 characters']
+      maxlength: [60, 'City can not be more than 60 characters'],
+      // One spelling per place, so the same buyer's city matches their orders'.
+      set: normalizeCity
     },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }

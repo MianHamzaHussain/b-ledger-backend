@@ -19,6 +19,7 @@ import {
   orderSwapSchema,
   orderReplacementSchema,
   orderTrackingSchema,
+  orderAttemptSchema,
   orderNoteSchema,
   orderMoneySchema,
   orderCreditSchema,
@@ -39,6 +40,7 @@ import {
   updateOrderStatus,
   updateOrderPayment,
   updateOrderTracking,
+  addDeliveryAttempt,
   updateOrderNote,
   addOrderAdvance,
   addOrderRefund,
@@ -292,6 +294,39 @@ router.post(
   loadScoped(Order),
   validate(orderExchangeReturnSchema),
   receiveReturn
+);
+
+/**
+ * @openapi
+ * /orders/{id}/attempts:
+ *   post:
+ *     summary: Log a failed delivery attempt on a parcel that is still out
+ *     description: >
+ *       Only a dispatched parcel. Changes no status and books nothing; it lets the
+ *       courier report tell a first-time delivery from one that took several tries.
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason: { type: string, enum: [not-available, refused, wrong-address, unreachable, other] }
+ *               note: { type: string, maxLength: 200 }
+ *     responses:
+ *       201: { description: The order, with the attempt added }
+ *       400: { description: Not a dispatched parcel, or an unknown reason }
+ */
+router.post(
+  '/:id/attempts',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderAttemptSchema),
+  addDeliveryAttempt
 );
 
 router.put(

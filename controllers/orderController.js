@@ -700,6 +700,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
+    // From now on a failed try at the door can be logged on this parcel.
+    order.attemptsTracked = true;
   }
 
   // The courier's charge is normally only known when its invoice arrives, so it
@@ -805,6 +807,31 @@ export const updateOrderTracking = asyncHandler(async (req, res, next) => {
   await order.save();
 
   res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Log a failed try at the door on a parcel that is still out — so the
+ *         courier report can separate "delivered first time" from "took
+ *         several tries". Changes no status and books nothing.
+ * @route  POST /api/v1/orders/:id/attempts  (orders:update — scoped)
+ */
+export const addDeliveryAttempt = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+  if (order.status !== ORDER_STATUS.DISPATCHED) {
+    return next(new ErrorResponse('Only a dispatched parcel can have a failed attempt', 400));
+  }
+
+  // `at` and `by` come from the server and the token, never from the body.
+  order.deliveryAttempts.push({
+    reason: req.body.reason,
+    note: req.body.note || undefined,
+    at: new Date(),
+    by: req.user.id
+  });
+  order.updatedBy = req.user.id;
+  await order.save();
+
+  res.status(201).json({ success: true, data: order });
 });
 
 /**

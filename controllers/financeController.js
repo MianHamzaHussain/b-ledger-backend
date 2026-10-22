@@ -17,6 +17,7 @@ import { salaryLines } from '../utils/partyPosting.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
 import { cashbook, moneySummary } from '../utils/cashbook.js';
 import { undoCourierInvoice } from '../utils/courierInvoice.js';
+import { courierPerformance } from '../utils/courierPerformance.js';
 import {
   profitAndLoss,
   balanceSheet,
@@ -484,6 +485,40 @@ export const getPartyReport = asyncHandler(async (req, res, next) => {
   const business = requireBusiness(req, next);
   if (!business) return;
   res.status(200).json({ success: true, data: await partyLedgerReport(business) });
+});
+
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_REPORT_DAYS = 366;
+const PERFORMANCE_GROUPINGS = ['courier', 'city', 'courier-city'];
+
+/**
+ * @desc   How each courier (and city) performed — parcels sent, delivered,
+ *         returned, refunded, how fast, and first-time delivery. By dispatch date.
+ * @route  GET /api/v1/finance/reports/courier-performance?business=&from=&to=&by=  (reports:read)
+ */
+export const getCourierPerformance = asyncHandler(async (req, res, next) => {
+  const business = requireBusiness(req, next);
+  if (!business) return;
+
+  const { from, to, by = 'courier' } = req.query;
+  if (!DAY_PATTERN.test(from || '') || !DAY_PATTERN.test(to || '')) {
+    return next(new ErrorResponse('Choose the dates to report on', 400));
+  }
+  if (!PERFORMANCE_GROUPINGS.includes(by)) {
+    return next(new ErrorResponse('Group by courier, city or courier-city', 400));
+  }
+  const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000;
+  if (Number.isNaN(days) || days < 0) {
+    return next(new ErrorResponse('The end date can not be before the start date', 400));
+  }
+  if (days >= MAX_REPORT_DAYS) {
+    return next(new ErrorResponse('Choose a range of a year or less', 400));
+  }
+
+  res.status(200).json({
+    success: true,
+    data: await courierPerformance(business, { from, to, by })
+  });
 });
 
 /**

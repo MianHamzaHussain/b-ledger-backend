@@ -1,3 +1,15 @@
+/**
+ * Why a delivery attempt failed — logged on a parcel that is still out, so the
+ * courier report can tell "delivered first time" from "took several tries".
+ */
+export const ATTEMPT_REASONS = {
+  NOT_AVAILABLE: 'not-available',
+  REFUSED: 'refused',
+  WRONG_ADDRESS: 'wrong-address',
+  UNREACHABLE: 'unreachable',
+  OTHER: 'other'
+};
+
 /** Where an order can originate — the order's `source`, for channel analytics. */
 export const SALES_CHANNELS = {
   SHOPIFY: 'shopify',
