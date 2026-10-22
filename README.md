@@ -417,7 +417,7 @@ sleep 6; systemctl is-active bledger-api            # active again, new PID
 
 Then `sudo reboot`, wait two minutes, and the health check must answer without
 you touching anything. Add an external uptime check (for example UptimeRobot,
-free) on `https://bledger.org/api/v1/health` so an outage reaches you instead of
+free) on `https://backend.bledger.org/api/v1/health` so an outage reaches you instead of
 your users.
 
 ---
