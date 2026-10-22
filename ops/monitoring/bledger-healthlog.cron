@@ -1,0 +1,4 @@
+# Installed as /etc/cron.d/bledger-healthlog — one health check a minute.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+* * * * * root /usr/local/bin/bledger-healthlog
