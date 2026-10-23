@@ -195,7 +195,7 @@ export const RESOURCES = {
     can: {
       read: 'see deliveries from suppliers',
       create: 'record a new delivery',
-      update: 'send goods back to the supplier, or undo a delivery'
+      update: 'change a delivery’s note, send goods back to the supplier, or undo a delivery'
     },
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })

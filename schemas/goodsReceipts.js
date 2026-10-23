@@ -53,6 +53,11 @@ export const goodsReceiptCreateSchema = z.object({
   method: z.enum(['cash', 'bank']).optional()
 });
 
+/** An empty note is allowed here: it clears the note. */
+export const goodsReceiptNoteSchema = z.object({
+  note: z.string().trim().max(200, 'Note can not be more than 200 characters')
+});
+
 export const goodsReceiptReturnSchema = z.object({
   lines: z
     .array(z.object({ lineId: id, quantity: pieces }))

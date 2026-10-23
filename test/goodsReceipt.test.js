@@ -23,10 +23,15 @@ import {
   createGoodsReceipt,
   getGoodsReceipt,
   returnGoods,
+  updateGoodsReceiptNote,
   undoGoodsReceipt
 } from '../controllers/goodsReceiptController.js';
 import { reversePartyEntry } from '../controllers/partyController.js';
-import { goodsReceiptCreateSchema, goodsReceiptReturnSchema } from '../schemas/goodsReceipts.js';
+import {
+  goodsReceiptCreateSchema,
+  goodsReceiptNoteSchema,
+  goodsReceiptReturnSchema
+} from '../schemas/goodsReceipts.js';
 
 /**
  * Finished goods bought outright from a supplier. The rules worth pinning: the
@@ -470,4 +475,69 @@ test('without "See costs", every money figure is stripped from a receipt', async
     assert.equal(text.includes(key), false, `${key} must not leak`);
   }
   assert.equal(seen.data.lines[0].quantity, 10, 'quantities still show');
+});
+
+test('editing the note changes the note only — stock, money and status stay put', async () => {
+  const ctx = await setup();
+  const receipt = await tenMoreOfM(ctx, { note: 'ABHI LENA HN' });
+  const inv0 = await inventory(ctx);
+  const owed0 = await owed(ctx);
+  const stock0 = (await variantOf(ctx, 'M')).stock;
+
+  const body = (
+    await runHandler(updateGoodsReceiptNote, {
+      user: admin,
+      resource: await reload(receipt._id),
+      body: { note: 'Lene hain — Monday ko' }
+    })
+  ).body.data;
+
+  assert.equal(body.note, 'Lene hain — Monday ko');
+  assert.equal(body.status, receipt.status);
+  assert.equal(body.totalCostPaisa, receipt.totalCostPaisa);
+  assert.equal(String(body.updatedBy), String(userId));
+  assert.equal(await inventory(ctx), inv0);
+  assert.equal(await owed(ctx), owed0);
+  assert.equal((await variantOf(ctx, 'M')).stock, stock0);
+  assert.equal((await reload(receipt._id)).note, 'Lene hain — Monday ko');
+});
+
+test('an empty note clears it, and a note over 200 characters is refused', async () => {
+  const ctx = await setup();
+  const receipt = await tenMoreOfM(ctx, { note: 'old' });
+  const cleared = (
+    await runHandler(updateGoodsReceiptNote, {
+      user: admin,
+      resource: await reload(receipt._id),
+      body: { note: '' }
+    })
+  ).body.data;
+  assert.ok(!cleared.note);
+
+  assert.equal(goodsReceiptNoteSchema.safeParse({ note: '' }).success, true);
+  assert.equal(goodsReceiptNoteSchema.safeParse({ note: 'x'.repeat(200) }).success, true);
+  assert.equal(goodsReceiptNoteSchema.safeParse({ note: 'x'.repeat(201) }).success, false);
+  assert.equal(goodsReceiptNoteSchema.safeParse({}).success, false, 'a note must be sent');
+});
+
+test('a note edit racing an undo does not break either, and the books still agree', async () => {
+  const ctx = await setup();
+  const receipt = await tenMoreOfM(ctx);
+  const results = await Promise.allSettled([
+    runHandler(updateGoodsReceiptNote, {
+      user: admin,
+      resource: await reload(receipt._id),
+      body: { note: 'edited' }
+    }),
+    runHandler(undoGoodsReceipt, { user: admin, resource: await reload(receipt._id) })
+  ]);
+  assert.deepEqual(
+    results.map(r => r.status),
+    ['fulfilled', 'fulfilled']
+  );
+  const after = await reload(receipt._id);
+  assert.equal(after.status, 'reversed');
+  assert.equal(after.note, 'edited');
+  assert.equal((await variantOf(ctx, 'M')).stock, 10);
+  assert.equal(await owed(ctx), 0);
 });
