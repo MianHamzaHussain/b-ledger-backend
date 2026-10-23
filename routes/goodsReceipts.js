@@ -4,11 +4,16 @@ import { can, loadScoped, restrictBusinessToScope, hideCosts } from '../middlewa
 import { validate } from '../middlewares/validate.js';
 import advancedResults from '../middlewares/advancedResults.js';
 import GoodsReceipt from '../models/GoodsReceipt.js';
-import { goodsReceiptCreateSchema, goodsReceiptReturnSchema } from '../schemas/goodsReceipts.js';
+import {
+  goodsReceiptCreateSchema,
+  goodsReceiptNoteSchema,
+  goodsReceiptReturnSchema
+} from '../schemas/goodsReceipts.js';
 import {
   getGoodsReceipts,
   getGoodsReceipt,
   createGoodsReceipt,
+  updateGoodsReceiptNote,
   returnGoods,
   undoGoodsReceipt
 } from '../controllers/goodsReceiptController.js';
@@ -82,7 +87,31 @@ router
  *       200: { description: The receipt }
  *       404: { description: Not found, or outside your businesses }
  */
-router.get('/:id', can('goodsReceipts', 'read'), loadScoped(GoodsReceipt), getGoodsReceipt);
+router
+  .route('/:id')
+  .get(can('goodsReceipts', 'read'), loadScoped(GoodsReceipt), getGoodsReceipt)
+  /**
+   * @swagger
+   * /goods-receipts/{id}:
+   *   patch:
+   *     summary: Change the note on a delivery
+   *     description: >
+   *       Only the note. Items, cost and what was paid are fixed once recorded — undo
+   *       the delivery and enter it again to fix those. An empty note clears it.
+   *     tags: [Goods received]
+   *     security: [{ bearerAuth: [] }]
+   *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+   *     responses:
+   *       200: { description: The receipt with its new note }
+   *       400: { description: Note longer than 200 characters }
+   *       404: { description: Not found, or outside your businesses }
+   */
+  .patch(
+    can('goodsReceipts', 'update'),
+    loadScoped(GoodsReceipt),
+    validate(goodsReceiptNoteSchema),
+    updateGoodsReceiptNote
+  );
 
 /**
  * @swagger

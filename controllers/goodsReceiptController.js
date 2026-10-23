@@ -1,4 +1,5 @@
 import Product from '../models/Product.js';
+import GoodsReceipt from '../models/GoodsReceipt.js';
 import Party from '../models/Party.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
@@ -98,6 +99,23 @@ export const createGoodsReceipt = asyncHandler(async (req, res, next) => {
     userId: req.user.id
   });
   res.status(201).json({ success: true, data: await withStock(receipt) });
+});
+
+/**
+ * @desc   Change the note on a delivery (nothing else — money and stock are fixed
+ *         once recorded; a wrong delivery is undone and entered again)
+ * @route  PATCH /api/v1/goods-receipts/:id  (goodsReceipts:update — scoped)
+ */
+export const updateGoodsReceiptNote = asyncHandler(async (req, res) => {
+  // updateOne, not save(): save() checks the document version, so it would collide
+  // with a send-back or undo that bumps it at the same moment — and a note is not
+  // worth failing either of those.
+  await GoodsReceipt.updateOne(
+    { _id: req.resource._id },
+    { $set: { note: req.body.note, updatedBy: req.user.id } }
+  );
+  const receipt = await GoodsReceipt.findById(req.resource._id);
+  res.status(200).json({ success: true, data: await withStock(receipt) });
 });
 
 /**
