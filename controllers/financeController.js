@@ -3,6 +3,7 @@ import Account from '../models/Account.js';
 import JournalEntry from '../models/JournalEntry.js';
 import PeriodLock from '../models/PeriodLock.js';
 import Party from '../models/Party.js';
+import Partner from '../models/Partner.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import {
@@ -59,9 +60,26 @@ const DRAWINGS_MEMO = {
 /**
  * @desc   Record owner capital — investment in, or drawings out
  * @route  POST /api/v1/finance/capital  (journal:create — scoped)
+ *
+ *         Refused (400) while the business has an active partner: owner money then goes
+ *         through `POST /partners/:id/invest|withdraw`, so the entry names who it was.
  */
-export const recordCapital = asyncHandler(async (req, res) => {
+export const recordCapital = asyncHandler(async (req, res, next) => {
   const { business, direction, purpose, method, account, date, memo } = req.body;
+
+  // With partners, who put money in or took it out is the whole point of the entry: it must
+  // go through the partner (their own capital account), never the shared owner account —
+  // otherwise anyone with Money access could take money out and leave nobody named. The
+  // screen steers people to the partner, but only the server can hold the line (CLAUDE.md §6).
+  if (await Partner.exists({ business, isActive: true })) {
+    return next(
+      new ErrorResponse(
+        'This business has partners, so owner money is recorded against the partner — choose which partner (Partners → Put money in / Take money out)',
+        400
+      )
+    );
+  }
+
   const paisa = amountPaisa(req.body.amount);
   await ensureChart(business);
 

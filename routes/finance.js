@@ -109,7 +109,7 @@ router.use(protect);
  *                 lines:
  *                   - { account: "66a0000000000000000001000", debitPaisa: 20000000 }
  *                   - { account: "66a0000000000000000003000", creditPaisa: 20000000 }
- *       400: { description: Amount must be greater than zero }
+ *       400: { description: Amount must be greater than zero, or the business has partners (record it against the partner instead) }
  *       403: { description: Not assigned to that business }
  */
 router.post(

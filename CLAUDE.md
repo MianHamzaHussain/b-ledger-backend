@@ -850,6 +850,14 @@ courier is a business's own party, so nothing is combined across businesses.
   Retained Earnings — so Drawings **and** partner capital accounts, but not a profit
   share) and `leftInBusinessPaisa`. `POST /finance/capital` takes an optional
   `purpose` (`home` | `personal`) that only changes the cash-book words.
+- **Owner money needs a partner when there are partners.** `POST /finance/capital`
+  (the shared owner account) answers **400** while the business has an **active**
+  partner — for money in _and_ out — and says to choose the partner. Owner money then
+  goes through `POST /partners/:id/invest|withdraw`, which names who it was. Enforced
+  on the server because the screen can't be trusted to: someone with Money access but
+  no Partners access can't even read the partner list, so the screen thinks there are
+  none. A partner who has left (`isActive: false`) no longer blocks it. Raw accountant
+  entries (`/finance/manual`) stay outside this rule.
 - **More expense accounts.** `META_ADS` 5500, `OTHER_ADS` 5510, `OFFICE` 5420 are in
   `DEFAULT_CHART`; `ensureChart` adds missing accounts to existing businesses the
   first time they are used, so no migration is needed. Do not rename an existing
