@@ -249,6 +249,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
     city,
     deliveryAddress,
     customerNote,
+    clientRef,
     source,
     items
   } = req.body;
@@ -256,6 +257,11 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   const advanceAmount = Number(req.body.advanceAmount) || 0;
 
   if (!business) return next(new ErrorResponse('Please select a business', 400));
+
+  // Sent before? Answer with that order — no second order, no second stock reservation.
+  const alreadyMade = clientRef && (await Order.findOne({ business, clientRef }));
+  if (alreadyMade) return res.status(200).json({ success: true, data: alreadyMade });
+
   if ((items?.length ?? 0) + customWork.length === 0)
     return next(new ErrorResponse('Add at least one item or custom work', 400));
   if (!customerName || !contactNumber) {
@@ -329,6 +335,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       city,
       deliveryAddress,
       customerNote: customerNote || undefined,
+      clientRef: clientRef || undefined,
       items: lineItems,
       customWork,
       // A counter sale takes its payment in the sale; any other order's advance
@@ -372,6 +379,13 @@ export const createOrder = asyncHandler(async (req, res, next) => {
     // an order whose advance couldn't be booked rather than leave it half-made.
     await releaseStock(lineItems);
     if (order && !order.saleEntry) await Order.deleteOne({ _id: order._id });
+
+    // Two sends of the same order racing (a double tap): the other one won the unique
+    // index. Its stock is already held, ours was just given back — answer with its order.
+    if (err.code === 11000 && clientRef) {
+      const winner = await Order.findOne({ business, clientRef });
+      if (winner) return res.status(200).json({ success: true, data: winner });
+    }
     next(err);
   }
 });
