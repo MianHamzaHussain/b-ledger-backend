@@ -34,6 +34,7 @@ export const orderCreateSchema = z
     contactNumber: z.string().trim().min(1, 'Contact number is required'),
     city: z.string().optional(),
     deliveryAddress: z.string().optional(),
+    customerNote: z.string().trim().max(500, 'Keep the note under 500 characters').optional(),
     advanceAmount: z.coerce.number().min(0).optional(),
     /** Where the advance (or a counter sale's "paid now") went — a money account or partner:<id>. */
     advanceAccount: z.string().optional(),
@@ -100,6 +101,11 @@ export const orderRefundReturnSchema = z.object({
   shippingShare: z.coerce.number().min(0, 'Can not be negative').optional(),
   scratchPieces: z.array(scratchPiece).max(20).optional(),
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+});
+
+/** An empty note clears it. */
+export const orderCustomerNoteSchema = z.object({
+  customerNote: z.string().trim().max(500, 'Keep the note under 500 characters')
 });
 
 export const orderNoteSchema = z.object({

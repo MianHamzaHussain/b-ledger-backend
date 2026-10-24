@@ -21,6 +21,7 @@ import {
   orderTrackingSchema,
   orderAttemptSchema,
   orderNoteSchema,
+  orderCustomerNoteSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -42,6 +43,7 @@ import {
   updateOrderTracking,
   addDeliveryAttempt,
   updateOrderNote,
+  updateOrderCustomerNote,
   addOrderAdvance,
   addOrderRefund,
   deleteOrderMoney,
@@ -111,6 +113,7 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *             contactNumber: "+923001234567"
  *             city: Lahore
  *             deliveryAddress: "House 1, Street 2"
+ *             customerNote: "Gift pack, call before delivery"
  *             advanceAmount: 500
  *             courier: 60d0fe4f5311236168a109e0
  *             items:
@@ -132,7 +135,7 @@ router
       Order,
       null,
       ['orderNumber', 'customerName', 'contactNumber', 'trackingId', 'reversalTrackingId'],
-      'orderNumber dailySerial orderDay customerName city trackingId status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount reversalTrackingId awaitingReturn'
+      'orderNumber dailySerial orderDay customerName city trackingId customerNote status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount reversalTrackingId awaitingReturn'
     ),
     getOrders
   )
@@ -388,6 +391,32 @@ router.put(
   loadScoped(Order),
   validate(orderTrackingSchema),
   updateOrderTracking
+);
+
+/**
+ * @swagger
+ * /orders/{id}/customer-note:
+ *   put:
+ *     summary: Set the customer's request on the order (any status — changes nothing else)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               customerNote: { type: string, description: "The customer's request, max 500 (empty to clear)" }
+ *     responses:
+ *       200: { description: Updated }
+ */
+router.put(
+  '/:id/customer-note',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderCustomerNoteSchema),
+  updateOrderCustomerNote
 );
 
 /**
