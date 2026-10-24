@@ -125,7 +125,11 @@ const OrderItemSchema = new mongoose.Schema(
       required: [true, 'Please add a price'],
       min: [0, 'Price can not be negative']
     },
-    unitCost: { type: Number, required: true, min: 0 }
+    unitCost: { type: Number, required: true, min: 0 },
+    /** Pieces of this line that were not on the shelf when it was taken (article keeps selling). */
+    oversold: { type: Number, default: 0, min: 0 },
+    /** Delivered with no cost known yet (nothing had arrived) — profit on it is overstated. */
+    costUnknown: { type: Boolean, default: false }
   },
   { _id: true }
 );

@@ -19,6 +19,8 @@ export const businessCreateSchema = z.object({
   instagramLink: link,
   whatsappNumber: z.string().trim().optional(),
   codTax,
+  // New articles start with "keep selling when out of stock" on or off.
+  defaultAllowOversell: z.boolean().optional(),
   status: z.enum(['active', 'inactive']).optional()
 });
 

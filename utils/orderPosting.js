@@ -1,4 +1,5 @@
 import Business from '../models/Business.js';
+import Product from '../models/Product.js';
 import { ensureChart, accountByCode, CODES } from './chartOfAccounts.js';
 import { postEntry } from './ledger.js';
 import { toPaisa } from './money.js';
@@ -13,6 +14,29 @@ import { JOURNAL_SOURCES, SALES_CHANNELS } from './constants.js';
  * courier's COD sits as a receivable until they remit; the delivery fee becomes
  * an expense at that moment. All amounts convert rupees → integer paisa.
  */
+
+/**
+ * A piece sold before any stock arrived has no cost to snapshot (or a stale one), so
+ * at delivery — by when stock has usually come in — take the article's current cost.
+ * If it is still 0 the line is booked at 0 and flagged, because profit on it is
+ * overstated until a cost is known. Mutates the order's lines; the caller saves.
+ */
+export const refreshOversoldCost = async order => {
+  for (const item of order.items) {
+    if (!(item.oversold > 0 || item.unitCost === 0)) continue;
+    const product = await Product.findOne(
+      { _id: item.product, 'variants._id': item.variantId },
+      { 'variants.$': 1 }
+    ).lean();
+    const current = product?.variants?.[0]?.costPrice ?? 0;
+    if (current > 0) {
+      item.unitCost = current;
+      item.costUnknown = false;
+    } else if (item.oversold > 0) {
+      item.costUnknown = true;
+    }
+  }
+};
 
 /** Cost of the goods on an order (paisa) — what the sale moved out of inventory. */
 export const cogsPaisaOf = order =>
@@ -51,6 +75,7 @@ export const postOrderSale = async (order, userId) => {
   const advancePaisa = isCounter
     ? toPaisa(order.advanceAmount || 0)
     : Math.max(0, totalPaisa - codPaisa);
+  await refreshOversoldCost(order);
   const cogsPaisa = cogsPaisaOf(order);
   const acc = code => accountByCode(order.business, code);
   const label = orderLabel(order);

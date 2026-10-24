@@ -44,6 +44,8 @@ const BusinessSchema = new mongoose.Schema(
       ref: 'Category',
       required: [true, 'Please select a category']
     },
+    /** What a new article starts with for "keep selling when out of stock". */
+    defaultAllowOversell: { type: Boolean, default: false },
     storeLink: {
       type: String,
       trim: true,

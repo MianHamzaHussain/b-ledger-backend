@@ -1,4 +1,5 @@
 import Product from '../models/Product.js';
+import Business from '../models/Business.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import { createCrudHandlers } from '../utils/crudController.js';
 
@@ -26,12 +27,20 @@ const handlers = createCrudHandlers({
   populate: [{ path: 'category', select: 'name status' }]
 });
 
-export const {
-  getAll: getProducts,
-  getOne: getProduct,
-  create: createProduct,
-  remove: deleteProduct
-} = handlers;
+export const { getAll: getProducts, getOne: getProduct, remove: deleteProduct } = handlers;
+
+/**
+ * @desc   Create a product. An article that does not say whether to keep selling
+ *         when out of stock starts from its business's default.
+ * @route  POST /api/v1/products  (products:create)
+ */
+export const createProduct = asyncHandler(async (req, res, next) => {
+  if (req.body.allowOversell === undefined && req.body.business) {
+    const business = await Business.findById(req.body.business, 'defaultAllowOversell').lean();
+    req.body.allowOversell = Boolean(business?.defaultAllowOversell);
+  }
+  return handlers.create(req, res, next);
+});
 
 /**
  * @desc   Update a product. The form owns the name, threshold and each variant's
@@ -43,11 +52,12 @@ export const {
  */
 export const updateProduct = asyncHandler(async (req, res) => {
   const product = req.resource;
-  const { name, lowStockThreshold, status, variants } = req.body;
+  const { name, lowStockThreshold, status, variants, allowOversell } = req.body;
 
   if (name != null) product.name = name;
   if (lowStockThreshold != null) product.lowStockThreshold = lowStockThreshold;
   if (status != null) product.status = status;
+  if (typeof allowOversell === 'boolean') product.allowOversell = allowOversell;
 
   if (Array.isArray(variants)) {
     const byId = new Map(product.variants.map(v => [String(v._id), v]));
