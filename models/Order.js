@@ -284,6 +284,12 @@ const OrderSchema = new mongoose.Schema(
     exchangedAt: { type: Date },
     refundedAt: { type: Date },
     /**
+     * A reference the app makes up when it starts an order (a random id). Sending the
+     * same one again — a double tap, or an order saved on a phone while offline and
+     * sent twice — returns the order already made instead of making another.
+     */
+    clientRef: { type: String, trim: true, maxlength: 64 },
+    /**
      * The customer's request, taken with the order ("gift pack", "call before
      * delivery"). Distinct from `note`, which the team keeps afterwards (shown as the
      * order's "Reason": courier, dispatch, return details). Editable at any status.
@@ -387,6 +393,13 @@ OrderSchema.index({ business: 1, deliveredAt: -1 });
 OrderSchema.index({ business: 1, refundDuePaisa: 1 });
 // Scan-to-find: a courier tracking number resolves to its order. Sparse — most
 // orders have no tracking id until they are dispatched.
+// Unique per business, but only for orders that carry a reference. A *partial* index,
+// not a sparse one: a sparse compound index still indexes every order (it has a
+// business), so two orders without a reference would collide.
+OrderSchema.index(
+  { business: 1, clientRef: 1 },
+  { unique: true, partialFilterExpression: { clientRef: { $type: 'string' } } }
+);
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, reversalTrackingId: 1 }, { sparse: true });
 OrderSchema.index({ 'items.product': 1, 'items.variantId': 1 }); // price-hint lookup

@@ -35,6 +35,8 @@ export const orderCreateSchema = z
     city: z.string().optional(),
     deliveryAddress: z.string().optional(),
     customerNote: z.string().trim().max(500, 'Keep the note under 500 characters').optional(),
+    /** Makes sending this order twice safe — see Order.clientRef. */
+    clientRef: z.string().trim().min(1).max(64).optional(),
     advanceAmount: z.coerce.number().min(0).optional(),
     /** Where the advance (or a counter sale's "paid now") went — a money account or partner:<id>. */
     advanceAccount: z.string().optional(),
