@@ -74,7 +74,10 @@ const notifyLowStock = async (business, lineItems) => {
             business,
             type: NOTIFICATION_TYPES.LOW_STOCK,
             title: `Low stock: ${product.name}`,
-            body: `${variant.label || 'Default'} — ${variant.stock} left`,
+            body:
+              variant.stock < 0
+                ? `${variant.label || 'Default'} — ${-variant.stock} short (sold without stock)`
+                : `${variant.label || 'Default'} — ${variant.stock} left`,
             link: '/products'
           });
         }
@@ -294,7 +297,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   }
 
   // Atomic reserve — throws (and unwinds itself) if any line lacks stock.
-  await reserveStock(lineItems);
+  await reserveStock(lineItems, { allowOversell: true });
 
   let order;
   try {
@@ -425,9 +428,9 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   }));
   await releaseStock(oldItems);
   try {
-    await reserveStock(newItems);
+    await reserveStock(newItems, { allowOversell: true });
   } catch (err) {
-    await reserveStock(oldItems); // roll back to the pre-edit reservation
+    await reserveStock(oldItems, { allowOversell: true }); // roll back to the pre-edit reservation
     return next(err);
   }
 
@@ -480,7 +483,7 @@ const makeReplacement = async (original, body, userId, beforeCreate) => {
     newItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0) +
     customWork.reduce((s, w) => s + w.price, 0);
   if (total < 0) throw new ErrorResponse("The replacement total can't be below 0", 400);
-  await reserveStock(newItems);
+  await reserveStock(newItems, { allowOversell: true });
   let undo;
   try {
     undo = beforeCreate ? await beforeCreate() : null;
@@ -727,7 +730,7 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     // Its made-from-scratch pieces come back out of stock first — refused if one
     // was sold meanwhile, before anything else changes.
     await takeScratchBack(order, req.user.id);
-    await reserveStock(order.items);
+    await reserveStock(order.items, { allowOversell: true });
     if (order.customCostWriteOff) {
       await reverseEntry(order.customCostWriteOff, {
         userId: req.user.id,

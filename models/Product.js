@@ -37,10 +37,16 @@ const VariantSchema = new mongoose.Schema(
       required: [true, 'Please add a sale price'],
       min: [0, 'Sale price can not be negative']
     },
+    /**
+     * Can go below zero on an article that keeps selling when out of stock
+     * (`allowOversell`): minus pieces are already promised to customers, and new
+     * stock fills those orders first. There is no `min` here on purpose — the
+     * order flow's `$inc` skips validators, and a floor would make a later
+     * `product.save()` fail on an article that is simply short.
+     */
     stock: {
       type: Number,
-      default: 0,
-      min: [0, 'Stock can not be negative']
+      default: 0
     },
     barcode: { type: String }
   },
@@ -74,6 +80,11 @@ const ProductSchema = new mongoose.Schema(
       uppercase: true,
       trim: true
     },
+    /**
+     * Keep taking customer orders when stock runs out (consignments stay strict).
+     * New articles start from their business's `defaultAllowOversell`.
+     */
+    allowOversell: { type: Boolean, default: false },
     /** A variant is "low" when its stock is at or below this. 0 disables it. */
     lowStockThreshold: {
       type: Number,
