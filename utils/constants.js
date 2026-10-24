@@ -189,3 +189,10 @@ export const MATERIAL_UNITS = [
   'dozen',
   'set'
 ];
+
+/**
+ * A business logo is stored as a base64 `data:` URL. 150 KB of image is about a third
+ * more characters once encoded (plus the `data:image/...;base64,` prefix).
+ */
+export const LOGO_MAX_BYTES = 150 * 1024;
+export const LOGO_MAX_CHARS = Math.ceil((LOGO_MAX_BYTES * 4) / 3) + 64;

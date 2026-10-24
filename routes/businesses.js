@@ -62,13 +62,13 @@ router
   .route('/')
   .get(
     can('businesses', 'read'),
-    // Lean list: name + category only (the card). Everything else — channels,
+    // Lean list: name + category (the card) and the logo + colour the business switcher shows. Everything else — channels,
     // courier accounts, tax profile — comes from the detail-by-id endpoint.
     advancedResults(
       Business,
       { path: 'category', select: 'name status' },
       ['name', 'storeLink', 'whatsappNumber'],
-      'name category status'
+      'name category status logo brandColor'
     ),
     getBusinesses
   )
