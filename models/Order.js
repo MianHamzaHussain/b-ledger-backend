@@ -283,6 +283,12 @@ const OrderSchema = new mongoose.Schema(
     cancelledAt: { type: Date },
     exchangedAt: { type: Date },
     refundedAt: { type: Date },
+    /**
+     * The customer's request, taken with the order ("gift pack", "call before
+     * delivery"). Distinct from `note`, which the team keeps afterwards (shown as the
+     * order's "Reason": courier, dispatch, return details). Editable at any status.
+     */
+    customerNote: { type: String, trim: true, maxlength: 500 },
     /** A free note on the order — editable at any status, even after dispatch. */
     note: { type: String, trim: true, maxlength: 1000 },
 

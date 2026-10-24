@@ -242,7 +242,16 @@ const buildLineItems = async (business, items) => {
  * @route  POST /api/v1/orders  (orders:create)
  */
 export const createOrder = asyncHandler(async (req, res, next) => {
-  const { business, customerName, contactNumber, city, deliveryAddress, source, items } = req.body;
+  const {
+    business,
+    customerName,
+    contactNumber,
+    city,
+    deliveryAddress,
+    customerNote,
+    source,
+    items
+  } = req.body;
   const customWork = req.body.customWork || [];
   const advanceAmount = Number(req.body.advanceAmount) || 0;
 
@@ -319,6 +328,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       contactNumber,
       city,
       deliveryAddress,
+      customerNote: customerNote || undefined,
       items: lineItems,
       customWork,
       // A counter sale takes its payment in the sale; any other order's advance
@@ -778,6 +788,21 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   // The optional reason ("customer refused", "cancelled on call") lands on the
   // timeline entry the model writes for this change.
   order.$locals.statusNote = req.body.note;
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Set the customer's request on the order. Allowed at any status — it
+ *         changes nothing but that note.
+ * @route  PUT /api/v1/orders/:id/customer-note  (orders:update — scoped)
+ */
+export const updateOrderCustomerNote = asyncHandler(async (req, res) => {
+  const order = req.resource;
+
+  order.customerNote = req.body.customerNote || undefined;
+  order.updatedBy = req.user.id;
   await order.save();
 
   res.status(200).json({ success: true, data: order });
