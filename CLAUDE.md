@@ -828,6 +828,48 @@ courier is a business's own party, so nothing is combined across businesses.
 - A past period can still move: a parcel sent in September and refunded in
   November changes September's refunded count the next time the report runs.
 
+### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
+
+- **Selling without stock.** `Product.allowOversell` (a new article starts from
+  `Business.defaultAllowOversell`) lets **customer orders** take stock below zero.
+  `utils/stock.js reserveStock(items, { allowOversell: true })` — every order call
+  passes it; **consignments never do** (you can not hand a reseller pieces you do not
+  have). The decrement is unconditional only for those articles, and each line gets
+  `item.oversold` (pieces not on the shelf). `variants.stock` has **no `min`** on
+  purpose — `$inc` skips validators, and a floor would make a later `product.save()`
+  fail on an article that is merely short. Never add one back.
+- **Cost of those pieces.** The order snapshots `unitCost` at create. At **delivery**
+  `refreshOversoldCost` (`utils/orderPosting.js`) re-reads the article's current cost
+  for any line that was oversold or had cost 0; if it is still 0 the line is booked
+  at 0 and flagged `costUnknown`. The books are **not** back-corrected when stock
+  arrives later (accepted — see §11). `weightedAverageCost` clamps negative stock to
+  0, so after -10 + 12 the cost is the new batch's. Goods-received send-back and undo
+  still refuse unless the shelf holds the pieces.
+- **Owner withdrawals are not an expense.** `profitAndLoss` also returns
+  `ownerTookPaisa` (every capital-sourced entry's debit to an equity account, except
+  Retained Earnings — so Drawings **and** partner capital accounts, but not a profit
+  share) and `leftInBusinessPaisa`. `POST /finance/capital` takes an optional
+  `purpose` (`home` | `personal`) that only changes the cash-book words.
+- **More expense accounts.** `META_ADS` 5500, `OTHER_ADS` 5510, `OFFICE` 5420 are in
+  `DEFAULT_CHART`; `ensureChart` adds missing accounts to existing businesses the
+  first time they are used, so no migration is needed. Do not rename an existing
+  account's `name` in `DEFAULT_CHART` — only new businesses would see it.
+- **Idempotent order creation.** `Order.clientRef` (made by the app) with a **partial**
+  unique index on `{ business, clientRef }` — partial, not sparse, because a sparse
+  compound index still indexes every order. `createOrder` answers a repeat with the
+  existing order (**200**, not 201), and the unique-index loser of two racing sends
+  gives its stock back and returns the winner. A racing loser can burn one order
+  number (accepted).
+- **Order notes.** `Order.customerNote` is what the customer asked for (set at
+  create, `PUT /orders/:id/customer-note`); `Order.note` is the team's, shown as
+  **Reason** in the UI — the field was not renamed, so no migration or API change.
+- **Business look.** `Business.logo` is a base64 `data:` URL of **png/jpeg/webp only,
+  ≤ 150 KB** (never SVG — it can carry script — and never a remote URL; limits in
+  `utils/constants.js`, enforced in `schemas/businesses.js` and the model) and
+  `brandColor` is `#rrggbb`. `null` removes either. The business **list** and
+  `/auth/me`'s assigned businesses include them, so the switcher can draw them —
+  keep them out of any other lean list.
+
 ---
 
 ## 11. Known Gaps
@@ -859,6 +901,11 @@ cost more the longer it waits.
   **not** work on Vercel serverless — use S3, Cloudinary or Vercel Blob.
 
 ### Accepted trade-offs in the money flows
+
+- **Oversold pieces are costed late.** A line delivered before any stock arrived is
+  booked at cost 0 (flagged `costUnknown`), and the books are not corrected when
+  stock comes in. Profit on it is overstated until then. A cost catch-up entry on
+  arrival would fix it — not built.
 
 - **Staff advances sit on Salaries Payable**, so an advance shows as a negative
   liability on the balance sheet rather than a separate asset. Profit is right.
