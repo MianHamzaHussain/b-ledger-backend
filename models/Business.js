@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { LOGO_MAX_CHARS } from '../utils/constants.js';
 
 /** Shared URL validator. Empty is allowed; a present value must be a real URL. */
 const optionalUrl = (label, hostPattern) => ({
@@ -44,6 +45,15 @@ const BusinessSchema = new mongoose.Schema(
       ref: 'Category',
       required: [true, 'Please select a category']
     },
+    /**
+     * The brand's logo as a small `data:` image kept right on the business (the
+     * browser resizes it first), so there is no file storage to run or back up apart
+     * from the database. Validated in `schemas/businesses.js`; the length cap here is
+     * the same ceiling as a second line of defence.
+     */
+    logo: { type: String, maxlength: [LOGO_MAX_CHARS, 'The logo is too large'] },
+    /** The accent colour while this business is active, as #rrggbb. */
+    brandColor: { type: String, match: [/^#[0-9a-fA-F]{6}$/, 'Use a colour like #1a73e8'] },
     /** What a new article starts with for "keep selling when out of stock". */
     defaultAllowOversell: { type: Boolean, default: false },
     storeLink: {

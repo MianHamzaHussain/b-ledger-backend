@@ -82,7 +82,7 @@ export const getMe = asyncHandler(async (req, res, next) => {
     .populate('role')
     .populate({
       path: 'assignedBusinesses',
-      select: 'name category',
+      select: 'name category logo brandColor',
       // variantOptions so the product form can offer the category's variant menu.
       populate: { path: 'category', select: 'name variantOptions' }
     });
