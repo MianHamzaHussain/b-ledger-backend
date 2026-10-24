@@ -53,6 +53,11 @@ export const CODES = {
   SALARIES: '5300',
   RENT: '5400',
   UTILITIES: '5410',
+  OFFICE: '5420',
+  // Facebook / Instagram ads — the most frequent spend, so its own line on the P&L.
+  META_ADS: '5500',
+  // TikTok, Google, influencers and any other advertising.
+  OTHER_ADS: '5510',
   MISC_EXPENSE: '5900',
   // Material bought for one order's custom work, held until that order is sold.
   CUSTOM_WIP: '1330',
@@ -120,6 +125,9 @@ export const DEFAULT_CHART = [
   { code: CODES.SALARIES, name: 'Salaries', type: EXPENSE },
   { code: CODES.RENT, name: 'Rent', type: EXPENSE },
   { code: CODES.UTILITIES, name: 'Utilities', type: EXPENSE },
+  { code: CODES.OFFICE, name: 'Office expenses', type: EXPENSE },
+  { code: CODES.META_ADS, name: 'Meta Ads (Facebook, Instagram)', type: EXPENSE },
+  { code: CODES.OTHER_ADS, name: 'Other ads (TikTok, Google, influencers)', type: EXPENSE },
   { code: CODES.MISC_EXPENSE, name: 'Miscellaneous', type: EXPENSE },
   { code: CODES.CUSTOM_WRITE_OFF, name: 'Custom work written off', type: EXPENSE },
   { code: CODES.MATERIAL_LOSS, name: 'Material wasted or lost', type: EXPENSE }

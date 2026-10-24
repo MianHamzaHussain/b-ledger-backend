@@ -49,12 +49,19 @@ const inScope = (req, business) => {
   return !allowed || allowed.map(String).includes(String(business));
 };
 
+/** The cash-book words for an owner withdrawal, by what it was for. */
+const DRAWINGS_MEMO = {
+  home: 'Home expense',
+  personal: 'Personal expense',
+  undefined: 'Owner took money'
+};
+
 /**
  * @desc   Record owner capital — investment in, or drawings out
  * @route  POST /api/v1/finance/capital  (journal:create — scoped)
  */
 export const recordCapital = asyncHandler(async (req, res) => {
-  const { business, direction, method, account, date, memo } = req.body;
+  const { business, direction, purpose, method, account, date, memo } = req.body;
   const paisa = amountPaisa(req.body.amount);
   await ensureChart(business);
 
@@ -77,7 +84,7 @@ export const recordCapital = asyncHandler(async (req, res) => {
     business,
     date,
     // Plain words — this memo shows in the cash book.
-    memo: memo || (direction === 'drawings' ? 'Owner took money' : 'Owner put money in'),
+    memo: memo || (direction === 'drawings' ? DRAWINGS_MEMO[purpose] : 'Owner put money in'),
     source: { kind: JOURNAL_SOURCES.CAPITAL },
     lines,
     userId: req.user.id
