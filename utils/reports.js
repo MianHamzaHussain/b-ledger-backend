@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import JournalEntry from '../models/JournalEntry.js';
 import Order from '../models/Order.js';
 import { accountByCode, CODES } from './chartOfAccounts.js';
-import { ORDER_STATUS } from './constants.js';
+import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 
 const toId = value => new mongoose.Types.ObjectId(value);
 
@@ -73,11 +73,35 @@ const unbilledCourierCharges = async (business, { from, to } = {}) => {
   });
 };
 
+/**
+ * What owners took out of the business in the period — home and personal spending
+ * included. It is not a business cost, so it stays out of profit and is shown below
+ * it. With partners, a withdrawal debits the partner's own capital account instead of
+ * Drawings, so every capital entry's debit to an equity account counts — except Retained
+ * Earnings, which a profit share debits and which is not money leaving.
+ */
+const ownerWithdrawalsPaisa = async (business, { from, to } = {}) => {
+  const entryMatch = { business: toId(business), 'source.kind': JOURNAL_SOURCES.CAPITAL };
+  const range = dateRange(from, to);
+  if (range) entryMatch.date = range;
+
+  const [row] = await JournalEntry.aggregate([
+    { $match: entryMatch },
+    { $unwind: '$lines' },
+    { $lookup: { from: 'accounts', localField: 'lines.account', foreignField: '_id', as: 'a' } },
+    { $unwind: '$a' },
+    { $match: { 'a.type': 'equity', 'a.code': { $ne: CODES.RETAINED_EARNINGS } } },
+    { $group: { _id: null, debit: { $sum: '$lines.debitPaisa' } } }
+  ]);
+  return row?.debit ?? 0;
+};
+
 /** Income − expenses over a period. Income shows as credit-normal, expense debit-normal. */
 export const profitAndLoss = async (business, opts = {}) => {
-  const [nets, unbilledCharges] = await Promise.all([
+  const [nets, unbilledCharges, ownerTookPaisa] = await Promise.all([
     accountNets(business, opts),
-    unbilledCourierCharges(business, opts)
+    unbilledCourierCharges(business, opts),
+    ownerWithdrawalsPaisa(business, opts)
   ]);
 
   const income = nets
@@ -96,6 +120,9 @@ export const profitAndLoss = async (business, opts = {}) => {
     incomePaisa,
     expensePaisa,
     netProfitPaisa: incomePaisa - expensePaisa,
+    // Below profit, not a cost: what owners took out, and what profit is left after it.
+    ownerTookPaisa,
+    leftInBusinessPaisa: incomePaisa - expensePaisa - ownerTookPaisa,
     unbilledCharges
   };
 };
