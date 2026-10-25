@@ -74,8 +74,8 @@ export const createPostex = ({
   };
 
   return {
-    /** Cities PostEx delivers to (`Delivery`) or collects from (`Pickup`). */
-    async cities(type = 'Delivery') {
+    /** Cities PostEx delivers to (`delivery`) or collects from (`pickup`) — lowercase, PostEx rejects the capitalised form. */
+    async cities(type = 'delivery') {
       const json = await get(`${base}/order/v2/get-operational-city`, {
         query: { operationalCityType: type }
       });

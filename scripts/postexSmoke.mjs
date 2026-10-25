@@ -18,7 +18,7 @@ if (!token) {
 
 const api = createPostex({ token });
 try {
-  const cities = await api.cities('Delivery');
+  const cities = await api.cities('delivery');
   console.log(
     `OK — PostEx accepted the key. It delivers to ${cities.length} cities (e.g. ${cities.slice(0, 5).join(', ')}).`
   );

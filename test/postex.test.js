@@ -45,7 +45,7 @@ test('cities: the names PostEx delivers to', async () => {
     })
   ]);
   assert.deepEqual(await api.cities(), ['Lahore', 'Multan']);
-  assert.match(calls[0].url, /get-operational-city\?operationalCityType=Delivery$/);
+  assert.match(calls[0].url, /get-operational-city\?operationalCityType=delivery$/);
 });
 
 test('addresses: the pickup codes', async () => {

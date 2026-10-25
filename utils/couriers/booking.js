@@ -23,7 +23,7 @@ const deliveryCities = async (partyId, api) => {
   const key = String(partyId);
   const hit = cityCache.get(key);
   if (hit && Date.now() - hit.at < CITY_TTL_MS) return hit.names;
-  const names = new Set((await api.cities('Delivery')).map(c => c.trim().toLowerCase()));
+  const names = new Set((await api.cities('delivery')).map(c => c.trim().toLowerCase()));
   cityCache.set(key, { names, at: Date.now() });
   return names;
 };
