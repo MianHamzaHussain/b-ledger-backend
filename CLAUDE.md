@@ -858,6 +858,16 @@ courier is a business's own party, so nothing is combined across businesses.
 - **`GET /orders/summary?business=`** returns today's dispatched / delivered (by the day the event
   happened, a Pakistan day), `pending` (all dates) and `byStatus` — one round trip for the Orders
   strip. Out-of-scope business → 404.
+- **Booked orders.** Status `booked` + `Order.bookedFor` (a Pakistan day) = taken now, wanted
+  later. It behaves like pending/confirmed (`BEFORE_DISPATCH` in `utils/constants.js`: editable,
+  takes advances and custom costs, **holds stock**; cancelling releases it) and may move to
+  pending/confirmed/dispatched/cancelled; pending/confirmed may move to booked. Booking needs a
+  day that is not past. `utils/bookingReminders.js` runs at boot and every 10 minutes: for each
+  booked order whose day has come it **claims** the order with one atomic update
+  (`bookingAlertedOn = today`) and only then `notify()`s — at most once per order per day even
+  with two processes — from 09:00 Pakistan time, and keeps nudging daily until the order leaves
+  booked. `/api/v1/health` carries `reminders.lastRunAt`; a stale value means it stopped. Any
+  code that lists order statuses must learn `booked` (the trap).
 - **Owner withdrawals are not an expense.** `profitAndLoss` also returns
   `ownerTookPaisa` (every capital-sourced entry's debit to an equity account, except
   Retained Earnings — so Drawings **and** partner capital accounts, but not a profit

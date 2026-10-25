@@ -16,6 +16,7 @@ import {
   computeRemittance
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
+import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
@@ -49,7 +50,8 @@ import {
   PAYMENT_STATUS,
   PARTY_TYPES,
   SALES_CHANNELS,
-  NOTIFICATION_TYPES
+  NOTIFICATION_TYPES,
+  BEFORE_DISPATCH
 } from '../utils/constants.js';
 
 /**
@@ -251,6 +253,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
     deliveryAddress,
     customerNote,
     shopifyOrderNumber,
+    bookedFor,
     clientRef,
     source,
     items
@@ -259,6 +262,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   const advanceAmount = Number(req.body.advanceAmount) || 0;
 
   if (!business) return next(new ErrorResponse('Please select a business', 400));
+  if (bookedFor) assertNotPast(bookedFor);
 
   // Sent before? Answer with that order — no second order, no second stock reservation.
   const alreadyMade = clientRef && (await Order.findOne({ business, clientRef }));
@@ -345,7 +349,8 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       // is booked as it arrives (below), which also derives the COD.
       advanceAmount: isWalkIn ? advanceAmount : 0,
       counterAccount: isWalkIn ? advanceMoney?.account : undefined,
-      status: isWalkIn ? ORDER_STATUS.DELIVERED : undefined,
+      status: isWalkIn ? ORDER_STATUS.DELIVERED : bookedFor ? ORDER_STATUS.BOOKED : undefined,
+      bookedFor: !isWalkIn && bookedFor ? bookedFor : undefined,
       paymentStatus: isWalkIn && owed <= 0 ? PAYMENT_STATUS.PAID : undefined,
       createdBy: req.user.id
     });
@@ -403,7 +408,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
 export const updateOrder = asyncHandler(async (req, res, next) => {
   const order = req.resource;
 
-  const EDITABLE = [ORDER_STATUS.PENDING, ORDER_STATUS.CONFIRMED];
+  const EDITABLE = BEFORE_DISPATCH;
   if (!EDITABLE.includes(order.status)) {
     return next(
       new ErrorResponse(
@@ -704,6 +709,13 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse(`Cannot change status from ${order.status} to ${status}`, 400));
   }
 
+  // Booking needs the day it is due; it can not be in the past.
+  if (status === ORDER_STATUS.BOOKED) {
+    assertNotPast(req.body.bookedFor);
+    order.bookedFor = req.body.bookedFor;
+    order.bookingAlertedOn = undefined;
+  }
+
   // A paid order is money in hand for goods the customer kept — it can never be
   // returned. (The transition table already prevents this, but the rule is
   // important enough to state and enforce explicitly.)
@@ -821,6 +833,34 @@ export const updateOrderCustomerNote = asyncHandler(async (req, res) => {
   const order = req.resource;
 
   order.customerNote = req.body.customerNote || undefined;
+  order.updatedBy = req.user.id;
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * A booking day must be given and must not already be over (Pakistan time).
+ */
+const assertNotPast = day => {
+  if (!day) throw new ErrorResponse('Choose the day this order is booked for', 400);
+  if (day < pakistanDay()) throw new ErrorResponse('That day has already passed', 400);
+};
+
+/**
+ * @desc   Move a booked order's due day. Only while it is still booked; the daily alert starts
+ *         again from the new day.
+ * @route  PUT /api/v1/orders/:id/booked-for  (orders:update — scoped)
+ */
+export const updateOrderBookedFor = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+  if (order.status !== ORDER_STATUS.BOOKED) {
+    return next(new ErrorResponse('Only a booked order has a due day', 400));
+  }
+  assertNotPast(req.body.bookedFor);
+
+  order.bookedFor = req.body.bookedFor;
+  order.bookingAlertedOn = undefined;
   order.updatedBy = req.user.id;
   await order.save();
 
@@ -1078,7 +1118,7 @@ export const keepOrderCredit = asyncHandler(async (req, res) => {
 export const addCustomCost = asyncHandler(async (req, res, next) => {
   const order = req.resource;
 
-  if (order.status !== ORDER_STATUS.PENDING && order.status !== ORDER_STATUS.CONFIRMED) {
+  if (!BEFORE_DISPATCH.includes(order.status)) {
     return next(new ErrorResponse('Costs can only be added before the order is dispatched', 400));
   }
 
@@ -1101,7 +1141,7 @@ export const addCustomCost = asyncHandler(async (req, res, next) => {
 export const deleteCustomCost = asyncHandler(async (req, res, next) => {
   const order = req.resource;
 
-  if (order.status !== ORDER_STATUS.PENDING && order.status !== ORDER_STATUS.CONFIRMED) {
+  if (!BEFORE_DISPATCH.includes(order.status)) {
     return next(new ErrorResponse('Costs can only be removed before the order is dispatched', 400));
   }
 

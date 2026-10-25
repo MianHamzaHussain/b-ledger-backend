@@ -104,3 +104,16 @@ test('the route needs a business, and an out-of-scope one looks like it does not
   });
   assert.equal(ok.body.success, true);
 });
+
+test('due now counts booked orders whose day has come, not future ones or released ones', async () => {
+  const biz = await makeBusiness();
+  const book = async (bookedFor, status = 'booked') => {
+    const order = await make(biz, {});
+    await Order.collection.updateOne({ _id: order._id }, { $set: { status, bookedFor } });
+  };
+  await book('2026-10-25'); // today
+  await book('2026-10-20'); // overdue
+  await book('2026-12-19'); // future
+  await book('2026-10-25', 'pending'); // released
+  assert.equal((await orderSummary(biz._id, NOW)).dueNow, 2);
+});

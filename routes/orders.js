@@ -23,6 +23,7 @@ import {
   orderNoteSchema,
   orderCustomerNoteSchema,
   orderShopifyNumberSchema,
+  orderBookedForSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -47,6 +48,7 @@ import {
   updateOrderNote,
   updateOrderCustomerNote,
   updateOrderShopifyNumber,
+  updateOrderBookedFor,
   addOrderAdvance,
   addOrderRefund,
   deleteOrderMoney,
@@ -417,6 +419,35 @@ router.put(
   loadScoped(Order),
   validate(orderTrackingSchema),
   updateOrderTracking
+);
+
+/**
+ * @swagger
+ * /orders/{id}/booked-for:
+ *   put:
+ *     summary: Move a booked order's due day (only while it is booked)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bookedFor]
+ *             properties:
+ *               bookedFor: { type: string, description: "A Pakistan day, YYYY-MM-DD, not in the past" }
+ *     responses:
+ *       200: { description: Updated }
+ *       400: { description: Not booked, or the day has passed }
+ */
+router.put(
+  '/:id/booked-for',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderBookedForSchema),
+  updateOrderBookedFor
 );
 
 /**

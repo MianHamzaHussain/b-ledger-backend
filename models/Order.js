@@ -300,6 +300,13 @@ const OrderSchema = new mongoose.Schema(
      * The number the Shopify store gave this order — a reference only, so the two series (ours and
      * the store's) can be traced to each other. Never used to number anything here.
      */
+    /**
+     * A booked order's due day (YYYY-MM-DD, a Pakistan day). Only meaningful while the status is
+     * `booked`; kept afterwards as a record of what was promised.
+     */
+    bookedFor: { type: String, match: [/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2026-12-19'] },
+    /** The day the "due" alert was last sent — makes the daily reminder once-only per day. */
+    bookingAlertedOn: { type: String },
     shopifyOrderNumber: { type: String, trim: true, maxlength: 30, set: cleanShopifyNumber },
     /** A free note on the order — editable at any status, even after dispatch. */
     note: { type: String, trim: true, maxlength: 1000 },
@@ -409,6 +416,8 @@ OrderSchema.index(
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, reversalTrackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, shopifyOrderNumber: 1 }, { sparse: true });
+// The reminder job's query: booked orders by due day, across businesses.
+OrderSchema.index({ status: 1, bookedFor: 1 });
 OrderSchema.index({ 'items.product': 1, 'items.variantId': 1 }); // price-hint lookup
 
 /**

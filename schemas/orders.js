@@ -36,6 +36,9 @@ const shopifyOrderNumber = z
   .pipe(z.string().max(30, 'That number is too long'))
   .optional();
 
+/** A Pakistan calendar day, YYYY-MM-DD. */
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Choose a date');
+
 export const orderCreateSchema = z
   .object({
     business: id,
@@ -45,6 +48,8 @@ export const orderCreateSchema = z
     deliveryAddress: z.string().optional(),
     customerNote: z.string().trim().max(500, 'Keep the note under 500 characters').optional(),
     shopifyOrderNumber,
+    /** Book it for a later day: the order is taken now and an alert fires when the day arrives. */
+    bookedFor: day.optional(),
     /** Makes sending this order twice safe — see Order.clientRef. */
     clientRef: z.string().trim().min(1).max(64).optional(),
     advanceAmount: z.coerce.number().min(0).optional(),
@@ -89,7 +94,17 @@ const scratchPiece = z.object({
 });
 
 export const orderStatusSchema = z.object({
-  status: z.enum(['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled', 'returned']),
+  status: z.enum([
+    'pending',
+    'booked',
+    'confirmed',
+    'dispatched',
+    'delivered',
+    'cancelled',
+    'returned'
+  ]),
+  /** Required when the new status is `booked`. */
+  bookedFor: day.optional(),
   courier: id.optional(),
   /** The courier's bill for the outcome — the delivery fee on `delivered`, the
    *  return fee on `returned`. Optional: usually billed on the courier invoice. */
@@ -115,6 +130,9 @@ export const orderRefundReturnSchema = z.object({
   scratchPieces: z.array(scratchPiece).max(20).optional(),
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
 });
+
+/** Move a booked order's due day. */
+export const orderBookedForSchema = z.object({ bookedFor: day });
 
 /** Empty clears it. Allowed at any status — it changes nothing but the reference. */
 export const orderShopifyNumberSchema = z.object({

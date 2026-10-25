@@ -15,10 +15,12 @@ export const orderSummary = async (business, now = new Date()) => {
   const today = { $gte: startOfPakistanDay(day), $lte: endOfPakistanDay(day) };
   const scope = { business: new mongoose.Types.ObjectId(String(business)) };
 
-  const [createdToday, dispatchedToday, deliveredToday, grouped] = await Promise.all([
+  const [createdToday, dispatchedToday, deliveredToday, dueNow, grouped] = await Promise.all([
     Order.countDocuments({ ...scope, createdAt: today }),
     Order.countDocuments({ ...scope, dispatchedAt: today }),
     Order.countDocuments({ ...scope, deliveredAt: today }),
+    // Booked orders whose day has come (or gone) — what the daily alert is about.
+    Order.countDocuments({ ...scope, status: 'booked', bookedFor: { $lte: day } }),
     Order.aggregate([{ $match: scope }, { $group: { _id: '$status', count: { $sum: 1 } } }])
   ]);
 
@@ -27,6 +29,7 @@ export const orderSummary = async (business, now = new Date()) => {
     createdToday,
     dispatchedToday,
     deliveredToday,
+    dueNow,
     pending: byStatus.pending ?? 0,
     byStatus
   };

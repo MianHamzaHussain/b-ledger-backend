@@ -3,7 +3,7 @@ import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
 import { postEntry, reverseEntry } from './ledger.js';
 import { orderLabel } from './orderPosting.js';
 import { toPaisa } from './money.js';
-import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
+import { BEFORE_DISPATCH, JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 import { isCounterSale, heldPaisaOf } from '../models/Order.js';
 import { upsertCustomerParty } from './customerParty.js';
 /**
@@ -22,6 +22,7 @@ import { upsertCustomerParty } from './customerParty.js';
 /** Statuses on which the customer can still pay us. */
 const TAKES_ADVANCE = new Set([
   ORDER_STATUS.PENDING,
+  ORDER_STATUS.BOOKED,
   ORDER_STATUS.CONFIRMED,
   ORDER_STATUS.DISPATCHED,
   ORDER_STATUS.DELIVERED
@@ -51,8 +52,7 @@ export const recordAdvance = async (order, { amount, money, date, note, userId }
   }
   const amountPaisa = toPaisa(amount);
   const totalPaisa = toPaisa(order.total);
-  const isBeforeDispatch =
-    order.status === ORDER_STATUS.PENDING || order.status === ORDER_STATUS.CONFIRMED;
+  const isBeforeDispatch = BEFORE_DISPATCH.includes(order.status);
   if (isBeforeDispatch && heldPaisaOf(order) + amountPaisa > totalPaisa) {
     throw new ErrorResponse(
       `That would be more than the order total (${formatRupees(order.total)})`,
@@ -135,9 +135,7 @@ export const removeCustomerMoney = async (order, rowId, userId) => {
   if (heldAfter < 0) {
     throw new ErrorResponse('Remove the refund first — it paid back this advance', 400);
   }
-  const frozen = !(
-    order.status === ORDER_STATUS.PENDING || order.status === ORDER_STATUS.CONFIRMED
-  );
+  const frozen = !BEFORE_DISPATCH.includes(order.status);
   const usedPaisa =
     frozen && !NOT_SOLD.has(order.status) ? toPaisa(order.total) - toPaisa(order.codAmount) : 0;
   if (row.kind === 'advance' && heldAfter < usedPaisa) {
