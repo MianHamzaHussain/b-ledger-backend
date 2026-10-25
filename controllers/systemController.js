@@ -1,18 +1,16 @@
 import mongoose from 'mongoose';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
-import User from '../models/User.js';
+import Business from '../models/Business.js';
+import Order from '../models/Order.js';
+import {
+  businessModels,
+  countBusinessData,
+  labelOf,
+  snapshotBusiness
+} from '../utils/businessData.js';
 import logger from '../utils/logger.js';
 import { PAKISTAN_CITIES } from '../utils/cities.js';
-
-/**
- * Collections that survive a reset. Users need their roles to log in, and their
- * refresh tokens keep the admin who pressed the button signed in.
- */
-const KEPT_COLLECTIONS = new Set(['users', 'roles', 'refreshtokens']);
-
-/** The exact phrase the client must send — a stray request can't wipe data. */
-export const RESET_CONFIRMATION = 'RESET';
 
 /**
  * @desc   The standard city list the order form offers — one source of truth, so
@@ -23,34 +21,68 @@ export const getCities = (req, res) => {
   res.status(200).json({ success: true, data: PAKISTAN_CITIES });
 };
 
+const loadBusiness = async id => {
+  const business = mongoose.isValidObjectId(id) ? await Business.findById(id) : null;
+  if (!business) throw new ErrorResponse('Business not found', 404);
+  return business;
+};
+
 /**
- * @desc   Wipe every business record — businesses, stock, orders, the ledger,
- *         everything — keeping only users and roles. A TESTING aid: refused
- *         unless the server opts in with ALLOW_DATA_RESET=true, so a deploy that
- *         never set it can't be wiped by a click.
+ * @desc   What clearing one business would delete — counts per kind, plus the signals an
+ *         admin needs to tell test data from real (the last order, the protection lock).
+ * @route  GET /api/v1/system/reset-preview?business=<id>  (admin only)
+ */
+export const resetPreview = asyncHandler(async (req, res) => {
+  const business = await loadBusiness(req.query.business);
+  const lastOrder = await Order.findOne({ business: business._id }, 'createdAt')
+    .sort({ createdAt: -1 })
+    .lean();
+  res.status(200).json({
+    success: true,
+    data: {
+      business: { _id: business._id, name: business.name, isProtected: business.isProtected },
+      counts: await countBusinessData(business._id),
+      lastOrderAt: lastOrder?.createdAt ?? null
+    }
+  });
+});
+
+/**
+ * @desc   Delete every record of ONE business, keeping the business itself, its assigned users,
+ *         roles, categories and the order-number counter. A TESTING aid: refused unless the
+ *         server opts in with ALLOW_DATA_RESET=true, refused for a business marked protected
+ *         ("real data"), and only done when the business's exact name is typed — a phrase no
+ *         one types by habit. A copy of its records is written first.
  * @route  POST /api/v1/system/reset  (admin only)
  */
 export const resetData = asyncHandler(async (req, res, next) => {
   if (process.env.ALLOW_DATA_RESET !== 'true') {
     return next(new ErrorResponse('Data reset is disabled on this server', 403));
   }
-  if (req.body.confirm !== RESET_CONFIRMATION) {
-    return next(new ErrorResponse(`Type ${RESET_CONFIRMATION} to confirm the reset`, 400));
+  const business = await loadBusiness(req.body.business);
+  if (req.body.confirmName.trim() !== business.name) {
+    return next(new ErrorResponse(`Type the business name exactly: ${business.name}`, 400));
+  }
+  if (business.isProtected) {
+    return next(
+      new ErrorResponse(
+        'This business is protected as real data — turn the protection off first',
+        403
+      )
+    );
   }
 
-  // Every collection, not a hand-kept model list — a new model can't be missed.
-  const collections = await mongoose.connection.db.collections();
+  const snapshot = await snapshotBusiness(business);
+
   const cleared = {};
-  for (const collection of collections) {
-    const name = collection.collectionName;
-    if (KEPT_COLLECTIONS.has(name) || name.startsWith('system.')) continue;
-    const { deletedCount } = await collection.deleteMany({});
-    cleared[name] = deletedCount;
+  for (const model of businessModels()) {
+    const { deletedCount } = await model.deleteMany({ business: business._id });
+    cleared[labelOf(model)] = deletedCount;
   }
 
-  // The businesses users were assigned to are gone — don't leave dangling refs.
-  await User.updateMany({}, { $set: { assignedBusinesses: [] } });
-
-  logger.warn({ userId: req.user.id, cleared }, 'all business data reset');
+  logger.warn(
+    { userId: req.user.id, business: String(business._id), name: business.name, cleared, snapshot },
+    'business data reset'
+  );
   res.status(200).json({ success: true, data: { cleared } });
 });

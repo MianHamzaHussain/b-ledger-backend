@@ -927,9 +927,14 @@ cost more the longer it waits.
 
 ### Operational
 
-- **`POST /system/reset` (admin data wipe) is a testing aid.** It refuses unless
-  `ALLOW_DATA_RESET=true`. Remove that flag and revert the reset before any real
-  business data goes in — and set up `mongodump` backups.
+- **`POST /system/reset` (admin data wipe) is a testing aid — and it clears ONE business.**
+  It refuses unless `ALLOW_DATA_RESET=true`, refuses a business with `isProtected`
+  ("real data", admin-only flag), and needs that business's exact name typed. It deletes
+  every record carrying that `business` (read from the model registry, in
+  `utils/businessData.js`), keeps the business, users, roles, categories and the order
+  counter, and writes a JSON-lines copy to `ops/reset-snapshots/` first (gitignored; holds
+  customer data). `GET /system/reset-preview` shows the counts. Remove the flag and the
+  feature before real go-live.
 
 - **Rotate the VAPID keypair per environment.** A fresh pair is in the local
   envs; the one committed to the old repository is public — never reuse it.

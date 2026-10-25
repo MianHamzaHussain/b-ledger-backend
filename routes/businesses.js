@@ -16,6 +16,14 @@ import {
 
 const router = express.Router();
 
+/** Fields only an admin may set — silently dropped for anyone else, like other protected fields. */
+const adminOnlyFields =
+  (...fields) =>
+  (req, res, next) => {
+    if (!req.user.role?.fullAccess) for (const f of fields) delete req.body[f];
+    next();
+  };
+
 router.use(protect);
 
 /**
@@ -72,7 +80,12 @@ router
     ),
     getBusinesses
   )
-  .post(can('businesses', 'create'), validate(businessCreateSchema), createBusiness);
+  .post(
+    can('businesses', 'create'),
+    adminOnlyFields('isProtected'),
+    validate(businessCreateSchema),
+    createBusiness
+  );
 
 /**
  * @swagger
@@ -129,6 +142,7 @@ router
   .put(
     can('businesses', 'update'),
     loadScoped(Business),
+    adminOnlyFields('isProtected'),
     validate(businessUpdateSchema),
     updateBusiness
   )

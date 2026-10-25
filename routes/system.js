@@ -1,7 +1,9 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import ErrorResponse from '../utils/errorResponse.js';
-import { getCities, resetData } from '../controllers/systemController.js';
+import { validate } from '../middlewares/validate.js';
+import { resetSchema } from '../schemas/system.js';
+import { getCities, resetData, resetPreview } from '../controllers/systemController.js';
 
 const router = express.Router();
 
@@ -28,13 +30,29 @@ const requireAdmin = (req, res, next) =>
 
 /**
  * @swagger
+ * /system/reset-preview:
+ *   get:
+ *     summary: What clearing one business would delete (admin only)
+ *     tags: [System]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: Counts per kind, last order date, protection flag }
+ *       403: { description: Not an admin }
+ *       404: { description: No such business }
+ */
+router.get('/reset-preview', requireAdmin, resetPreview);
+
+/**
+ * @swagger
  * /system/reset:
  *   post:
- *     summary: Wipe all business data, keeping users and roles (testing only)
+ *     summary: Delete all records of one business (testing only)
  *     description: >
- *       Admin only, and refused unless the server sets ALLOW_DATA_RESET=true.
- *       Deletes every collection except users, roles and refresh tokens, and
- *       clears every user's assigned businesses.
+ *       Admin only, refused unless ALLOW_DATA_RESET=true, refused for a business marked
+ *       protected, and only when the business's exact name is typed. Keeps the business, users,
+ *       roles, categories and the order-number counter; writes a copy of the records first.
  *     tags: [System]
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
@@ -43,14 +61,16 @@ const requireAdmin = (req, res, next) =>
  *         application/json:
  *           schema:
  *             type: object
- *             required: [confirm]
+ *             required: [business, confirmName]
  *             properties:
- *               confirm: { type: string, enum: [RESET] }
+ *               business: { type: string }
+ *               confirmName: { type: string }
  *     responses:
- *       200: { description: Data wiped; counts per collection }
- *       400: { description: Missing confirmation }
- *       403: { description: Not an admin, or reset disabled on this server }
+ *       200: { description: Records deleted; counts per kind }
+ *       400: { description: Name does not match }
+ *       403: { description: Not an admin, reset disabled, or business protected }
+ *       404: { description: No such business }
  */
-router.post('/reset', requireAdmin, resetData);
+router.post('/reset', requireAdmin, validate(resetSchema), resetData);
 
 export default router;

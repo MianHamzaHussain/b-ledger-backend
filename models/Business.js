@@ -56,6 +56,8 @@ const BusinessSchema = new mongoose.Schema(
     brandColor: { type: String, match: [/^#[0-9a-fA-F]{6}$/, 'Use a colour like #1a73e8'] },
     /** What a new article starts with for "keep selling when out of stock". */
     defaultAllowOversell: { type: Boolean, default: false },
+    /** Real data: the testing reset refuses this business until an admin turns this off. */
+    isProtected: { type: Boolean, default: false },
     storeLink: {
       type: String,
       trim: true,
