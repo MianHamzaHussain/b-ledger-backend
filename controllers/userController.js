@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { presence } from '../utils/socket.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import User from '../models/User.js';
@@ -42,6 +43,16 @@ const sendInvite = async user => {
  */
 export const getUsers = asyncHandler(async (req, res, next) => {
   res.status(200).json(res.advancedResults);
+});
+
+/**
+ * @desc      Who is online right now (a live connection). The last-active time of everyone else
+ *            is on their user record.
+ * @route     GET /api/v1/users/presence
+ * @access    Private (users:read)
+ */
+export const getPresence = asyncHandler(async (req, res) => {
+  res.status(200).json({ success: true, data: { online: presence.onlineIds() } });
 });
 
 /**

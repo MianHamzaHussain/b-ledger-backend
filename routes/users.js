@@ -11,7 +11,8 @@ import {
   createUser,
   updateUser,
   deleteUser,
-  reinviteUser
+  reinviteUser,
+  getPresence
 } from '../controllers/userController.js';
 
 const router = express.Router();
@@ -35,6 +36,19 @@ router.use(protect);
  */
 // Literal sub-path before the parameterised /:id routes.
 router.post('/:id/reinvite', can('users', 'create'), reinviteUser);
+
+/**
+ * @swagger
+ * /users/presence:
+ *   get:
+ *     summary: Ids of the users with a live connection right now
+ *     tags: [Users]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: "{ online: [userId] }" }
+ *       403: { description: Missing users:read permission }
+ */
+router.get('/presence', can('users', 'read'), getPresence);
 
 /**
  * @swagger

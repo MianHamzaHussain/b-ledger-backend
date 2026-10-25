@@ -886,6 +886,14 @@ courier is a business's own party, so nothing is combined across businesses.
   safe to send twice; `GET /customers/export?business=` streams one business as a UTF-8 CSV
   (BOM, formula-injection guard in `utils/csv.js`), logs who exported, 10 an hour per user.
   `Customer.source` is `order` | `manual` | `import`.
+- **Presence.** `utils/presence.js`: a person is **online** with ≥1 live socket (tabs count once;
+  a 20 s grace stops a refresh blinking them offline). **Last active** is a different fact:
+  `User.lastActiveAt`, written from `protect` at most once a minute per person (no `updatedAt`
+  churn) and when they go offline. `GET /users/presence` lists who is online; changes are emitted
+  on `presence` **only** to the `presence` room, which sockets join if they can read users.
+  Every session now connects its socket, but business events are joined only with
+  `notifications:read` (the rule was client-only before). In memory = one API process; scaling
+  out needs the Socket.IO Redis adapter.
 - **Owner withdrawals are not an expense.** `profitAndLoss` also returns
   `ownerTookPaisa` (every capital-sourced entry's debit to an equity account, except
   Retained Earnings — so Drawings **and** partner capital accounts, but not a profit
