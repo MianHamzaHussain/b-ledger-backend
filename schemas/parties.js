@@ -16,6 +16,15 @@ export const partyCreateSchema = z.object({
 
 export const partyUpdateSchema = partyCreateSchema.partial();
 
+/** A courier's connection to its service. The key only goes in — see the controller. */
+export const courierConnectionSchema = z.object({
+  provider: z.enum(['postex']).optional(),
+  token: z.string().trim().min(8, 'That key looks too short').max(300).optional(),
+  pickupAddressCode: z.string().trim().max(60).optional(),
+  pickupAddressLabel: z.string().trim().max(200).optional(),
+  isEnabled: z.boolean().optional()
+});
+
 /** A person's balance from before the business started on B Ledger. */
 export const partyOpeningSchema = z.object({
   /** true — they owed the business; false — the business owed them. */

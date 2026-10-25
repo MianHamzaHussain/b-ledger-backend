@@ -24,6 +24,8 @@ import {
   orderCustomerNoteSchema,
   orderShopifyNumberSchema,
   orderBookedForSchema,
+  orderCourierConfirmSchema,
+  orderLoadSheetSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -54,7 +56,13 @@ import {
   deleteOrderMoney,
   getPriceHint,
   getOrderSummary,
+  getCourierReady,
   getDeliverers,
+  getAirwayBill,
+  getCourierParcels,
+  getLoadSheet,
+  cancelCourierParcel,
+  confirmCourierStatus,
   keepOrderCredit,
   addCustomCost,
   deleteCustomCost
@@ -99,6 +107,40 @@ router.get('/summary', can('orders', 'read'), getOrderSummary);
 
 /**
  * @swagger
+ * /orders/courier-ready:
+ *   get:
+ *     summary: Parcels the courier reports as delivered or returned, waiting to be confirmed
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "{ data: [{ _id, orderNumber, customerName, kind, fee, ... }] }" }
+ *       404: { description: Outside your assigned businesses }
+ */
+router.get('/courier-ready', can('orders', 'read'), getCourierReady);
+
+/**
+ * @swagger
+ * /orders/load-sheet:
+ *   post:
+ *     summary: A courier load sheet (PDF) for parcels handed to the rider
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: A PDF }
+ *       400: { description: None of the orders was booked through that courier }
+ */
+router.post(
+  '/load-sheet',
+  can('orders', 'read'),
+  restrictBusinessToScope(),
+  validate(orderLoadSheetSchema),
+  getLoadSheet
+);
+
+/**
+ * @swagger
  * /orders/deliverers:
  *   get:
  *     summary: Names already used as "delivered by" (newest first, up to 20)
@@ -111,6 +153,80 @@ router.get('/summary', can('orders', 'read'), getOrderSummary);
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/deliverers', can('orders', 'read'), getDeliverers);
+
+/**
+ * @swagger
+ * /orders/confirm-courier:
+ *   post:
+ *     summary: Confirm, in one go, the orders the courier reports as delivered or returned
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business, orderIds]
+ *             properties:
+ *               business: { type: string }
+ *               orderIds: { type: array, items: { type: string }, maxItems: 50 }
+ *     responses:
+ *       200: { description: "{ confirmed, results: [{ id, ok, status | reason }] }" }
+ *       403: { description: Not assigned to that business }
+ */
+router.post(
+  '/confirm-courier',
+  can('orders', 'update'),
+  restrictBusinessToScope(),
+  validate(orderCourierConfirmSchema),
+  confirmCourierStatus
+);
+
+/**
+ * @swagger
+ * /orders/{id}/airway-bill:
+ *   get:
+ *     summary: The courier's airway bill PDF for an order booked through its service
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: A PDF }
+ *       400: { description: The order was not booked through a courier service }
+ *       502: { description: The courier refused or could not be reached }
+ */
+router.get('/:id/airway-bill', can('orders', 'read'), loadScoped(Order), getAirwayBill);
+
+/**
+ * @swagger
+ * /orders/{id}/courier-cancel:
+ *   post:
+ *     summary: Cancel a booked parcel at the courier before pickup; the order is returned with no charge
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: The returned order }
+ *       400: { description: Not a dispatched courier-booked parcel }
+ *       502: { description: The courier refused (for example, already picked up) }
+ */
+/**
+ * @swagger
+ * /orders/{id}/courier-parcels:
+ *   get:
+ *     summary: Parcels already made on the courier's site for this order's customer
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *       - { in: query, name: courier, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "[{ trackingNumber, orderRefNumber, cityName, invoicePayment }]" }
+ */
+router.get('/:id/courier-parcels', can('orders', 'read'), loadScoped(Order), getCourierParcels);
+
+router.post('/:id/courier-cancel', can('orders', 'update'), loadScoped(Order), cancelCourierParcel);
 
 /**
  * @swagger

@@ -162,9 +162,11 @@ npx web-push generate-vapid-keys
 
 ### Testing aids
 
-| Variable           | Required | Purpose                                                                                                                                                             |
-| ------------------ | :------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOW_DATA_RESET` |    –     | `true` enables `POST /system/reset` — an admin-only wipe of **all business data** (users and roles are kept). **Leave unset in production.** Anything else refuses. |
+| Variable             |        Required        | Purpose                                                                                                                                                                                                                                     |
+| -------------------- | :--------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COURIER_SECRET_KEY` | ✔ to connect a courier | 64 hex characters (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`). Encrypts each courier's saved API key. **Secret, never commit.** Losing or changing it makes saved courier keys unreadable (re-enter them). |
+| `POSTEX_API_KEY`     |           –            | Local only — used by `npm run postex:check` to try a key read-only. The app itself never reads it; each courier's key is saved in the app.                                                                                                  |
+| `ALLOW_DATA_RESET`   |           –            | `true` enables `POST /system/reset` — an admin-only wipe of **all business data** (users and roles are kept). **Leave unset in production.** Anything else refuses.                                                                         |
 
 > ⚠️ The reset is for testing. Before real business data goes in, remove this
 > variable and revert the reset feature, and set up `mongodump` backups — the

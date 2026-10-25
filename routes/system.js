@@ -1,6 +1,6 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
-import ErrorResponse from '../utils/errorResponse.js';
+import { requireAdmin } from '../middlewares/requireAdmin.js';
 import { validate } from '../middlewares/validate.js';
 import { resetSchema } from '../schemas/system.js';
 import { getCities, resetData, resetPreview } from '../controllers/systemController.js';
@@ -20,13 +20,6 @@ router.use(protect);
  *       200: { description: City names, alphabetically }
  */
 router.get('/cities', getCities);
-
-/**
- * Admin only — not a resource on the permission grid, because it must never be
- * grantable to anyone else. Admin = the full-access role (roles are data).
- */
-const requireAdmin = (req, res, next) =>
-  req.user.role?.fullAccess ? next() : next(new ErrorResponse('Only an admin can do this', 403));
 
 /**
  * @swagger

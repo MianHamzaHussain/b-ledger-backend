@@ -20,6 +20,8 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
+import { attachParcel, bookParcel, findUnbookedFor } from '../utils/couriers/booking.js';
+import { adapterFor } from '../utils/couriers/index.js';
 import { normalizePhone } from '../utils/phone.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
@@ -776,7 +778,15 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     order.courier = courier;
     order.selfDelivery = false;
     order.deliveredBy = undefined;
-    const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+    let trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+    if (req.body.bookWithCourier) {
+      // The courier makes the tracking number itself; if it refuses, the order stays as it was.
+      const booked = await bookParcel(order, courier);
+      trackingId = booked.trackingNumber;
+    } else if (req.body.attachCourierParcel) {
+      await attachParcel(order, courier, req.body.attachCourierParcel);
+      trackingId = req.body.attachCourierParcel;
+    }
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
     // From now on a failed try at the door can be logged on this parcel.
@@ -1100,6 +1110,166 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * Run the normal status change for an order exactly as a person pressing the button would — same
+ * checks, same books — and wait for its answer. The one place the courier's "delivered" / "returned"
+ * becomes money, so it can never drift from what the button does.
+ */
+const changeStatusAsUser = (order, user, body) =>
+  new Promise((resolve, reject) => {
+    const res = {
+      status() {
+        return this;
+      },
+      json: resolve
+    };
+    updateOrderStatus({ user, resource: order, body }, res, reject);
+  });
+
+/**
+ * @desc   One tap for a batch: apply what the courier reports (delivered / returned) to every order
+ *         that is marked ready to confirm. The courier's fee is filled in when it has reported one;
+ *         left blank otherwise, so it is billed on the courier's invoice as before. An order that
+ *         can not be confirmed is reported and the rest carry on.
+ * @route  POST /api/v1/orders/confirm-courier  (orders:update — business must be in scope)
+ */
+export const confirmCourierStatus = asyncHandler(async (req, res) => {
+  const { business, orderIds } = req.body;
+  const results = [];
+
+  for (const id of orderIds) {
+    const order = await Order.findOne({ _id: id, business });
+    const kind = order?.courierBooking?.confirmable;
+    if (!order || order.status !== ORDER_STATUS.DISPATCHED || !kind) {
+      results.push({
+        id,
+        ok: false,
+        reason: 'The courier has not reported this one as delivered or returned'
+      });
+      continue;
+    }
+    const fee =
+      Math.round(((order.courierBooking.fee ?? 0) + (order.courierBooking.tax ?? 0)) * 100) / 100;
+    try {
+      await changeStatusAsUser(order, req.user, {
+        status: kind,
+        ...(fee > 0 ? { deliveryCharge: fee } : {}),
+        note: 'Confirmed from the courier’s status'
+      });
+      await Order.updateOne(
+        { _id: id },
+        { $unset: { 'courierBooking.confirmable': 1 } },
+        { timestamps: false }
+      );
+      results.push({ id, ok: true, status: kind });
+    } catch (err) {
+      results.push({ id, ok: false, reason: err.message });
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: { confirmed: results.filter(r => r.ok).length, results }
+  });
+});
+
+/**
+ * @desc   The courier's airway bill (a PDF) for an order booked through its service. Fetched by the
+ *         server with the saved key, so the key never reaches the browser.
+ * @route  GET /api/v1/orders/:id/airway-bill  (orders:read — scoped)
+ */
+export const getAirwayBill = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+  const tracking = order.courierBooking?.trackingNumber;
+  if (!tracking || !order.courier) {
+    return next(new ErrorResponse('This order was not booked through a courier service', 400));
+  }
+  const { api } = await adapterFor(order.courier, { requireEnabled: false });
+  const pdf = await api.airwayBill([tracking]);
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="airway-bill-${tracking}.pdf"`
+    })
+    .send(pdf);
+});
+
+/**
+ * @desc   Parcels already made on the courier's site for this order's customer — to pick one
+ *         instead of pasting a tracking number.
+ * @route  GET /api/v1/orders/:id/courier-parcels?courier=  (orders:read — scoped)
+ */
+export const getCourierParcels = asyncHandler(async (req, res, next) => {
+  if (!req.query.courier) return next(new ErrorResponse('Choose the courier first', 400));
+  const courier = await resolveCourier(req.resource.business, req.query.courier);
+  const data = await findUnbookedFor(req.resource, courier);
+  res.status(200).json({ success: true, count: data.length, data });
+});
+
+/**
+ * @desc   One load sheet (PDF) for the parcels being handed to the rider.
+ * @route  POST /api/v1/orders/load-sheet  (orders:read — business must be in scope)
+ */
+export const getLoadSheet = asyncHandler(async (req, res, next) => {
+  const { business, courier, orderIds } = req.body;
+  const orders = await Order.find({ _id: { $in: orderIds }, business, courier }).select(
+    'courierBooking.trackingNumber'
+  );
+  const numbers = orders.map(o => o.courierBooking?.trackingNumber).filter(Boolean);
+  if (!numbers.length) {
+    return next(new ErrorResponse('None of these orders was booked through that courier', 400));
+  }
+  const { api } = await adapterFor(courier, { requireEnabled: false });
+  const pdf = await api.loadSheet(numbers);
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'inline; filename="load-sheet.pdf"'
+    })
+    .send(pdf);
+});
+
+/**
+ * @desc   Cancel a parcel at the courier before it is picked up. The order is then returned with
+ *         no charge — the goods never left, so stock goes back — through the normal status path.
+ *         If the courier refuses (already picked up), nothing here changes.
+ * @route  POST /api/v1/orders/:id/courier-cancel  (orders:update — scoped)
+ */
+export const cancelCourierParcel = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+  const tracking = order.courierBooking?.trackingNumber;
+  if (!tracking || !order.courier || order.status !== ORDER_STATUS.DISPATCHED) {
+    return next(
+      new ErrorResponse(
+        'Only a dispatched parcel booked through a courier can be cancelled there',
+        400
+      )
+    );
+  }
+  const { api } = await adapterFor(order.courier, { requireEnabled: false });
+  await api.cancel(tracking);
+  const data = await changeStatusAsUser(order, req.user, {
+    status: ORDER_STATUS.RETURNED,
+    deliveryCharge: 0,
+    note: 'Parcel cancelled at the courier before pickup'
+  });
+  // The courier will not report on a cancelled parcel, so say so here rather than leave "Unbooked".
+  await Order.updateOne(
+    { _id: order._id },
+    {
+      $set: {
+        'courierBooking.courierStatus': 'Cancelled',
+        'courierBooking.courierStatusAt': new Date()
+      },
+      $unset: { 'courierBooking.confirmable': 1 }
+    },
+    { timestamps: false }
+  );
+  res.status(200).json(data);
+});
+
+/**
  * @desc   The names already used as "delivered by" in a business — so a name is picked, not
  *         retyped three different ways. Newest first.
  * @route  GET /api/v1/orders/deliverers?business=  (orders:read — scoped)
@@ -1136,6 +1306,43 @@ export const getOrderSummary = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Business not found', 404));
   }
   res.status(200).json({ success: true, data: await orderSummary(business) });
+});
+
+/**
+ * @desc   The parcels the courier reports as delivered / returned, waiting for a person's tap —
+ *         what the one-tap confirm screen lists, with the fee that will be filled in.
+ * @route  GET /api/v1/orders/courier-ready?business=  (orders:read — scoped)
+ */
+export const getCourierReady = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  const orders = await Order.find({
+    business,
+    status: ORDER_STATUS.DISPATCHED,
+    'courierBooking.confirmable': { $exists: true }
+  })
+    .select('orderNumber customerName city trackingId codAmount courierBooking')
+    .sort('courierBooking.courierStatusAt')
+    .limit(100)
+    .lean();
+
+  const data = orders.map(o => ({
+    _id: o._id,
+    orderNumber: o.orderNumber,
+    customerName: o.customerName,
+    city: o.city,
+    trackingId: o.trackingId,
+    codAmount: o.codAmount,
+    kind: o.courierBooking.confirmable,
+    courierStatus: o.courierBooking.courierStatus,
+    // The same sum the confirm fills in, so the screen shows exactly what will be booked.
+    fee: Math.round(((o.courierBooking.fee ?? 0) + (o.courierBooking.tax ?? 0)) * 100) / 100
+  }));
+  res.status(200).json({ success: true, count: data.length, data });
 });
 
 /**

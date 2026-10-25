@@ -34,5 +34,11 @@ export const ORDER_LIST_FIELDS = [
   'advanceAmount',
   'codAmount',
   'reversalTrackingId',
-  'awaitingReturn'
+  'awaitingReturn',
+  // What the list shows about a courier-booked parcel — never its history or the raw key fields.
+  'courierBooking.provider',
+  'courierBooking.courierStatus',
+  'courierBooking.confirmable',
+  'courierBooking.fee',
+  'courierBooking.tax'
 ].join(' ');

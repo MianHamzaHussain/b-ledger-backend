@@ -9,9 +9,17 @@ import {
   partyUpdateSchema,
   partyTransactionSchema,
   partyOpeningSchema,
-  courierInvoiceSchema
+  courierInvoiceSchema,
+  courierConnectionSchema
 } from '../schemas/parties.js';
 import { getCourierItems, createCourierInvoice } from '../controllers/courierInvoiceController.js';
+import { requireAdmin } from '../middlewares/requireAdmin.js';
+import {
+  getConnection,
+  saveConnection,
+  testConnection,
+  removeConnection
+} from '../controllers/courierConnectionController.js';
 import {
   getParties,
   getParty,
@@ -187,6 +195,62 @@ router.post(
  *       404: { description: Not found or out of scope }
  */
 router.get('/:id/statement', can('parties', 'read'), loadScoped(Party), getPartyStatement);
+
+/**
+ * @swagger
+ * /parties/{id}/connection:
+ *   get:
+ *     summary: A courier's connection to its service (admin only; never returns the key)
+ *     tags: [Parties]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: "{ provider, isEnabled, hasToken, pickupAddressCode, lastCheckedAt, lastError }" }
+ *       403: { description: Not an admin }
+ *   put:
+ *     summary: Save the courier key (write-only), pickup address, or switch booking on or off
+ *     tags: [Parties]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: The connection, without the key }
+ *       503: { description: COURIER_SECRET_KEY is not set on this server }
+ *   delete:
+ *     summary: Disconnect the courier and forget its key
+ *     tags: [Parties]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Disconnected }
+ */
+router
+  .route('/:id/connection')
+  .get(can('parties', 'read'), requireAdmin, loadScoped(Party), getConnection)
+  .put(
+    can('parties', 'update'),
+    requireAdmin,
+    loadScoped(Party),
+    validate(courierConnectionSchema),
+    saveConnection
+  )
+  .delete(can('parties', 'update'), requireAdmin, loadScoped(Party), removeConnection);
+
+/**
+ * @swagger
+ * /parties/{id}/connection/test:
+ *   post:
+ *     summary: Check the saved key by asking the courier for its pickup addresses
+ *     tags: [Parties]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: "{ addresses: [{ addressCode, address, cityName }] }" }
+ *       502: { description: The courier refused the key or could not be reached }
+ */
+router.post(
+  '/:id/connection/test',
+  can('parties', 'update'),
+  requireAdmin,
+  loadScoped(Party),
+  testConnection
+);
 
 /**
  * @swagger
