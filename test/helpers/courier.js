@@ -33,7 +33,8 @@ export const fakePostex = ({
   cities = ['Lahore', 'Karachi'],
   failCreate,
   tracking = {},
-  failBulk
+  failBulk,
+  failCancel
 } = {}) => {
   const creates = [];
   const calls = [];
@@ -50,6 +51,10 @@ export const fakePostex = ({
         statusCode: '200',
         dist: { trackingNumber: `CX-${1000 + creates.length}`, orderStatus: 'UnBooked' }
       });
+    }
+    if (u.includes('cancel-order')) {
+      if (failCancel) return reply({ statusCode: '400', statusMessage: failCancel }, 400);
+      return reply({ statusCode: '200', statusMessage: 'ORDER CANCELLED' });
     }
     if (u.includes('track-bulk-order')) {
       if (failBulk) return reply({ statusCode: '500' }, 500);

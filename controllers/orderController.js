@@ -1192,6 +1192,38 @@ export const getAirwayBill = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * @desc   Cancel a parcel at the courier before it is picked up. The order is then returned with
+ *         no charge — the goods never left, so stock goes back — through the normal status path.
+ *         If the courier refuses (already picked up), nothing here changes.
+ * @route  POST /api/v1/orders/:id/courier-cancel  (orders:update — scoped)
+ */
+export const cancelCourierParcel = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+  const tracking = order.courierBooking?.trackingNumber;
+  if (!tracking || !order.courier || order.status !== ORDER_STATUS.DISPATCHED) {
+    return next(
+      new ErrorResponse(
+        'Only a dispatched parcel booked through a courier can be cancelled there',
+        400
+      )
+    );
+  }
+  const { api } = await adapterFor(order.courier, { requireEnabled: false });
+  await api.cancel(tracking);
+  const data = await changeStatusAsUser(order, req.user, {
+    status: ORDER_STATUS.RETURNED,
+    deliveryCharge: 0,
+    note: 'Parcel cancelled at the courier before pickup'
+  });
+  await Order.updateOne(
+    { _id: order._id },
+    { $unset: { 'courierBooking.confirmable': 1 } },
+    { timestamps: false }
+  );
+  res.status(200).json(data);
+});
+
+/**
  * @desc   The names already used as "delivered by" in a business — so a name is picked, not
  *         retyped three different ways. Newest first.
  * @route  GET /api/v1/orders/deliverers?business=  (orders:read — scoped)

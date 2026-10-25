@@ -58,6 +58,7 @@ import {
   getCourierReady,
   getDeliverers,
   getAirwayBill,
+  cancelCourierParcel,
   confirmCourierStatus,
   keepOrderCredit,
   addCustomCost,
@@ -174,6 +175,21 @@ router.post(
  *       502: { description: The courier refused or could not be reached }
  */
 router.get('/:id/airway-bill', can('orders', 'read'), loadScoped(Order), getAirwayBill);
+
+/**
+ * @swagger
+ * /orders/{id}/courier-cancel:
+ *   post:
+ *     summary: Cancel a booked parcel at the courier before pickup; the order is returned with no charge
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: The returned order }
+ *       400: { description: Not a dispatched courier-booked parcel }
+ *       502: { description: The courier refused (for example, already picked up) }
+ */
+router.post('/:id/courier-cancel', can('orders', 'update'), loadScoped(Order), cancelCourierParcel);
 
 /**
  * @swagger

@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { connect, clear, disconnect, runHandler } from './helpers/db.js';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
-import { confirmCourierStatus, getCourierReady } from '../controllers/orderController.js';
+import {
+  cancelCourierParcel,
+  confirmCourierStatus,
+  getCourierReady
+} from '../controllers/orderController.js';
 import { orderCourierConfirmSchema } from '../schemas/orders.js';
 import { clearCityCache } from '../utils/couriers/booking.js';
 import { runCourierSync } from '../utils/courierSync.js';
@@ -154,4 +158,48 @@ test('the batch is limited to 50 and needs at least one', () => {
     false
   );
   assert.equal(orderCourierConfirmSchema.safeParse({ business: 'b', orderIds: [] }).success, false);
+});
+
+test('cancelling at the courier returns the order with no charge and puts the stock back', async () => {
+  fakePostex({});
+  const made = await setupOrder();
+  await dispatchBooked(made.order, made.courier);
+  const { calls } = fakePostex({});
+  const stockBefore = (await Product.findById(made.order.items[0].product)).variants[0].stock;
+
+  await runHandler(cancelCourierParcel, {
+    user: admin,
+    resource: await Order.findById(made.order._id)
+  });
+
+  assert.ok(calls.some(u => u.includes('cancel-order')));
+  const fresh = await Order.findById(made.order._id);
+  assert.equal(fresh.status, 'returned');
+  assert.equal(fresh.returnChargePaisa, 0);
+  const stockAfter = (await Product.findById(made.order.items[0].product)).variants[0].stock;
+  assert.equal(stockAfter, stockBefore + 2);
+});
+
+test('if the courier refuses to cancel (already picked up), the order stays dispatched', async () => {
+  fakePostex({});
+  const made = await setupOrder();
+  await dispatchBooked(made.order, made.courier);
+  fakePostex({ failCancel: 'Order already picked up' });
+
+  await assert.rejects(
+    runHandler(cancelCourierParcel, {
+      user: admin,
+      resource: await Order.findById(made.order._id)
+    }),
+    /already picked up/
+  );
+  assert.equal((await Order.findById(made.order._id)).status, 'dispatched');
+});
+
+test('only a dispatched, courier-booked parcel can be cancelled there', async () => {
+  const made = await setupOrder();
+  await assert.rejects(
+    runHandler(cancelCourierParcel, { user: admin, resource: made.order }),
+    /dispatched parcel booked through a courier/
+  );
 });
