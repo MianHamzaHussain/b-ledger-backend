@@ -48,6 +48,7 @@ import {
   addOrderRefund,
   deleteOrderMoney,
   getPriceHint,
+  getOrderSummary,
   keepOrderCredit,
   addCustomCost,
   deleteCustomCost
@@ -74,6 +75,21 @@ router.use(hideCosts);
  */
 // Literal path before /:id so it is not swallowed as an id.
 router.get('/price-hint', can('orders', 'read'), getPriceHint);
+
+/**
+ * @swagger
+ * /orders/summary:
+ *   get:
+ *     summary: Today's parcel counts (dispatched, delivered, pending) and every status's count
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "{ createdToday, dispatchedToday, deliveredToday, pending, byStatus }" }
+ *       404: { description: Outside your assigned businesses }
+ */
+router.get('/summary', can('orders', 'read'), getOrderSummary);
 
 /**
  * @swagger

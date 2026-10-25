@@ -16,6 +16,7 @@ import {
   computeRemittance
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
+import { orderSummary } from '../utils/orderSummary.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
@@ -959,6 +960,22 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
   }
 
   res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Today's parcel numbers for the Orders screen: dispatched today, delivered today,
+ *         pending now, and every status's count.
+ * @route  GET /api/v1/orders/summary?business=  (orders:read — scoped)
+ */
+export const getOrderSummary = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  // Outside your scope is indistinguishable from not existing (root CLAUDE.md §6).
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  res.status(200).json({ success: true, data: await orderSummary(business) });
 });
 
 /**
