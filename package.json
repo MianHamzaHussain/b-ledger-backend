@@ -14,6 +14,7 @@
     "seed": "node --env-file=.env seeder.js -i",
     "seed:destroy": "node --env-file=.env seeder.js -d",
     "backfill:cities": "node --env-file=.env scripts/backfillCities.mjs",
+    "normalize:phones": "node --env-file=.env scripts/normalizeCustomerPhones.mjs",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "lint": "oxlint .",
     "format": "prettier --write .",

@@ -20,6 +20,7 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
+import { normalizePhone } from '../utils/phone.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
@@ -326,11 +327,12 @@ export const createOrder = asyncHandler(async (req, res, next) => {
 
   let order;
   try {
+    const customerPhone = normalizePhone(contactNumber);
     const customer = await Customer.findOneAndUpdate(
-      { business, phone: contactNumber },
+      { business, phone: customerPhone },
       {
         $set: { name: customerName, city },
-        $setOnInsert: { business, phone: contactNumber, createdBy: req.user.id }
+        $setOnInsert: { business, phone: customerPhone, source: 'order', createdBy: req.user.id }
       },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
@@ -473,11 +475,12 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
 
   // Phone is the customer identity — a changed number re-points to (or creates)
   // the right contact, mirroring createOrder.
+  const customerPhone = normalizePhone(contactNumber);
   const customer = await Customer.findOneAndUpdate(
-    { business, phone: contactNumber },
+    { business, phone: customerPhone },
     {
       $set: { name: customerName, city },
-      $setOnInsert: { business, phone: contactNumber, createdBy: req.user.id }
+      $setOnInsert: { business, phone: customerPhone, source: 'order', createdBy: req.user.id }
     },
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );

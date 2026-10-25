@@ -877,6 +877,15 @@ courier is a business's own party, so nothing is combined across businesses.
   memo) is a Delivery/Return-charges expense paid from `costAccount` (`postCourierCost`'s
   `options.account`). The courier report skips these (`courier: {$ne: null}`) and returns them
   apart as `selfDelivery` per person. `GET /orders/deliverers` suggests names.
+- **Customers: phone is one spelling.** `Customer.phone` is always saved as `03XXXXXXXXX`
+  (`utils/phone.js`; a landline or foreign number is kept as digits, never refused), so
+  `0300-1234567` and `+92 300 1234567` are one customer. Orders, hand-added and imported
+  customers all go through it. **Run `npm run normalize:phones` once** (dry run first, backup
+  first) to merge the old duplicates. `POST /customers` (`customers:create`) adds one;
+  `POST /customers/import` takes ≤500 rows, **skips** existing phones (never overwrites),
+  safe to send twice; `GET /customers/export?business=` streams one business as a UTF-8 CSV
+  (BOM, formula-injection guard in `utils/csv.js`), logs who exported, 10 an hour per user.
+  `Customer.source` is `order` | `manual` | `import`.
 - **Owner withdrawals are not an expense.** `profitAndLoss` also returns
   `ownerTookPaisa` (every capital-sourced entry's debit to an equity account, except
   Retained Earnings — so Drawings **and** partner capital accounts, but not a profit
