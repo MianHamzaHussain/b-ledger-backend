@@ -2,6 +2,7 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { BUSINESS_LIST_FIELDS } from '../utils/businessListFields.js';
 import { validate } from '../middlewares/validate.js';
 import Business from '../models/Business.js';
 import { businessCreateSchema, businessUpdateSchema } from '../schemas/businesses.js';
@@ -76,7 +77,7 @@ router
       Business,
       { path: 'category', select: 'name status' },
       ['name', 'storeLink', 'whatsappNumber'],
-      'name category status logo brandColor'
+      BUSINESS_LIST_FIELDS
     ),
     getBusinesses
   )
