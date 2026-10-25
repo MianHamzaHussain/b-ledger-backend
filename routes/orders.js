@@ -25,6 +25,7 @@ import {
   orderShopifyNumberSchema,
   orderBookedForSchema,
   orderCourierConfirmSchema,
+  orderLoadSheetSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -58,6 +59,8 @@ import {
   getCourierReady,
   getDeliverers,
   getAirwayBill,
+  getCourierParcels,
+  getLoadSheet,
   cancelCourierParcel,
   confirmCourierStatus,
   keepOrderCredit,
@@ -116,6 +119,25 @@ router.get('/summary', can('orders', 'read'), getOrderSummary);
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/courier-ready', can('orders', 'read'), getCourierReady);
+
+/**
+ * @swagger
+ * /orders/load-sheet:
+ *   post:
+ *     summary: A courier load sheet (PDF) for parcels handed to the rider
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: A PDF }
+ *       400: { description: None of the orders was booked through that courier }
+ */
+router.post(
+  '/load-sheet',
+  can('orders', 'read'),
+  restrictBusinessToScope(),
+  validate(orderLoadSheetSchema),
+  getLoadSheet
+);
 
 /**
  * @swagger
@@ -189,6 +211,21 @@ router.get('/:id/airway-bill', can('orders', 'read'), loadScoped(Order), getAirw
  *       400: { description: Not a dispatched courier-booked parcel }
  *       502: { description: The courier refused (for example, already picked up) }
  */
+/**
+ * @swagger
+ * /orders/{id}/courier-parcels:
+ *   get:
+ *     summary: Parcels already made on the courier's site for this order's customer
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *       - { in: query, name: courier, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "[{ trackingNumber, orderRefNumber, cityName, invoicePayment }]" }
+ */
+router.get('/:id/courier-parcels', can('orders', 'read'), loadScoped(Order), getCourierParcels);
+
 router.post('/:id/courier-cancel', can('orders', 'update'), loadScoped(Order), cancelCourierParcel);
 
 /**

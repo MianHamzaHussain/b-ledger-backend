@@ -20,7 +20,7 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
-import { bookParcel } from '../utils/couriers/booking.js';
+import { attachParcel, bookParcel, findUnbookedFor } from '../utils/couriers/booking.js';
 import { adapterFor } from '../utils/couriers/index.js';
 import { normalizePhone } from '../utils/phone.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
@@ -783,6 +783,9 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
       // The courier makes the tracking number itself; if it refuses, the order stays as it was.
       const booked = await bookParcel(order, courier);
       trackingId = booked.trackingNumber;
+    } else if (req.body.attachCourierParcel) {
+      await attachParcel(order, courier, req.body.attachCourierParcel);
+      trackingId = req.body.attachCourierParcel;
     }
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
@@ -1187,6 +1190,42 @@ export const getAirwayBill = asyncHandler(async (req, res, next) => {
     .set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `inline; filename="airway-bill-${tracking}.pdf"`
+    })
+    .send(pdf);
+});
+
+/**
+ * @desc   Parcels already made on the courier's site for this order's customer — to pick one
+ *         instead of pasting a tracking number.
+ * @route  GET /api/v1/orders/:id/courier-parcels?courier=  (orders:read — scoped)
+ */
+export const getCourierParcels = asyncHandler(async (req, res, next) => {
+  if (!req.query.courier) return next(new ErrorResponse('Choose the courier first', 400));
+  const courier = await resolveCourier(req.resource.business, req.query.courier);
+  const data = await findUnbookedFor(req.resource, courier);
+  res.status(200).json({ success: true, count: data.length, data });
+});
+
+/**
+ * @desc   One load sheet (PDF) for the parcels being handed to the rider.
+ * @route  POST /api/v1/orders/load-sheet  (orders:read — business must be in scope)
+ */
+export const getLoadSheet = asyncHandler(async (req, res, next) => {
+  const { business, courier, orderIds } = req.body;
+  const orders = await Order.find({ _id: { $in: orderIds }, business, courier }).select(
+    'courierBooking.trackingNumber'
+  );
+  const numbers = orders.map(o => o.courierBooking?.trackingNumber).filter(Boolean);
+  if (!numbers.length) {
+    return next(new ErrorResponse('None of these orders was booked through that courier', 400));
+  }
+  const { api } = await adapterFor(courier, { requireEnabled: false });
+  const pdf = await api.loadSheet(numbers);
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'inline; filename="load-sheet.pdf"'
     })
     .send(pdf);
 });

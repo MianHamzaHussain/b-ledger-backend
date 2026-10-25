@@ -1,6 +1,7 @@
 import Order from '../../models/Order.js';
 import ErrorResponse from '../errorResponse.js';
 import { isMobile, normalizePhone } from '../phone.js';
+import { pakistanDay } from '../pakistanDay.js';
 import { adapterFor } from './index.js';
 
 /**
@@ -151,4 +152,71 @@ export const bookParcel = async (order, courierId) => {
     );
     throw err;
   }
+};
+
+const LOOKBACK_DAYS = 30;
+
+/**
+ * Parcels already made on the courier's own site and not yet picked up, that belong to this order's
+ * customer (matched on phone number) — so the person picks one instead of pasting a tracking number.
+ * Ones already attached to another order are left out.
+ */
+export const findUnbookedFor = async (order, courierId) => {
+  const { api } = await adapterFor(courierId);
+  const end = new Date();
+  const start = new Date(end.getTime() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+  const rows = await api.unbooked({ startDate: pakistanDay(start), endDate: pakistanDay(end) });
+  const phone = normalizePhone(order.contactNumber);
+  const mine = rows.filter(r => r.trackingNumber && normalizePhone(r.customerPhone) === phone);
+  if (!mine.length) return [];
+  const taken = await Order.find({
+    'courierBooking.trackingNumber': { $in: mine.map(r => r.trackingNumber) }
+  }).select('courierBooking.trackingNumber');
+  const used = new Set(taken.map(o => o.courierBooking.trackingNumber));
+  return mine
+    .filter(r => !used.has(r.trackingNumber))
+    .map(r => ({
+      trackingNumber: r.trackingNumber,
+      orderRefNumber: r.orderRefNumber,
+      customerPhone: r.customerPhone,
+      cityName: r.cityName,
+      invoicePayment: r.invoicePayment
+    }));
+};
+
+/**
+ * Use a parcel that already exists at the courier as this order's booking: the same record
+ * `bookParcel` leaves, so the status check follows it from here. Refuses a number the courier does
+ * not know, or one that already belongs to another order.
+ */
+export const attachParcel = async (order, courierId, trackingNumber) => {
+  const { api, provider } = await adapterFor(courierId);
+  const known = await api.track(trackingNumber).catch(() => null);
+  if (!known) {
+    throw new ErrorResponse('The courier does not know that tracking number', 400);
+  }
+  const elsewhere = await Order.exists({
+    _id: { $ne: order._id },
+    'courierBooking.trackingNumber': trackingNumber
+  });
+  if (elsewhere) {
+    throw new ErrorResponse('That parcel is already attached to another order', 409);
+  }
+  await Order.updateOne(
+    { _id: order._id },
+    {
+      $set: {
+        courierBooking: {
+          provider,
+          trackingNumber,
+          bookedAt: new Date(),
+          courierStatus: known.status,
+          courierStatusAt: new Date()
+        },
+        trackingId: trackingNumber
+      }
+    },
+    { timestamps: false }
+  );
+  return { trackingNumber, provider };
 };

@@ -34,7 +34,8 @@ export const fakePostex = ({
   failCreate,
   tracking = {},
   failBulk,
-  failCancel
+  failCancel,
+  unbooked = []
 } = {}) => {
   const creates = [];
   const calls = [];
@@ -52,6 +53,7 @@ export const fakePostex = ({
         dist: { trackingNumber: `CX-${1000 + creates.length}`, orderStatus: 'UnBooked' }
       });
     }
+    if (u.includes('get-unbooked-orders')) return reply({ statusCode: '200', dist: unbooked });
     if (u.includes('cancel-order')) {
       if (failCancel) return reply({ statusCode: '400', statusMessage: failCancel }, 400);
       return reply({ statusCode: '200', statusMessage: 'ORDER CANCELLED' });

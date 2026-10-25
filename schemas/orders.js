@@ -107,6 +107,8 @@ export const orderStatusSchema = z.object({
   bookedFor: day.optional(),
   /** Dispatch: book the parcel with the courier's own service (PostEx) instead of typing a tracking number. */
   bookWithCourier: z.boolean().optional(),
+  /** Dispatch: use a parcel already made on the courier's own site (its tracking number). */
+  attachCourierParcel: z.string().trim().min(3).max(60).optional(),
   /** Dispatch: we deliver it ourselves — instead of a courier. Needs `deliveredBy`. */
   selfDelivery: z.boolean().optional(),
   /** Who is taking it (an employee or anyone). */
@@ -147,6 +149,13 @@ export const orderRefundReturnSchema = z.object({
 export const orderCourierConfirmSchema = z.object({
   business: id,
   orderIds: z.array(id).min(1, 'Choose at least one order').max(50, 'Confirm at most 50 at a time')
+});
+
+/** One load sheet for a batch handed to the rider. */
+export const orderLoadSheetSchema = z.object({
+  business: id,
+  courier: id,
+  orderIds: z.array(id).min(1, 'Choose at least one order').max(100)
 });
 
 /** Move a booked order's due day. */
