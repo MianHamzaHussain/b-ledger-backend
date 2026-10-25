@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { connect, clear, disconnect, runHandler } from './helpers/db.js';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
-import { confirmCourierStatus } from '../controllers/orderController.js';
+import { confirmCourierStatus, getCourierReady } from '../controllers/orderController.js';
 import { orderCourierConfirmSchema } from '../schemas/orders.js';
 import { clearCityCache } from '../utils/couriers/booking.js';
 import { runCourierSync } from '../utils/courierSync.js';
@@ -66,6 +66,24 @@ test('delivered: the order is delivered the normal way, with the courier’s fee
   assert.ok(fresh.saleEntry, 'the sale was posted exactly as the button would');
   assert.equal(fresh.courierBooking.confirmable, undefined);
   assert.equal(fresh.statusHistory.at(-1).note, 'Confirmed from the courier’s status');
+});
+
+test('the confirm list names each parcel with the fee that will be filled in', async () => {
+  const made = await ready({
+    transactionStatus: 'Delivered',
+    transactionFee: 100,
+    transactionTax: 16,
+    transactionStatusHistory: hist(['0005', 'Delivered'])
+  });
+  const out = await runHandler(getCourierReady, {
+    user: admin,
+    accessFilter: {},
+    query: { business: String(made.biz._id) }
+  });
+  assert.equal(out.body.data.length, 1);
+  assert.equal(out.body.data[0].kind, 'delivered');
+  assert.equal(out.body.data[0].fee, 116);
+  assert.equal(out.body.data[0].trackingId, 'CX-1001');
 });
 
 test('returned: the order is returned, the stock goes back, the return fee is filled in', async () => {

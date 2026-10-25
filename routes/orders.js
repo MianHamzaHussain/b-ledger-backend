@@ -55,6 +55,7 @@ import {
   deleteOrderMoney,
   getPriceHint,
   getOrderSummary,
+  getCourierReady,
   getDeliverers,
   getAirwayBill,
   confirmCourierStatus,
@@ -99,6 +100,21 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/summary', can('orders', 'read'), getOrderSummary);
+
+/**
+ * @swagger
+ * /orders/courier-ready:
+ *   get:
+ *     summary: Parcels the courier reports as delivered or returned, waiting to be confirmed
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "{ data: [{ _id, orderNumber, customerName, kind, fee, ... }] }" }
+ *       404: { description: Outside your assigned businesses }
+ */
+router.get('/courier-ready', can('orders', 'read'), getCourierReady);
 
 /**
  * @swagger

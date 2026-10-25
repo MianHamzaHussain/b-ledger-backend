@@ -1231,6 +1231,43 @@ export const getOrderSummary = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * @desc   The parcels the courier reports as delivered / returned, waiting for a person's tap —
+ *         what the one-tap confirm screen lists, with the fee that will be filled in.
+ * @route  GET /api/v1/orders/courier-ready?business=  (orders:read — scoped)
+ */
+export const getCourierReady = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  const orders = await Order.find({
+    business,
+    status: ORDER_STATUS.DISPATCHED,
+    'courierBooking.confirmable': { $exists: true }
+  })
+    .select('orderNumber customerName city trackingId codAmount courierBooking')
+    .sort('courierBooking.courierStatusAt')
+    .limit(100)
+    .lean();
+
+  const data = orders.map(o => ({
+    _id: o._id,
+    orderNumber: o.orderNumber,
+    customerName: o.customerName,
+    city: o.city,
+    trackingId: o.trackingId,
+    codAmount: o.codAmount,
+    kind: o.courierBooking.confirmable,
+    courierStatus: o.courierBooking.courierStatus,
+    // The same sum the confirm fills in, so the screen shows exactly what will be booked.
+    fee: Math.round(((o.courierBooking.fee ?? 0) + (o.courierBooking.tax ?? 0)) * 100) / 100
+  }));
+  res.status(200).json({ success: true, count: data.length, data });
+});
+
+/**
  * @desc   The last price a product/variant sold at, to prefill the form.
  * @route  GET /api/v1/orders/price-hint?product=&variantId=  (orders:read — scoped)
  */
