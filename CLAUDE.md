@@ -373,6 +373,26 @@ Admins have it through `fullAccess`; nobody else does unless a role is given
 "Accountant tools". Everyday money goes through the named endpoints (expense,
 salary, party transactions…) whose double entry is fixed in code.
 
+### 6.4b Picking is not seeing — lookups
+
+A task often needs to _choose_ something that lives in a resource the person must not _browse_. A
+dispatcher picks a courier; an order taker picks the account an advance went into. If the only
+way to fill that box is the resource's own list, the role must be given the whole resource — and
+`GET /parties` carries every party's balance, `GET /finance/money-accounts` every bank balance.
+(Found 2026-10-25: a dispatcher given Khata access to find a courier could read the whole Khata.)
+
+So a picker gets its own narrow endpoint that returns only what choosing needs — never a balance,
+note or statement — and is allowed by the permission for the **task**, not the resource:
+
+| Endpoint                             | Returns                                     | Allowed with                                                               |
+| ------------------------------------ | ------------------------------------------- | -------------------------------------------------------------------------- |
+| `GET /parties/lookup?type=`          | name, phone, account id, `booksWithService` | `parties:read`, or the task's permission per type (`utils/partyLookup.js`) |
+| `GET /finance/money-accounts/lookup` | account/partner names, no balances          | `journal:read`, `orders:create`, `orders:update`                           |
+
+Rules for a new picker: add the lookup beside the resource, put the permission table in code, keep
+the scope check (own business only, 404 outside it), return no money, test that a role with only the
+task permission can pick and can **not** browse. Never widen a list endpoint to serve a picker.
+
 ### 6.5 Rules
 
 1. Every protected route calls `can()`. No exceptions.

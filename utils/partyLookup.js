@@ -40,10 +40,16 @@ export const LOOKUP_TASKS = {
  * 'all' / 'own' when this user may pick a party of this type, or null when not. The widest scope of
  * any permission that allows it wins, the same way a role plus a grant override does elsewhere.
  */
-export const lookupScope = (user, type) => {
+export const lookupScope = (user, type) =>
+  widestScope(user, [['parties', 'read'], ...(LOOKUP_TASKS[type] ?? [])]);
+
+/**
+ * 'all' / 'own' when the user holds any of these [resource, action] permissions, else null. The
+ * widest scope wins, the same way a role plus a grant override does elsewhere.
+ */
+export const widestScope = (user, needs) => {
   if (user?.role?.fullAccess) return 'all';
   const granted = resolvePermissions(user || {});
-  const needs = [['parties', 'read'], ...(LOOKUP_TASKS[type] ?? [])];
   let scope = null;
   for (const [resource, action] of needs) {
     const entry = granted.get(resource);
