@@ -17,6 +17,7 @@ export const ORDER_LIST_FIELDS = [
   'customerNote',
   'shopifyOrderNumber',
   'status',
+  'bookedFor',
   'paymentStatus',
   'total',
   'itemCount',
