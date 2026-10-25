@@ -3,13 +3,14 @@ import JournalEntry from '../models/JournalEntry.js';
 import Order from '../models/Order.js';
 import { accountByCode, CODES } from './chartOfAccounts.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
+import { parseBusinessDate } from './pakistanDay.js';
 
 const toId = value => new mongoose.Types.ObjectId(value);
 
 const dateRange = (from, to) => {
   const range = {};
-  if (from) range.$gte = new Date(from);
-  if (to) range.$lte = new Date(to);
+  if (from) range.$gte = parseBusinessDate(from);
+  if (to) range.$lte = parseBusinessDate(to, 'end');
   return Object.keys(range).length ? range : undefined;
 };
 

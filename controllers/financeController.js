@@ -28,6 +28,7 @@ import {
 } from '../utils/reports.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { ACCOUNT_TYPES, JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
+import { parseBusinessDate } from '../utils/pakistanDay.js';
 
 /** A validated, positive paisa amount, or an ErrorResponse-throwing reject. */
 const amountPaisa = raw => {
@@ -450,8 +451,8 @@ export const getTrialBalance = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('You are not assigned to that business', 403));
 
   const result = await trialBalance(business, {
-    from: from ? new Date(from) : undefined,
-    to: to ? new Date(to) : undefined
+    from: from ? parseBusinessDate(from) : undefined,
+    to: to ? parseBusinessDate(to, 'end') : undefined
   });
   res.status(200).json({ success: true, data: result });
 });
@@ -578,7 +579,7 @@ export const lockPeriod = asyncHandler(async (req, res, next) => {
 
   const lock = await PeriodLock.create({
     business,
-    periodEnd: new Date(periodEnd),
+    periodEnd: parseBusinessDate(periodEnd, 'end'),
     lockedBy: req.user.id
   });
   res.status(201).json({ success: true, data: { periodEnd: lock.periodEnd } });
@@ -722,9 +723,9 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
 });
 
 /** An optional ISO date query param → Date, or a 400 if it doesn't parse. */
-const parseDateParam = (value, name) => {
+const parseDateParam = (value, name, edge = 'start') => {
   if (!value) return undefined;
-  const date = new Date(value);
+  const date = parseBusinessDate(value, edge);
   if (Number.isNaN(date.getTime())) throw new ErrorResponse(`Invalid ${name} date`, 400);
   return date;
 };
@@ -754,7 +755,7 @@ export const getCashbook = asyncHandler(async (req, res, next) => {
   const book = await cashbook(business, {
     accountId: money.account,
     from: parseDateParam(req.query.from, 'from'),
-    to: parseDateParam(req.query.to, 'to')
+    to: parseDateParam(req.query.to, 'to', 'end')
   });
   res.status(200).json({
     success: true,
