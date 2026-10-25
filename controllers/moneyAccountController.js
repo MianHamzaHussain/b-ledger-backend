@@ -2,6 +2,7 @@ import Account from '../models/Account.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import { postEntry, accountBalance } from '../utils/ledger.js';
+import { widestScope } from '../utils/partyLookup.js';
 import { listMoneyAccounts, createMoneyAccount, resolveMoney } from '../utils/moneyAccounts.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { JOURNAL_SOURCES } from '../utils/constants.js';
@@ -31,6 +32,41 @@ export const getMoneyAccounts = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     success: true,
     data: { accounts: accounts.map(present), partners: partners.map(present) }
+  });
+});
+
+/**
+ * @desc   Which accounts and partners can money go into or come out of — names only, no balances.
+ *         For the "which account?" box on an order (advance, cash collected, a trip's cost): the
+ *         person taking the money needs the choices, not the bank balances or the cash book.
+ *         Allowed with the right to take or change orders, or to read the journal.
+ * @route  GET /api/v1/finance/money-accounts/lookup?business=
+ */
+export const lookupMoneyAccounts = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+
+  const scope = widestScope(req.user, [
+    ['journal', 'read'],
+    ['orders', 'create'],
+    ['orders', 'update']
+  ]);
+  if (!scope)
+    return next(new ErrorResponse('You do not have permission to choose an account', 403));
+  if (
+    scope === 'own' &&
+    !(req.user.assignedBusinesses || []).map(String).includes(String(business))
+  ) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+
+  const { accounts, partners } = await listMoneyAccounts(business, req.user, {});
+  res.status(200).json({
+    success: true,
+    data: {
+      accounts: accounts.map(({ balancePaisa: _drop, ...a }) => a),
+      partners: partners.map(({ balancePaisa: _drop, ...p }) => p)
+    }
   });
 });
 

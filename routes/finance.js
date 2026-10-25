@@ -25,6 +25,7 @@ import JournalEntry from '../models/JournalEntry.js';
 import Account from '../models/Account.js';
 import {
   getMoneyAccounts,
+  lookupMoneyAccounts,
   addMoneyAccount,
   updateMoneyAccount,
   recordTransfer
@@ -465,6 +466,24 @@ router
     validate(moneyAccountCreateSchema),
     addMoneyAccount
   );
+
+/**
+ * @swagger
+ * /finance/money-accounts/lookup:
+ *   get:
+ *     summary: Which accounts money can go into (names only, no balances)
+ *     description: >
+ *       For the "which account?" box on an order. Allowed with the right to take or change orders,
+ *       or to read the journal — the person taking the money does not see bank balances.
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: query, name: business, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: "{ accounts, partners } without balances" }
+ *       403: { description: Not allowed to choose an account }
+ *       404: { description: Business outside your scope }
+ */
+router.get('/money-accounts/lookup', lookupMoneyAccounts);
 
 /**
  * @swagger

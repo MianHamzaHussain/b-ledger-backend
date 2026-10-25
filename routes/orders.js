@@ -133,7 +133,7 @@ router.get('/courier-ready', can('orders', 'read'), getCourierReady);
  */
 router.post(
   '/load-sheet',
-  can('orders', 'read'),
+  can('orders', 'update'),
   restrictBusinessToScope(),
   validate(orderLoadSheetSchema),
   getLoadSheet

@@ -14,6 +14,7 @@ import {
 } from '../schemas/parties.js';
 import { getCourierItems, createCourierInvoice } from '../controllers/courierInvoiceController.js';
 import { requireAdmin } from '../middlewares/requireAdmin.js';
+import { lookupParties } from '../controllers/partyLookupController.js';
 import {
   getConnection,
   saveConnection,
@@ -90,6 +91,28 @@ router
  *       404: { description: Business outside your scope }
  */
 router.get('/summary', can('parties', 'read'), getPartySummary);
+
+/**
+ * @swagger
+ * /parties/lookup:
+ *   get:
+ *     summary: Pick a party for a task (name, phone, account id — never a balance)
+ *     description: >
+ *       For whoever needs the person for their own work — a dispatcher picking a courier — without
+ *       Khata access. Allowed with the permission for that task, or parties:read.
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: type, required: true, schema: { type: string, enum: [supplier, reseller, employee, courier, customer, lender] } }
+ *       - { in: query, name: search, schema: { type: string } }
+ *       - { in: query, name: limit, schema: { type: integer, maximum: 20 } }
+ *     responses:
+ *       200: { description: "[{ _id, name, type, phone, accountId, booksWithService? }]" }
+ *       403: { description: Not allowed to find this kind of party }
+ *       404: { description: Business outside your scope }
+ */
+router.get('/lookup', lookupParties);
 
 /**
  * @swagger
