@@ -838,6 +838,12 @@ courier is a business's own party, so nothing is combined across businesses.
   `item.oversold` (pieces not on the shelf). `variants.stock` has **no `min`** on
   purpose — `$inc` skips validators, and a floor would make a later `product.save()`
   fail on an article that is merely short. Never add one back.
+- **Per size.** `Product.allowOversell` covers every size of the article, but a size can be
+  switched OFF with `variants[].allowOversell: false` (absent = follow the article; no backfill).
+  The one rule is `canOversell(product, variant)` in `utils/stock.js` — an article that is off
+  is never overridden by a size. `updateProduct` rebuilds each variant by hand, so it must carry
+  the flag or every edit would wipe it (tested). The order form mirrors the rule in
+  `frontend/src/lib/stock.ts keepsSelling`; keep the two in step.
 - **Cost of those pieces.** The order snapshots `unitCost` at create. At **delivery**
   `refreshOversoldCost` (`utils/orderPosting.js`) re-reads the article's current cost
   for any line that was oversold or had cost 0; if it is still 0 the line is booked

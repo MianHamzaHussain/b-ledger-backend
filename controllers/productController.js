@@ -68,13 +68,21 @@ export const updateProduct = asyncHandler(async (req, res) => {
           _id: existing._id,
           label: incoming.label ?? existing.label,
           salePrice: incoming.salePrice != null ? incoming.salePrice : existing.salePrice,
+          // `false` switches this size off "keep selling"; anything else follows the article.
+          allowOversell: incoming.allowOversell === false ? false : undefined,
           // Preserved from the DB — never taken from the form.
           costPrice: existing.costPrice,
           stock: existing.stock,
           barcode: existing.barcode
         };
       }
-      return { label: incoming.label, salePrice: incoming.salePrice, costPrice: 0, stock: 0 };
+      return {
+        label: incoming.label,
+        salePrice: incoming.salePrice,
+        allowOversell: incoming.allowOversell === false ? false : undefined,
+        costPrice: 0,
+        stock: 0
+      };
     });
   }
 
