@@ -1254,9 +1254,16 @@ export const cancelCourierParcel = asyncHandler(async (req, res, next) => {
     deliveryCharge: 0,
     note: 'Parcel cancelled at the courier before pickup'
   });
+  // The courier will not report on a cancelled parcel, so say so here rather than leave "Unbooked".
   await Order.updateOne(
     { _id: order._id },
-    { $unset: { 'courierBooking.confirmable': 1 } },
+    {
+      $set: {
+        'courierBooking.courierStatus': 'Cancelled',
+        'courierBooking.courierStatusAt': new Date()
+      },
+      $unset: { 'courierBooking.confirmable': 1 }
+    },
     { timestamps: false }
   );
   res.status(200).json(data);

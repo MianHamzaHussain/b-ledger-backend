@@ -176,6 +176,7 @@ test('cancelling at the courier returns the order with no charge and puts the st
   const fresh = await Order.findById(made.order._id);
   assert.equal(fresh.status, 'returned');
   assert.equal(fresh.returnChargePaisa, 0);
+  assert.equal(fresh.courierBooking.courierStatus, 'Cancelled');
   const stockAfter = (await Product.findById(made.order.items[0].product)).variants[0].stock;
   assert.equal(stockAfter, stockBefore + 2);
 });
