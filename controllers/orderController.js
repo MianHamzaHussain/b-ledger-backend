@@ -145,12 +145,18 @@ export const getOrder = asyncHandler(async (req, res) => {
       withholdingTax: 0,
       salesTax: 0,
       paidSoFar: fromPaisa(paidPaisa),
-      netReceivable: fromPaisa(Math.max(0, codPaisa - paidPaisa)),
+      // A self-delivered parcel shows the whole amount (to collect, or collected); a counter
+      // sale shows what is still owed after part-payments.
+      netReceivable: order.selfDelivery
+        ? order.codAmount
+        : fromPaisa(Math.max(0, codPaisa - paidPaisa)),
       whtIsAsset: false,
       deliveryKnown: true,
       settled: order.paymentStatus === PAYMENT_STATUS.PAID,
       // Flag the counter-sale case so the client can label it "owed by customer".
-      counterSale: true,
+      // A self-delivered parcel is NOT a counter sale (it is delivered later, takes advances and
+      // can be sent back); it only shares the "nothing is withheld" figures.
+      counterSale: !order.selfDelivery,
       selfDelivery: Boolean(order.selfDelivery)
     };
   } else {

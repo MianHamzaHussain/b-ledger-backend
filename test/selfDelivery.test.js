@@ -210,6 +210,7 @@ test('the order page preview shows the full COD, with no tax or courier fee, for
   const out = await runHandler(getOrder, { resource: await Order.findById(order._id) });
   const r = out.body.data.remittance;
   assert.equal(r.selfDelivery, true);
+  assert.equal(r.counterSale, false, 'not a counter sale — it ships later and takes advances');
   assert.equal(r.withholdingTax, 0);
   assert.equal(r.salesTax, 0);
   assert.equal(r.deliveryCharge, 0);
