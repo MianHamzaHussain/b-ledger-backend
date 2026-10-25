@@ -828,6 +828,16 @@ courier is a business's own party, so nothing is combined across businesses.
 - A past period can still move: a parcel sent in September and refunded in
   November changes September's refunded count the next time the report runs.
 
+### 10.9 Courier integration — PostEx books the parcel and reports back
+
+A courier Party can be connected to its own service (`Party.integration`; PostEx today, TCS later behind the same adapter in `utils/couriers/`). **One key per courier, so one per business**, stored AES-256-GCM encrypted (`utils/secretBox.js`, master key `COURIER_SECRET_KEY` in env, never in the DB). The key is write-only: `select:false`, stripped from `toJSON`, redacted in logs, admin-only routes (`/parties/:id/connection`).
+
+- **Dispatch** with `bookWithCourier` calls `bookParcel` (`utils/couriers/booking.js`): an atomic claim, the PostEx call, then the tracking number is saved on `order.courierBooking` before anything else can fail. A double tap makes one parcel; a refusal leaves the order where it was.
+- **Status check** (`utils/courierSync.js`, every 15 min, in-process like the booking reminders, shown in `/health`) only **marks** `courierBooking.confirmable`. It never changes `order.status` — delivered posts revenue, COGS and stock and is terminal, so a person confirms.
+- **Confirm** (`POST /orders/confirm-courier`, ≤ 50) runs the ordinary `updateOrderStatus` per order, filling the delivery/return charge with the courier's `fee + tax` when it reported one (otherwise blank → the courier invoice, §10.2). One order failing never stops the rest.
+- The courier's fee/tax is **its delivery charge**, not the FBR COD withholding — check one settled parcel against the statement before trusting the prefill.
+- Tests inject `courierDeps.fetchImpl`; no test can reach a real courier. `npm run postex:check` is a read-only local check of a key.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from
