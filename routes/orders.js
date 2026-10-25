@@ -28,6 +28,7 @@ import {
   customCostSchema
 } from '../schemas/orders.js';
 import Order from '../models/Order.js';
+import { ORDER_LIST_FIELDS } from '../utils/orderListFields.js';
 import {
   getOrders,
   getOrder,
@@ -145,8 +146,8 @@ router
   .route('/')
   .get(
     can('orders', 'read'),
-    // Lean list: the cards show who it's for, #, today's serial, tracking, status,
-    // item count, total and payment. Full details (items, courier, remittance)
+    // Lean list: the cards show who it's for, #, today's serial, tracking, status, what was
+    // ordered (names only), item count, total and payment. Full details (items, courier, remittance)
     // come from the detail-by-id endpoint. Search still matches name/phone/
     // tracking — that is the query filter, independent of the projection.
     advancedResults(
@@ -160,7 +161,7 @@ router
         'reversalTrackingId',
         'shopifyOrderNumber'
       ],
-      'orderNumber dailySerial orderDay customerName city trackingId customerNote shopifyOrderNumber status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount reversalTrackingId awaitingReturn'
+      ORDER_LIST_FIELDS
     ),
     getOrders
   )
