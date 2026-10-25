@@ -114,7 +114,8 @@ export const RESOURCES = {
     label: 'Customers',
     description: 'The people who buy from you: names, phone numbers and cities.',
     can: {
-      read: 'see customers',
+      read: 'see customers, and export the list',
+      create: 'add a customer by hand, or import an old list',
       update: "correct a customer's name or city"
     },
     scopable: true,

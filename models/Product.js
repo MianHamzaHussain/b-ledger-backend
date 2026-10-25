@@ -38,6 +38,13 @@ const VariantSchema = new mongoose.Schema(
       min: [0, 'Sale price can not be negative']
     },
     /**
+     * Leave this size out of "keep selling when out of stock": `false` means it is refused when
+     * short even though the article keeps selling. Absent (the usual case, and every older size)
+     * follows the article. It can only switch a size OFF — an article that does not keep selling
+     * never sells a size below zero (see `canOversell` in utils/stock.js).
+     */
+    allowOversell: { type: Boolean },
+    /**
      * Can go below zero on an article that keeps selling when out of stock
      * (`allowOversell`): minus pieces are already promised to customers, and new
      * stock fills those orders first. There is no `min` here on purpose — the

@@ -31,6 +31,9 @@ export const BUSINESS_CATEGORIES = {
 /** Order fulfillment lifecycle. Payment is a separate axis (see PAYMENT_STATUS). */
 export const ORDER_STATUS = {
   PENDING: 'pending',
+  // Taken now for a later date (`Order.bookedFor`): stock and any advance are held, and an alert
+  // fires when the date arrives. Works like pending/confirmed until it is released or dispatched.
+  BOOKED: 'booked',
   CONFIRMED: 'confirmed',
   DISPATCHED: 'dispatched',
   DELIVERED: 'delivered',
@@ -47,8 +50,9 @@ export const ORDER_STATUS = {
 
 /** Allowed fulfillment transitions. Terminal states have no exits. */
 export const ORDER_TRANSITIONS = {
-  pending: ['confirmed', 'dispatched', 'cancelled'],
-  confirmed: ['dispatched', 'cancelled'],
+  pending: ['confirmed', 'dispatched', 'booked', 'cancelled'],
+  confirmed: ['dispatched', 'booked', 'cancelled'],
+  booked: ['pending', 'confirmed', 'dispatched', 'cancelled'],
   // A return means the customer refused the parcel, so it can only happen while
   // it is still out for delivery. Once delivered (the customer took it), the
   // only thing left is payment — delivered is terminal on the fulfillment axis.
@@ -61,7 +65,10 @@ export const ORDER_TRANSITIONS = {
 };
 
 /** Statuses whose stock is held out of inventory (decremented). */
-export const STOCK_HELD_STATUSES = ['pending', 'confirmed', 'dispatched', 'delivered'];
+export const STOCK_HELD_STATUSES = ['pending', 'booked', 'confirmed', 'dispatched', 'delivered'];
+
+/** Before the parcel leaves: the order can still be edited and takes advances and custom costs. */
+export const BEFORE_DISPATCH = [ORDER_STATUS.PENDING, ORDER_STATUS.BOOKED, ORDER_STATUS.CONFIRMED];
 
 /** Payment axis — tracked independently of fulfillment. */
 export const PAYMENT_STATUS = {
@@ -168,7 +175,8 @@ export const PARTNER_MONEY_PREFIX = 'partner:';
 export const NOTIFICATION_TYPES = {
   NEW_ORDER: 'new-order',
   ORDER_PAID: 'order-paid',
-  LOW_STOCK: 'low-stock'
+  LOW_STOCK: 'low-stock',
+  BOOKING_DUE: 'booking-due'
 };
 
 /** Name of the protected, full-access role created by the seeder. */

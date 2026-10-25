@@ -25,13 +25,13 @@ import ErrorResponse from './errorResponse.js';
  * Items are `{ product, variantId, quantity, productName? }`.
  */
 export const reserveStock = async (items, { allowOversell = false } = {}) => {
-  const keepsSelling = allowOversell ? await oversellProducts(items) : new Set();
+  const keepsSelling = allowOversell ? await oversellLines(items) : new Set();
   const taken = [];
 
   for (const item of items) {
     item.oversold = 0;
 
-    if (keepsSelling.has(String(item.product))) {
+    if (keepsSelling.has(lineKey(item.product, item.variantId))) {
       const after = await Product.findOneAndUpdate(
         { _id: item.product, variants: { $elemMatch: { _id: item.variantId } } },
         { $inc: { 'variants.$.stock': -item.quantity, totalStock: -item.quantity } },
@@ -76,13 +76,28 @@ export const reserveStock = async (items, { allowOversell = false } = {}) => {
   }
 };
 
-/** The ids (as strings) of these items' products that keep selling when out of stock. */
-const oversellProducts = async items => {
+/**
+ * Whether one size may be sold below zero: its article keeps selling AND the size has not been
+ * switched off. An article that does not keep selling is never overridden by a size.
+ */
+export const canOversell = (product, variant) =>
+  Boolean(product?.allowOversell) && variant?.allowOversell !== false;
+
+const lineKey = (product, variantId) => `${product}:${variantId}`;
+
+/** The `product:variant` keys of these items that may be sold below zero. */
+const oversellLines = async items => {
   const products = await Product.find(
     { _id: { $in: items.map(i => i.product) }, allowOversell: true },
-    '_id'
+    'allowOversell variants._id variants.allowOversell'
   ).lean();
-  return new Set(products.map(p => String(p._id)));
+  const keys = new Set();
+  for (const product of products) {
+    for (const variant of product.variants) {
+      if (canOversell(product, variant)) keys.add(lineKey(product._id, variant._id));
+    }
+  }
+  return keys;
 };
 
 /** Return stock to inventory — used on cancel/return, and to unwind a failed reserve. */

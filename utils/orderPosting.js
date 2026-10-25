@@ -130,14 +130,19 @@ export const postOrderSale = async (order, userId) => {
           });
         }
       } else {
-        // Counter sale on credit — the full balance is owed by the customer, no
-        // courier deductions. Sub-ledgered to the customer party if we have one.
-        lines.push({
-          account: (await acc(CODES.ACCOUNTS_RECEIVABLE))._id,
-          party: order.customerParty || undefined,
-          label,
-          debitPaisa: codPaisa
-        });
+        // No courier, so no COD tax or courier fee. A parcel we delivered ourselves whose cash
+        // was taken at the door goes straight into that money account; anything else is the full
+        // balance owed by the customer, sub-ledgered to the customer party if we have one.
+        lines.push(
+          order.selfDelivery && order.selfCollectAccount
+            ? { account: order.selfCollectAccount, label, debitPaisa: codPaisa }
+            : {
+                account: (await acc(CODES.ACCOUNTS_RECEIVABLE))._id,
+                party: order.customerParty || undefined,
+                label,
+                debitPaisa: codPaisa
+              }
+        );
       }
     }
     if (advancePaisa > 0) {
@@ -271,7 +276,7 @@ export const postOrderRemittance = async (order, deliveryChargeRupees, userId) =
  * balance is what it will actually pay. An order with no courier (never the
  * case for a return, which is only reachable from dispatched) falls back to Cash.
  */
-const postCourierCost = async (order, chargeRupees, expenseCode, memo, userId) => {
+const postCourierCost = async (order, chargeRupees, expenseCode, memo, userId, options = {}) => {
   await ensureChart(order.business);
   const chargePaisa = toPaisa(Number(chargeRupees) || 0);
   if (chargePaisa <= 0) return null;
@@ -285,11 +290,11 @@ const postCourierCost = async (order, chargeRupees, expenseCode, memo, userId) =
         label,
         creditPaisa: chargePaisa
       }
-    : { account: (await acc(CODES.CASH))._id, creditPaisa: chargePaisa };
+    : { account: options.account || (await acc(CODES.CASH))._id, creditPaisa: chargePaisa };
 
   return postEntry({
     business: order.business,
-    memo: `${memo} — order ${order.orderNumber}`,
+    memo: `${memo} — order ${order.orderNumber}${options.note ? ` (${options.note})` : ''}`,
     source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
     lines: [{ account: (await acc(expenseCode))._id, label, debitPaisa: chargePaisa }, credit],
     userId
@@ -297,13 +302,27 @@ const postCourierCost = async (order, chargeRupees, expenseCode, memo, userId) =
 };
 
 /** A return's (or an exchange pickup's) courier charge, taken off the courier's COD. */
-export const postReturnCharge = (order, returnChargeRupees, userId) =>
-  postCourierCost(order, returnChargeRupees, CODES.RETURN_CHARGES, 'Return charge', userId);
+export const postReturnCharge = (order, returnChargeRupees, userId, options) =>
+  postCourierCost(
+    order,
+    returnChargeRupees,
+    CODES.RETURN_CHARGES,
+    'Return charge',
+    userId,
+    options
+  );
 
 /**
  * The forward delivery fee of an order whose sale was reversed (an exchange).
  * The reversal takes the fee out with the sale, but the courier still charged
  * it — so it is booked again on its own, taken off the courier's COD.
  */
-export const postDeliveryCharge = (order, deliveryChargeRupees, userId) =>
-  postCourierCost(order, deliveryChargeRupees, CODES.DELIVERY_CHARGES, 'Delivery charge', userId);
+export const postDeliveryCharge = (order, deliveryChargeRupees, userId, options) =>
+  postCourierCost(
+    order,
+    deliveryChargeRupees,
+    CODES.DELIVERY_CHARGES,
+    'Delivery charge',
+    userId,
+    options
+  );

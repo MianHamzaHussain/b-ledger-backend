@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { cleanShopifyNumber } from '../utils/shopifyNumber.js';
 import { ATTEMPT_REASONS } from '../utils/constants.js';
 
 const id = z.string().min(1, 'Required');
@@ -27,6 +28,17 @@ const customWork = z.object({
   fromScratch: z.boolean().optional()
 });
 
+/** The Shopify store's own number for this order (reference only), cleaned as people copy it. */
+const shopifyOrderNumber = z
+  .string()
+  .max(40, 'That number is too long')
+  .transform(cleanShopifyNumber)
+  .pipe(z.string().max(30, 'That number is too long'))
+  .optional();
+
+/** A Pakistan calendar day, YYYY-MM-DD. */
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Choose a date');
+
 export const orderCreateSchema = z
   .object({
     business: id,
@@ -35,6 +47,9 @@ export const orderCreateSchema = z
     city: z.string().optional(),
     deliveryAddress: z.string().optional(),
     customerNote: z.string().trim().max(500, 'Keep the note under 500 characters').optional(),
+    shopifyOrderNumber,
+    /** Book it for a later day: the order is taken now and an alert fires when the day arrives. */
+    bookedFor: day.optional(),
     /** Makes sending this order twice safe — see Order.clientRef. */
     clientRef: z.string().trim().min(1).max(64).optional(),
     advanceAmount: z.coerce.number().min(0).optional(),
@@ -59,6 +74,7 @@ export const orderUpdateSchema = z
     city: z.string().optional(),
     deliveryAddress: z.string().optional(),
     source: source.optional(),
+    shopifyOrderNumber,
     items: z.array(orderItem).default([]),
     customWork: z.array(customWork).max(20).default([])
   })
@@ -78,7 +94,27 @@ const scratchPiece = z.object({
 });
 
 export const orderStatusSchema = z.object({
-  status: z.enum(['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled', 'returned']),
+  status: z.enum([
+    'pending',
+    'booked',
+    'confirmed',
+    'dispatched',
+    'delivered',
+    'cancelled',
+    'returned'
+  ]),
+  /** Required when the new status is `booked`. */
+  bookedFor: day.optional(),
+  /** Dispatch: we deliver it ourselves — instead of a courier. Needs `deliveredBy`. */
+  selfDelivery: z.boolean().optional(),
+  /** Who is taking it (an employee or anyone). */
+  deliveredBy: z.string().trim().max(60, 'Keep the name under 60 characters').optional(),
+  /** Delivered by us: was the cash collected? Defaults to yes. */
+  collected: z.boolean().optional(),
+  /** Where the collected cash (or our delivery cost) goes — a money account; Cash if left out. */
+  collectInto: id.optional(),
+  /** What the delivery cost us was paid from; Cash if left out. */
+  costAccount: id.optional(),
   courier: id.optional(),
   /** The courier's bill for the outcome — the delivery fee on `delivered`, the
    *  return fee on `returned`. Optional: usually billed on the courier invoice. */
@@ -103,6 +139,14 @@ export const orderRefundReturnSchema = z.object({
   shippingShare: z.coerce.number().min(0, 'Can not be negative').optional(),
   scratchPieces: z.array(scratchPiece).max(20).optional(),
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+});
+
+/** Move a booked order's due day. */
+export const orderBookedForSchema = z.object({ bookedFor: day });
+
+/** Empty clears it. Allowed at any status — it changes nothing but the reference. */
+export const orderShopifyNumberSchema = z.object({
+  shopifyOrderNumber: shopifyOrderNumber.default('')
 });
 
 /** An empty note clears it. */

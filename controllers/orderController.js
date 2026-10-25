@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import Order, { heldPaisaOf } from '../models/Order.js';
@@ -13,9 +14,13 @@ import {
   postOrderSale,
   postOrderRemittance,
   postReturnCharge,
+  postDeliveryCharge,
   computeRemittance
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
+import { pakistanDay } from '../utils/pakistanDay.js';
+import { orderSummary } from '../utils/orderSummary.js';
+import { normalizePhone } from '../utils/phone.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
@@ -48,7 +53,8 @@ import {
   PAYMENT_STATUS,
   PARTY_TYPES,
   SALES_CHANNELS,
-  NOTIFICATION_TYPES
+  NOTIFICATION_TYPES,
+  BEFORE_DISPATCH
 } from '../utils/constants.js';
 
 /**
@@ -129,7 +135,8 @@ export const getOrder = asyncHandler(async (req, res) => {
   // will be collected on delivery — so it's a counter sale only if it came in as
   // a walk-in.
   let remittance;
-  if (!order.courier && order.source === SALES_CHANNELS.WALK_IN) {
+  // A parcel we deliver ourselves is the same: no courier, so no fee or tax to take off.
+  if ((!order.courier && order.source === SALES_CHANNELS.WALK_IN) || order.selfDelivery) {
     // Part-payments made from the customer's party page come off what is owed.
     const paidPaisa = order.paidPaisa || 0;
     remittance = {
@@ -138,12 +145,19 @@ export const getOrder = asyncHandler(async (req, res) => {
       withholdingTax: 0,
       salesTax: 0,
       paidSoFar: fromPaisa(paidPaisa),
-      netReceivable: fromPaisa(Math.max(0, codPaisa - paidPaisa)),
+      // A self-delivered parcel shows the whole amount (to collect, or collected); a counter
+      // sale shows what is still owed after part-payments.
+      netReceivable: order.selfDelivery
+        ? order.codAmount
+        : fromPaisa(Math.max(0, codPaisa - paidPaisa)),
       whtIsAsset: false,
       deliveryKnown: true,
       settled: order.paymentStatus === PAYMENT_STATUS.PAID,
       // Flag the counter-sale case so the client can label it "owed by customer".
-      counterSale: true
+      // A self-delivered parcel is NOT a counter sale (it is delivered later, takes advances and
+      // can be sent back); it only shares the "nothing is withheld" figures.
+      counterSale: !order.selfDelivery,
+      selfDelivery: Boolean(order.selfDelivery)
     };
   } else {
     const business = await Business.findById(order.business).select('codTax');
@@ -249,6 +263,8 @@ export const createOrder = asyncHandler(async (req, res, next) => {
     city,
     deliveryAddress,
     customerNote,
+    shopifyOrderNumber,
+    bookedFor,
     clientRef,
     source,
     items
@@ -257,6 +273,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   const advanceAmount = Number(req.body.advanceAmount) || 0;
 
   if (!business) return next(new ErrorResponse('Please select a business', 400));
+  if (bookedFor) assertNotPast(bookedFor);
 
   // Sent before? Answer with that order — no second order, no second stock reservation.
   const alreadyMade = clientRef && (await Order.findOne({ business, clientRef }));
@@ -316,11 +333,12 @@ export const createOrder = asyncHandler(async (req, res, next) => {
 
   let order;
   try {
+    const customerPhone = normalizePhone(contactNumber);
     const customer = await Customer.findOneAndUpdate(
-      { business, phone: contactNumber },
+      { business, phone: customerPhone },
       {
         $set: { name: customerName, city },
-        $setOnInsert: { business, phone: contactNumber, createdBy: req.user.id }
+        $setOnInsert: { business, phone: customerPhone, source: 'order', createdBy: req.user.id }
       },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
@@ -335,6 +353,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       city,
       deliveryAddress,
       customerNote: customerNote || undefined,
+      shopifyOrderNumber: shopifyOrderNumber || undefined,
       clientRef: clientRef || undefined,
       items: lineItems,
       customWork,
@@ -342,7 +361,8 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       // is booked as it arrives (below), which also derives the COD.
       advanceAmount: isWalkIn ? advanceAmount : 0,
       counterAccount: isWalkIn ? advanceMoney?.account : undefined,
-      status: isWalkIn ? ORDER_STATUS.DELIVERED : undefined,
+      status: isWalkIn ? ORDER_STATUS.DELIVERED : bookedFor ? ORDER_STATUS.BOOKED : undefined,
+      bookedFor: !isWalkIn && bookedFor ? bookedFor : undefined,
       paymentStatus: isWalkIn && owed <= 0 ? PAYMENT_STATUS.PAID : undefined,
       createdBy: req.user.id
     });
@@ -400,7 +420,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
 export const updateOrder = asyncHandler(async (req, res, next) => {
   const order = req.resource;
 
-  const EDITABLE = [ORDER_STATUS.PENDING, ORDER_STATUS.CONFIRMED];
+  const EDITABLE = BEFORE_DISPATCH;
   if (!EDITABLE.includes(order.status)) {
     return next(
       new ErrorResponse(
@@ -416,7 +436,8 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
     );
   }
 
-  const { customerName, contactNumber, city, deliveryAddress, source, items } = req.body;
+  const { customerName, contactNumber, city, deliveryAddress, source, items, shopifyOrderNumber } =
+    req.body;
   const customWork = req.body.customWork || [];
   const business = order.business;
 
@@ -460,17 +481,19 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
 
   // Phone is the customer identity — a changed number re-points to (or creates)
   // the right contact, mirroring createOrder.
+  const customerPhone = normalizePhone(contactNumber);
   const customer = await Customer.findOneAndUpdate(
-    { business, phone: contactNumber },
+    { business, phone: customerPhone },
     {
       $set: { name: customerName, city },
-      $setOnInsert: { business, phone: contactNumber, createdBy: req.user.id }
+      $setOnInsert: { business, phone: customerPhone, source: 'order', createdBy: req.user.id }
     },
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
 
   order.customer = customer._id;
   if (source) order.source = source;
+  if (shopifyOrderNumber !== undefined) order.shopifyOrderNumber = shopifyOrderNumber || undefined;
   order.customerName = customerName;
   order.contactNumber = contactNumber;
   order.city = city;
@@ -699,6 +722,13 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse(`Cannot change status from ${order.status} to ${status}`, 400));
   }
 
+  // Booking needs the day it is due; it can not be in the past.
+  if (status === ORDER_STATUS.BOOKED) {
+    assertNotPast(req.body.bookedFor);
+    order.bookedFor = req.body.bookedFor;
+    order.bookingAlertedOn = undefined;
+  }
+
   // A paid order is money in hand for goods the customer kept — it can never be
   // returned. (The transition table already prevents this, but the rule is
   // important enough to state and enforce explicitly.)
@@ -715,7 +745,27 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   // sub-ledgered to) and gets back a tracking number — both known right now.
   // The charge is NOT: the courier bills by weight, city and outcome, so it is
   // taken when the parcel lands (delivered / returned / exchanged) instead.
-  if (status === ORDER_STATUS.DISPATCHED) {
+  if (status === ORDER_STATUS.DISPATCHED && req.body.selfDelivery) {
+    // We take it ourselves: no courier, so none of a courier's tax or invoice. The tracking
+    // number is optional (a slip may have been made on TCS or PostEx, and scanning still works).
+    if (req.body.courier) {
+      return next(new ErrorResponse('A parcel we deliver ourselves has no courier', 400));
+    }
+    if (order.isSwap) {
+      return next(
+        new ErrorResponse('A swap goes with the courier that takes the old item back', 400)
+      );
+    }
+    if (!req.body.deliveredBy) {
+      return next(new ErrorResponse('Enter who is delivering it', 400));
+    }
+    order.courier = undefined;
+    order.selfDelivery = true;
+    order.deliveredBy = req.body.deliveredBy;
+    const slip = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+    order.trackingId = slip || undefined;
+    order.attemptsTracked = true;
+  } else if (status === ORDER_STATUS.DISPATCHED) {
     const courier = await resolveCourier(order.business, req.body.courier);
     // A swap goes with the courier that takes the old item back at the door.
     if (order.isSwap && order.courier && String(courier) !== String(order.courier)) {
@@ -724,6 +774,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
       );
     }
     order.courier = courier;
+    order.selfDelivery = false;
+    order.deliveredBy = undefined;
     const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
@@ -764,11 +816,44 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     }
   }
 
+  // We delivered it ourselves: say where the cash went. Collected → straight into the money
+  // account chosen (Cash if none); not collected → owed by the customer on their khata, and the
+  // order stays unpaid exactly as a courier's would until it is settled.
+  const selfDelivered = status === ORDER_STATUS.DELIVERED && order.selfDelivery;
+  let collectedPaisa = 0;
+  if (selfDelivered && !order.saleEntry) {
+    if (req.body.collected === false) {
+      order.customerParty = await upsertCustomerParty(
+        order.business,
+        order.customerName,
+        order.contactNumber,
+        req.user.id
+      );
+    } else {
+      const money = await resolveMoney(order.business, { account: req.body.collectInto }, req.user);
+      order.selfCollectAccount = money.account;
+      collectedPaisa = toPaisa(order.codAmount);
+    }
+  }
+
   // Delivery is where revenue and cost of goods are recognised (once).
   if (status === ORDER_STATUS.DELIVERED && !order.saleEntry) {
     const entry = await postOrderSale(order, req.user.id);
     if (entry) order.saleEntry = entry._id;
     await moveCustomWipToCogs(order, req.user.id);
+  }
+
+  if (selfDelivered && collectedPaisa > 0) {
+    order.paymentStatus = PAYMENT_STATUS.PAID;
+    order.paidPaisa = collectedPaisa;
+  }
+  // What it cost us to take it ourselves (petrol, rider) — an expense paid from a money account.
+  if (selfDelivered && chargeKnown && chargePaisa > 0) {
+    const from = await resolveMoney(order.business, { account: req.body.costAccount }, req.user);
+    await postDeliveryCharge(order, fromPaisa(chargePaisa), req.user.id, {
+      account: from.account,
+      note: req.body.note
+    });
   }
 
   // A return unwinds whatever was booked, and what the courier billed for the
@@ -782,7 +867,17 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     }
     if (chargeKnown) {
       order.returnChargePaisa = chargePaisa;
-      if (chargePaisa > 0) await postReturnCharge(order, fromPaisa(chargePaisa), req.user.id);
+      if (chargePaisa > 0) {
+        const from = order.selfDelivery
+          ? await resolveMoney(order.business, { account: req.body.costAccount }, req.user)
+          : null;
+        await postReturnCharge(
+          order,
+          fromPaisa(chargePaisa),
+          req.user.id,
+          from ? { account: from.account, note: req.body.note } : undefined
+        );
+      }
     }
   }
 
@@ -816,6 +911,49 @@ export const updateOrderCustomerNote = asyncHandler(async (req, res) => {
   const order = req.resource;
 
   order.customerNote = req.body.customerNote || undefined;
+  order.updatedBy = req.user.id;
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * A booking day must be given and must not already be over (Pakistan time).
+ */
+const assertNotPast = day => {
+  if (!day) throw new ErrorResponse('Choose the day this order is booked for', 400);
+  if (day < pakistanDay()) throw new ErrorResponse('That day has already passed', 400);
+};
+
+/**
+ * @desc   Move a booked order's due day. Only while it is still booked; the daily alert starts
+ *         again from the new day.
+ * @route  PUT /api/v1/orders/:id/booked-for  (orders:update — scoped)
+ */
+export const updateOrderBookedFor = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+  if (order.status !== ORDER_STATUS.BOOKED) {
+    return next(new ErrorResponse('Only a booked order has a due day', 400));
+  }
+  assertNotPast(req.body.bookedFor);
+
+  order.bookedFor = req.body.bookedFor;
+  order.bookingAlertedOn = undefined;
+  order.updatedBy = req.user.id;
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Set the Shopify store's own number for this order. Allowed at any status — a typo must
+ *         be fixable after dispatch, and it changes nothing but the reference.
+ * @route  PUT /api/v1/orders/:id/shopify-number  (orders:update — scoped)
+ */
+export const updateOrderShopifyNumber = asyncHandler(async (req, res) => {
+  const order = req.resource;
+
+  order.shopifyOrderNumber = req.body.shopifyOrderNumber || undefined;
   order.updatedBy = req.user.id;
   await order.save();
 
@@ -962,6 +1100,45 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * @desc   The names already used as "delivered by" in a business — so a name is picked, not
+ *         retyped three different ways. Newest first.
+ * @route  GET /api/v1/orders/deliverers?business=  (orders:read — scoped)
+ */
+export const getDeliverers = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  const rows = await Order.aggregate([
+    {
+      $match: { business: new mongoose.Types.ObjectId(String(business)), deliveredBy: { $gt: '' } }
+    },
+    { $group: { _id: '$deliveredBy', last: { $max: '$createdAt' } } },
+    { $sort: { last: -1 } },
+    { $limit: 20 }
+  ]);
+  res.status(200).json({ success: true, data: rows.map(r => r._id) });
+});
+
+/**
+ * @desc   Today's parcel numbers for the Orders screen: dispatched today, delivered today,
+ *         pending now, and every status's count.
+ * @route  GET /api/v1/orders/summary?business=  (orders:read — scoped)
+ */
+export const getOrderSummary = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  // Outside your scope is indistinguishable from not existing (root CLAUDE.md §6).
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  res.status(200).json({ success: true, data: await orderSummary(business) });
+});
+
+/**
  * @desc   The last price a product/variant sold at, to prefill the form.
  * @route  GET /api/v1/orders/price-hint?product=&variantId=  (orders:read — scoped)
  */
@@ -1042,7 +1219,7 @@ export const keepOrderCredit = asyncHandler(async (req, res) => {
 export const addCustomCost = asyncHandler(async (req, res, next) => {
   const order = req.resource;
 
-  if (order.status !== ORDER_STATUS.PENDING && order.status !== ORDER_STATUS.CONFIRMED) {
+  if (!BEFORE_DISPATCH.includes(order.status)) {
     return next(new ErrorResponse('Costs can only be added before the order is dispatched', 400));
   }
 
@@ -1065,7 +1242,7 @@ export const addCustomCost = asyncHandler(async (req, res, next) => {
 export const deleteCustomCost = asyncHandler(async (req, res, next) => {
   const order = req.resource;
 
-  if (order.status !== ORDER_STATUS.PENDING && order.status !== ORDER_STATUS.CONFIRMED) {
+  if (!BEFORE_DISPATCH.includes(order.status)) {
     return next(new ErrorResponse('Costs can only be removed before the order is dispatched', 400));
   }
 

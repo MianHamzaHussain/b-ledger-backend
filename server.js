@@ -22,6 +22,7 @@ import errorHandler from './middlewares/errorHandler.js';
 import ErrorResponse from './utils/errorResponse.js';
 import { getAllowedOrigins } from './utils/cors.js';
 import { initSocket } from './utils/socket.js';
+import { reminderStatus, startBookingReminders } from './utils/bookingReminders.js';
 
 const dirName = path.dirname(fileURLToPath(import.meta.url));
 
@@ -133,7 +134,9 @@ app.get('/api/v1/health', (req, res) => {
     success: true,
     status: 'ok',
     uptime: process.uptime(),
-    env: process.env.NODE_ENV
+    env: process.env.NODE_ENV,
+    // A stale lastRunAt means the booked-order reminders have stopped.
+    reminders: reminderStatus()
   });
 });
 
@@ -151,6 +154,10 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () =>
   logger.info(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`)
 );
+
+// Alerts for booked orders whose day has come: catches up now, then every ten minutes.
+const stopReminders = startBookingReminders();
+process.on('SIGTERM', stopReminders);
 
 process.on('unhandledRejection', err => {
   logger.error({ err }, 'unhandled rejection');

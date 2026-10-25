@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseBusinessDate } from '../utils/pakistanDay.js';
 
 /**
  * Zod schemas for the finance record endpoints. Amounts are coerced (a numeric
@@ -11,7 +12,11 @@ const method = z.enum(['cash', 'bank']).optional();
 /** Where the money went or came from: a money account id, or `partner:<id>`. Wins over `method`. */
 const account = z.string().min(1).optional();
 const memo = z.string().optional();
-const date = z.union([z.string(), z.date()]).optional();
+// A bare YYYY-MM-DD is that Pakistan day (not midnight UTC); a full timestamp is kept.
+const date = z
+  .union([z.string(), z.date()])
+  .transform(v => parseBusinessDate(v))
+  .optional();
 
 export const capitalSchema = z.object({
   business: id,

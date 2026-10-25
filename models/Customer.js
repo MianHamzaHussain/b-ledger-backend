@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { normalizeCity } from '../utils/cities.js';
+import { normalizePhone } from '../utils/phone.js';
 
 /**
  * A customer of one business, deduped by phone.
@@ -22,10 +23,12 @@ const CustomerSchema = new mongoose.Schema(
       trim: true,
       maxlength: [100, 'Name can not be more than 100 characters']
     },
+    // One spelling per number (03XXXXXXXXX), so the same person typed three ways is one customer.
     phone: {
       type: String,
       required: [true, 'Please add a contact number'],
-      trim: true
+      trim: true,
+      set: normalizePhone
     },
     city: {
       type: String,
@@ -33,6 +36,14 @@ const CustomerSchema = new mongoose.Schema(
       maxlength: [60, 'City can not be more than 60 characters'],
       // One spelling per place, so the same buyer's city matches their orders'.
       set: normalizeCity
+    },
+    /** Where this customer came from: an order (the usual), added by hand, or imported. */
+    source: { type: String, enum: ['order', 'manual', 'import'] },
+    /** A line about them ("met at the exhibition") — only for customers added by hand or imported. */
+    note: {
+      type: String,
+      trim: true,
+      maxlength: [200, 'Note can not be more than 200 characters']
     },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }

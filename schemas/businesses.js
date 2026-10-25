@@ -46,6 +46,8 @@ export const businessCreateSchema = z.object({
   brandColor,
   // New articles start with "keep selling when out of stock" on or off.
   defaultAllowOversell: z.boolean().optional(),
+  // Admin-only (the route strips it for anyone else): shields real data from the testing reset.
+  isProtected: z.boolean().optional(),
   status: z.enum(['active', 'inactive']).optional()
 });
 

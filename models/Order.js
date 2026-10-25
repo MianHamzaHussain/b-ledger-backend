@@ -7,6 +7,7 @@ import {
 } from '../utils/constants.js';
 import { getNextSequence } from '../utils/sequence.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
+import { cleanShopifyNumber } from '../utils/shopifyNumber.js';
 import { normalizeCity } from '../utils/cities.js';
 
 /** One step in an order's life — what it became, when, by whom, and why. */
@@ -295,6 +296,26 @@ const OrderSchema = new mongoose.Schema(
      * order's "Reason": courier, dispatch, return details). Editable at any status.
      */
     customerNote: { type: String, trim: true, maxlength: 500 },
+    /**
+     * The number the Shopify store gave this order — a reference only, so the two series (ours and
+     * the store's) can be traced to each other. Never used to number anything here.
+     */
+    /**
+     * A booked order's due day (YYYY-MM-DD, a Pakistan day). Only meaningful while the status is
+     * `booked`; kept afterwards as a record of what was promised.
+     */
+    bookedFor: { type: String, match: [/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2026-12-19'] },
+    /** The day the "due" alert was last sent — makes the daily reminder once-only per day. */
+    bookingAlertedOn: { type: String },
+    /**
+     * We deliver this parcel ourselves — no courier, so no COD tax and no courier invoice. Set at
+     * dispatch, with `deliveredBy` (an employee or anyone: a label, not a user account).
+     */
+    selfDelivery: { type: Boolean, default: false },
+    deliveredBy: { type: String, trim: true, maxlength: 60 },
+    /** A self-delivered parcel's cash, taken at the door into this money account. */
+    selfCollectAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' },
+    shopifyOrderNumber: { type: String, trim: true, maxlength: 30, set: cleanShopifyNumber },
     /** A free note on the order — editable at any status, even after dispatch. */
     note: { type: String, trim: true, maxlength: 1000 },
 
@@ -402,6 +423,9 @@ OrderSchema.index(
 );
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, reversalTrackingId: 1 }, { sparse: true });
+OrderSchema.index({ business: 1, shopifyOrderNumber: 1 }, { sparse: true });
+// The reminder job's query: booked orders by due day, across businesses.
+OrderSchema.index({ status: 1, bookedFor: 1 });
 OrderSchema.index({ 'items.product': 1, 'items.variantId': 1 }); // price-hint lookup
 
 /**

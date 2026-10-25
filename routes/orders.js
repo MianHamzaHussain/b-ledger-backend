@@ -22,11 +22,14 @@ import {
   orderAttemptSchema,
   orderNoteSchema,
   orderCustomerNoteSchema,
+  orderShopifyNumberSchema,
+  orderBookedForSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
 } from '../schemas/orders.js';
 import Order from '../models/Order.js';
+import { ORDER_LIST_FIELDS } from '../utils/orderListFields.js';
 import {
   getOrders,
   getOrder,
@@ -44,10 +47,14 @@ import {
   addDeliveryAttempt,
   updateOrderNote,
   updateOrderCustomerNote,
+  updateOrderShopifyNumber,
+  updateOrderBookedFor,
   addOrderAdvance,
   addOrderRefund,
   deleteOrderMoney,
   getPriceHint,
+  getOrderSummary,
+  getDeliverers,
   keepOrderCredit,
   addCustomCost,
   deleteCustomCost
@@ -74,6 +81,36 @@ router.use(hideCosts);
  */
 // Literal path before /:id so it is not swallowed as an id.
 router.get('/price-hint', can('orders', 'read'), getPriceHint);
+
+/**
+ * @swagger
+ * /orders/summary:
+ *   get:
+ *     summary: Today's parcel counts (dispatched, delivered, pending) and every status's count
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "{ createdToday, dispatchedToday, deliveredToday, pending, byStatus }" }
+ *       404: { description: Outside your assigned businesses }
+ */
+router.get('/summary', can('orders', 'read'), getOrderSummary);
+
+/**
+ * @swagger
+ * /orders/deliverers:
+ *   get:
+ *     summary: Names already used as "delivered by" (newest first, up to 20)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: Array of names }
+ *       404: { description: Outside your assigned businesses }
+ */
+router.get('/deliverers', can('orders', 'read'), getDeliverers);
 
 /**
  * @swagger
@@ -127,15 +164,23 @@ router
   .route('/')
   .get(
     can('orders', 'read'),
-    // Lean list: the cards show who it's for, #, today's serial, tracking, status,
-    // item count, total and payment. Full details (items, courier, remittance)
+    // Lean list: the cards show who it's for, #, today's serial, tracking, status, what was
+    // ordered (names only), item count, total and payment. Full details (items, courier, remittance)
     // come from the detail-by-id endpoint. Search still matches name/phone/
     // tracking — that is the query filter, independent of the projection.
     advancedResults(
       Order,
       null,
-      ['orderNumber', 'customerName', 'contactNumber', 'trackingId', 'reversalTrackingId'],
-      'orderNumber dailySerial orderDay customerName city trackingId customerNote status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount reversalTrackingId awaitingReturn'
+      [
+        'orderNumber',
+        'customerName',
+        'contactNumber',
+        'trackingId',
+        'reversalTrackingId',
+        'shopifyOrderNumber',
+        'deliveredBy'
+      ],
+      ORDER_LIST_FIELDS
     ),
     getOrders
   )
@@ -391,6 +436,61 @@ router.put(
   loadScoped(Order),
   validate(orderTrackingSchema),
   updateOrderTracking
+);
+
+/**
+ * @swagger
+ * /orders/{id}/booked-for:
+ *   put:
+ *     summary: Move a booked order's due day (only while it is booked)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bookedFor]
+ *             properties:
+ *               bookedFor: { type: string, description: "A Pakistan day, YYYY-MM-DD, not in the past" }
+ *     responses:
+ *       200: { description: Updated }
+ *       400: { description: Not booked, or the day has passed }
+ */
+router.put(
+  '/:id/booked-for',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderBookedForSchema),
+  updateOrderBookedFor
+);
+
+/**
+ * @swagger
+ * /orders/{id}/shopify-number:
+ *   put:
+ *     summary: Set the Shopify store's number for the order (any status — reference only)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               shopifyOrderNumber: { type: string, description: "As Shopify shows it, e.g. 12355 (empty to clear)" }
+ *     responses:
+ *       200: { description: Updated }
+ */
+router.put(
+  '/:id/shopify-number',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderShopifyNumberSchema),
+  updateOrderShopifyNumber
 );
 
 /**

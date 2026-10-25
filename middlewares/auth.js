@@ -2,6 +2,7 @@ import jwt from 'jsonwebtoken';
 import asyncHandler from './asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import User from '../models/User.js';
+import { touchActive } from '../utils/presence.js';
 
 /**
  * Verifies the Bearer token and loads the user WITH their role populated —
@@ -41,6 +42,8 @@ const protect = asyncHandler(async (req, res, next) => {
   if (req.user.status === 'inactive') {
     return next(new ErrorResponse('Your account is inactive. Please contact administrator.', 401));
   }
+
+  touchActive(req.user.id);
 
   // Audit fields are stamped here so no controller has to remember to.
   // Assigning after auth also means a client cannot forge them via the body.

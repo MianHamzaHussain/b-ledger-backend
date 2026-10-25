@@ -838,6 +838,12 @@ courier is a business's own party, so nothing is combined across businesses.
   `item.oversold` (pieces not on the shelf). `variants.stock` has **no `min`** on
   purpose — `$inc` skips validators, and a floor would make a later `product.save()`
   fail on an article that is merely short. Never add one back.
+- **Per size.** `Product.allowOversell` covers every size of the article, but a size can be
+  switched OFF with `variants[].allowOversell: false` (absent = follow the article; no backfill).
+  The one rule is `canOversell(product, variant)` in `utils/stock.js` — an article that is off
+  is never overridden by a size. `updateProduct` rebuilds each variant by hand, so it must carry
+  the flag or every edit would wipe it (tested). The order form mirrors the rule in
+  `frontend/src/lib/stock.ts keepsSelling`; keep the two in step.
 - **Cost of those pieces.** The order snapshots `unitCost` at create. At **delivery**
   `refreshOversoldCost` (`utils/orderPosting.js`) re-reads the article's current cost
   for any line that was oversold or had cost 0; if it is still 0 the line is booked
@@ -845,6 +851,49 @@ courier is a business's own party, so nothing is combined across businesses.
   arrives later (accepted — see §11). `weightedAverageCost` clamps negative stock to
   0, so after -10 + 12 the cost is the new batch's. Goods-received send-back and undo
   still refuse unless the shelf holds the pieces.
+- **Shopify order number is a reference, never a series.** `Order.shopifyOrderNumber` (cleaned by
+  `utils/shopifyNumber.js`: `#12,355` → `12355`) lets staff trace our order to the store's.
+  Optional, not unique (a cancelled order is re-entered), editable at any status through
+  `PUT /orders/:id/shopify-number`, searchable. Our `orderNumber` / daily serial are untouched.
+- **`GET /orders/summary?business=`** returns today's dispatched / delivered (by the day the event
+  happened, a Pakistan day), `pending` (all dates) and `byStatus` — one round trip for the Orders
+  strip. Out-of-scope business → 404.
+- **Booked orders.** Status `booked` + `Order.bookedFor` (a Pakistan day) = taken now, wanted
+  later. It behaves like pending/confirmed (`BEFORE_DISPATCH` in `utils/constants.js`: editable,
+  takes advances and custom costs, **holds stock**; cancelling releases it) and may move to
+  pending/confirmed/dispatched/cancelled; pending/confirmed may move to booked. Booking needs a
+  day that is not past. `utils/bookingReminders.js` runs at boot and every 10 minutes: for each
+  booked order whose day has come it **claims** the order with one atomic update
+  (`bookingAlertedOn = today`) and only then `notify()`s — at most once per order per day even
+  with two processes — from 09:00 Pakistan time, and keeps nudging daily until the order leaves
+  booked. `/api/v1/health` carries `reminders.lastRunAt`; a stale value means it stopped. Any
+  code that lists order statuses must learn `booked` (the trap).
+- **Self delivery** (`Order.selfDelivery` + `deliveredBy`, a name — not a user). A parcel we
+  take ourselves has **no courier**: dispatch needs only `deliveredBy` (tracking optional), and
+  `postOrderSale` takes the non-courier branch — **no COD tax, no courier receivable, no courier
+  invoice**. At delivery `collected` (default) books the cash straight into `collectInto` (Cash
+  if omitted) and marks the order paid; `collected:false` leaves it owed on the customer's khata
+  (a customer party is made) and unpaid. The trip's cost (`deliveryCharge`, with `note` as the
+  memo) is a Delivery/Return-charges expense paid from `costAccount` (`postCourierCost`'s
+  `options.account`). The courier report skips these (`courier: {$ne: null}`) and returns them
+  apart as `selfDelivery` per person. `GET /orders/deliverers` suggests names.
+- **Customers: phone is one spelling.** `Customer.phone` is always saved as `03XXXXXXXXX`
+  (`utils/phone.js`; a landline or foreign number is kept as digits, never refused), so
+  `0300-1234567` and `+92 300 1234567` are one customer. Orders, hand-added and imported
+  customers all go through it. **Run `npm run normalize:phones` once** (dry run first, backup
+  first) to merge the old duplicates. `POST /customers` (`customers:create`) adds one;
+  `POST /customers/import` takes ≤500 rows, **skips** existing phones (never overwrites),
+  safe to send twice; `GET /customers/export?business=` streams one business as a UTF-8 CSV
+  (BOM, formula-injection guard in `utils/csv.js`), logs who exported, 10 an hour per user.
+  `Customer.source` is `order` | `manual` | `import`.
+- **Presence.** `utils/presence.js`: a person is **online** with ≥1 live socket (tabs count once;
+  a 20 s grace stops a refresh blinking them offline). **Last active** is a different fact:
+  `User.lastActiveAt`, written from `protect` at most once a minute per person (no `updatedAt`
+  churn) and when they go offline. `GET /users/presence` lists who is online; changes are emitted
+  on `presence` **only** to the `presence` room, which sockets join if they can read users.
+  Every session now connects its socket, but business events are joined only with
+  `notifications:read` (the rule was client-only before). In memory = one API process; scaling
+  out needs the Socket.IO Redis adapter.
 - **Owner withdrawals are not an expense.** `profitAndLoss` also returns
   `ownerTookPaisa` (every capital-sourced entry's debit to an equity account, except
   Retained Earnings — so Drawings **and** partner capital accounts, but not a profit
@@ -927,9 +976,14 @@ cost more the longer it waits.
 
 ### Operational
 
-- **`POST /system/reset` (admin data wipe) is a testing aid.** It refuses unless
-  `ALLOW_DATA_RESET=true`. Remove that flag and revert the reset before any real
-  business data goes in — and set up `mongodump` backups.
+- **`POST /system/reset` (admin data wipe) is a testing aid — and it clears ONE business.**
+  It refuses unless `ALLOW_DATA_RESET=true`, refuses a business with `isProtected`
+  ("real data", admin-only flag), and needs that business's exact name typed. It deletes
+  every record carrying that `business` (read from the model registry, in
+  `utils/businessData.js`), keeps the business, users, roles, categories and the order
+  counter, and writes a JSON-lines copy to `ops/reset-snapshots/` first (gitignored; holds
+  customer data). `GET /system/reset-preview` shows the counts. Remove the flag and the
+  feature before real go-live.
 
 - **Rotate the VAPID keypair per environment.** A fresh pair is in the local
   envs; the one committed to the old repository is public — never reuse it.

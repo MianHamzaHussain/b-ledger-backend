@@ -2,6 +2,7 @@ import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can, loadScoped } from '../middlewares/permissions.js';
 import advancedResults from '../middlewares/advancedResults.js';
+import { BUSINESS_LIST_FIELDS } from '../utils/businessListFields.js';
 import { validate } from '../middlewares/validate.js';
 import Business from '../models/Business.js';
 import { businessCreateSchema, businessUpdateSchema } from '../schemas/businesses.js';
@@ -15,6 +16,14 @@ import {
 } from '../controllers/businessController.js';
 
 const router = express.Router();
+
+/** Fields only an admin may set — silently dropped for anyone else, like other protected fields. */
+const adminOnlyFields =
+  (...fields) =>
+  (req, res, next) => {
+    if (!req.user.role?.fullAccess) for (const f of fields) delete req.body[f];
+    next();
+  };
 
 router.use(protect);
 
@@ -68,11 +77,16 @@ router
       Business,
       { path: 'category', select: 'name status' },
       ['name', 'storeLink', 'whatsappNumber'],
-      'name category status logo brandColor'
+      BUSINESS_LIST_FIELDS
     ),
     getBusinesses
   )
-  .post(can('businesses', 'create'), validate(businessCreateSchema), createBusiness);
+  .post(
+    can('businesses', 'create'),
+    adminOnlyFields('isProtected'),
+    validate(businessCreateSchema),
+    createBusiness
+  );
 
 /**
  * @swagger
@@ -129,6 +143,7 @@ router
   .put(
     can('businesses', 'update'),
     loadScoped(Business),
+    adminOnlyFields('isProtected'),
     validate(businessUpdateSchema),
     updateBusiness
   )

@@ -102,6 +102,11 @@ const UserSchema = new mongoose.Schema(
      * emailed link, so a login proves the address was reachable.
      */
     lastLogin: { type: Date },
+    /**
+     * The last time this person did something (an authenticated request) or went offline.
+     * Written at most once a minute and without touching `updatedAt` — see utils/presence.js.
+     */
+    lastActiveAt: { type: Date },
     /** Set on invite; cleared once the user chooses their own password. */
     mustChangePassword: {
       type: Boolean,

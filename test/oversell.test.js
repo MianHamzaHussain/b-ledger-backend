@@ -15,9 +15,9 @@ import Order from '../models/Order.js';
 import '../models/Category.js'; // the create response populates it
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { accountBalance } from '../utils/ledger.js';
-import { reserveStock } from '../utils/stock.js';
+import { reserveStock, canOversell } from '../utils/stock.js';
 import { createOrder, updateOrderStatus } from '../controllers/orderController.js';
-import { createProduct } from '../controllers/productController.js';
+import { createProduct, updateProduct } from '../controllers/productController.js';
 import { createGoodsReceipt } from '../controllers/goodsReceiptController.js';
 import { orderCreateSchema, orderStatusSchema } from '../schemas/orders.js';
 import { goodsReceiptCreateSchema } from '../schemas/goodsReceipts.js';
@@ -227,4 +227,56 @@ test('the business default survives request validation (an unknown key would be 
     businessUpdateSchema.parse({ defaultAllowOversell: false }).defaultAllowOversell,
     false
   );
+});
+
+test('one size can be switched off while the article keeps selling', async () => {
+  const ctx = await setup({ allowOversell: true, stock: 0 });
+  const other = await Product.findById(ctx.product._id);
+  other.variants.push({ label: 'L', costPrice: 1000, salePrice: 3200, stock: 0 });
+  other.variants[0].allowOversell = false; // M: never oversell
+  await other.save();
+
+  const line = (variant, quantity) => [
+    { product: ctx.product._id, variantId: variant._id, quantity, productName: 'Test' }
+  ];
+  const fresh = await Product.findById(ctx.product._id);
+
+  // M is off: refused when short.
+  await assert.rejects(
+    reserveStock(line(fresh.variants[0], 2), { allowOversell: true }),
+    /Not enough stock/
+  );
+  // L follows the article: taken, and goes below zero.
+  const items = line(fresh.variants[1], 2);
+  await reserveStock(items, { allowOversell: true });
+  assert.equal(items[0].oversold, 2);
+  assert.equal((await Product.findById(ctx.product._id)).variants[1].stock, -2);
+  assert.equal((await Product.findById(ctx.product._id)).variants[0].stock, 0, 'M untouched');
+});
+
+test('the rule: an article that does not keep selling is never overridden by a size', () => {
+  assert.equal(canOversell({ allowOversell: true }, {}), true);
+  assert.equal(canOversell({ allowOversell: true }, { allowOversell: false }), false);
+  assert.equal(canOversell({ allowOversell: true }, { allowOversell: true }), true);
+  assert.equal(canOversell({ allowOversell: false }, {}), false);
+  assert.equal(canOversell({ allowOversell: false }, { allowOversell: true }), false);
+});
+
+test('editing an article keeps a size switched off, and a size can be switched back on', async () => {
+  const ctx = await setup({ allowOversell: true, stock: 5 });
+  const product = await Product.findById(ctx.product._id);
+  const id = String(product.variants[0]._id);
+  const edit = variants =>
+    runHandler(updateProduct, {
+      user: admin,
+      resource: product,
+      body: { name: 'Test Product', variants }
+    });
+
+  await edit([{ _id: id, label: 'M', salePrice: 3000, allowOversell: false }]);
+  assert.equal((await Product.findById(ctx.product._id)).variants[0].allowOversell, false);
+
+  // Saved again with the flag omitted: back to following the article.
+  await edit([{ _id: id, label: 'M', salePrice: 3000 }]);
+  assert.equal((await Product.findById(ctx.product._id)).variants[0].allowOversell, undefined);
 });
