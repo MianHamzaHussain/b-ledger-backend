@@ -24,6 +24,7 @@ import {
   orderCustomerNoteSchema,
   orderShopifyNumberSchema,
   orderBookedForSchema,
+  orderCourierConfirmSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -56,6 +57,7 @@ import {
   getOrderSummary,
   getDeliverers,
   getAirwayBill,
+  confirmCourierStatus,
   keepOrderCredit,
   addCustomCost,
   deleteCustomCost
@@ -112,6 +114,35 @@ router.get('/summary', can('orders', 'read'), getOrderSummary);
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/deliverers', can('orders', 'read'), getDeliverers);
+
+/**
+ * @swagger
+ * /orders/confirm-courier:
+ *   post:
+ *     summary: Confirm, in one go, the orders the courier reports as delivered or returned
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business, orderIds]
+ *             properties:
+ *               business: { type: string }
+ *               orderIds: { type: array, items: { type: string }, maxItems: 50 }
+ *     responses:
+ *       200: { description: "{ confirmed, results: [{ id, ok, status | reason }] }" }
+ *       403: { description: Not assigned to that business }
+ */
+router.post(
+  '/confirm-courier',
+  can('orders', 'update'),
+  restrictBusinessToScope(),
+  validate(orderCourierConfirmSchema),
+  confirmCourierStatus
+);
 
 /**
  * @swagger

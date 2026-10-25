@@ -143,6 +143,12 @@ export const orderRefundReturnSchema = z.object({
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
 });
 
+/** Confirm what the courier reports (delivered / returned) for a batch of orders — one tap. */
+export const orderCourierConfirmSchema = z.object({
+  business: id,
+  orderIds: z.array(id).min(1, 'Choose at least one order').max(50, 'Confirm at most 50 at a time')
+});
+
 /** Move a booked order's due day. */
 export const orderBookedForSchema = z.object({ bookedFor: day });
 

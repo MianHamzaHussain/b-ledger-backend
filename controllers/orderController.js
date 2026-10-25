@@ -1107,6 +1107,69 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * Run the normal status change for an order exactly as a person pressing the button would — same
+ * checks, same books — and wait for its answer. The one place the courier's "delivered" / "returned"
+ * becomes money, so it can never drift from what the button does.
+ */
+const changeStatusAsUser = (order, user, body) =>
+  new Promise((resolve, reject) => {
+    const res = {
+      status() {
+        return this;
+      },
+      json: resolve
+    };
+    updateOrderStatus({ user, resource: order, body }, res, reject);
+  });
+
+/**
+ * @desc   One tap for a batch: apply what the courier reports (delivered / returned) to every order
+ *         that is marked ready to confirm. The courier's fee is filled in when it has reported one;
+ *         left blank otherwise, so it is billed on the courier's invoice as before. An order that
+ *         can not be confirmed is reported and the rest carry on.
+ * @route  POST /api/v1/orders/confirm-courier  (orders:update — business must be in scope)
+ */
+export const confirmCourierStatus = asyncHandler(async (req, res) => {
+  const { business, orderIds } = req.body;
+  const results = [];
+
+  for (const id of orderIds) {
+    const order = await Order.findOne({ _id: id, business });
+    const kind = order?.courierBooking?.confirmable;
+    if (!order || order.status !== ORDER_STATUS.DISPATCHED || !kind) {
+      results.push({
+        id,
+        ok: false,
+        reason: 'The courier has not reported this one as delivered or returned'
+      });
+      continue;
+    }
+    const fee =
+      Math.round(((order.courierBooking.fee ?? 0) + (order.courierBooking.tax ?? 0)) * 100) / 100;
+    try {
+      await changeStatusAsUser(order, req.user, {
+        status: kind,
+        ...(fee > 0 ? { deliveryCharge: fee } : {}),
+        note: 'Confirmed from the courier’s status'
+      });
+      await Order.updateOne(
+        { _id: id },
+        { $unset: { 'courierBooking.confirmable': 1 } },
+        { timestamps: false }
+      );
+      results.push({ id, ok: true, status: kind });
+    } catch (err) {
+      results.push({ id, ok: false, reason: err.message });
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: { confirmed: results.filter(r => r.ok).length, results }
+  });
+});
+
+/**
  * @desc   The courier's airway bill (a PDF) for an order booked through its service. Fetched by the
  *         server with the saved key, so the key never reaches the browser.
  * @route  GET /api/v1/orders/:id/airway-bill  (orders:read — scoped)
