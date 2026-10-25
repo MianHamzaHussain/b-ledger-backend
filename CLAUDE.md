@@ -845,6 +845,13 @@ courier is a business's own party, so nothing is combined across businesses.
   arrives later (accepted — see §11). `weightedAverageCost` clamps negative stock to
   0, so after -10 + 12 the cost is the new batch's. Goods-received send-back and undo
   still refuse unless the shelf holds the pieces.
+- **Shopify order number is a reference, never a series.** `Order.shopifyOrderNumber` (cleaned by
+  `utils/shopifyNumber.js`: `#12,355` → `12355`) lets staff trace our order to the store's.
+  Optional, not unique (a cancelled order is re-entered), editable at any status through
+  `PUT /orders/:id/shopify-number`, searchable. Our `orderNumber` / daily serial are untouched.
+- **`GET /orders/summary?business=`** returns today's dispatched / delivered (by the day the event
+  happened, a Pakistan day), `pending` (all dates) and `byStatus` — one round trip for the Orders
+  strip. Out-of-scope business → 404.
 - **Owner withdrawals are not an expense.** `profitAndLoss` also returns
   `ownerTookPaisa` (every capital-sourced entry's debit to an equity account, except
   Retained Earnings — so Drawings **and** partner capital accounts, but not a profit

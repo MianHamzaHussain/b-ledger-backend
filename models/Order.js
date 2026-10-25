@@ -7,6 +7,7 @@ import {
 } from '../utils/constants.js';
 import { getNextSequence } from '../utils/sequence.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
+import { cleanShopifyNumber } from '../utils/shopifyNumber.js';
 import { normalizeCity } from '../utils/cities.js';
 
 /** One step in an order's life — what it became, when, by whom, and why. */
@@ -295,6 +296,11 @@ const OrderSchema = new mongoose.Schema(
      * order's "Reason": courier, dispatch, return details). Editable at any status.
      */
     customerNote: { type: String, trim: true, maxlength: 500 },
+    /**
+     * The number the Shopify store gave this order — a reference only, so the two series (ours and
+     * the store's) can be traced to each other. Never used to number anything here.
+     */
+    shopifyOrderNumber: { type: String, trim: true, maxlength: 30, set: cleanShopifyNumber },
     /** A free note on the order — editable at any status, even after dispatch. */
     note: { type: String, trim: true, maxlength: 1000 },
 
@@ -402,6 +408,7 @@ OrderSchema.index(
 );
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, reversalTrackingId: 1 }, { sparse: true });
+OrderSchema.index({ business: 1, shopifyOrderNumber: 1 }, { sparse: true });
 OrderSchema.index({ 'items.product': 1, 'items.variantId': 1 }); // price-hint lookup
 
 /**

@@ -22,6 +22,7 @@ import {
   orderAttemptSchema,
   orderNoteSchema,
   orderCustomerNoteSchema,
+  orderShopifyNumberSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -44,6 +45,7 @@ import {
   addDeliveryAttempt,
   updateOrderNote,
   updateOrderCustomerNote,
+  updateOrderShopifyNumber,
   addOrderAdvance,
   addOrderRefund,
   deleteOrderMoney,
@@ -150,8 +152,15 @@ router
     advancedResults(
       Order,
       null,
-      ['orderNumber', 'customerName', 'contactNumber', 'trackingId', 'reversalTrackingId'],
-      'orderNumber dailySerial orderDay customerName city trackingId customerNote status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount reversalTrackingId awaitingReturn'
+      [
+        'orderNumber',
+        'customerName',
+        'contactNumber',
+        'trackingId',
+        'reversalTrackingId',
+        'shopifyOrderNumber'
+      ],
+      'orderNumber dailySerial orderDay customerName city trackingId customerNote shopifyOrderNumber status paymentStatus total itemCount createdAt dispatchedAt deliveredAt refundDuePaisa advanceAmount codAmount reversalTrackingId awaitingReturn'
     ),
     getOrders
   )
@@ -407,6 +416,32 @@ router.put(
   loadScoped(Order),
   validate(orderTrackingSchema),
   updateOrderTracking
+);
+
+/**
+ * @swagger
+ * /orders/{id}/shopify-number:
+ *   put:
+ *     summary: Set the Shopify store's number for the order (any status — reference only)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               shopifyOrderNumber: { type: string, description: "As Shopify shows it, e.g. 12355 (empty to clear)" }
+ *     responses:
+ *       200: { description: Updated }
+ */
+router.put(
+  '/:id/shopify-number',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderShopifyNumberSchema),
+  updateOrderShopifyNumber
 );
 
 /**

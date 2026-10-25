@@ -250,6 +250,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
     city,
     deliveryAddress,
     customerNote,
+    shopifyOrderNumber,
     clientRef,
     source,
     items
@@ -336,6 +337,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       city,
       deliveryAddress,
       customerNote: customerNote || undefined,
+      shopifyOrderNumber: shopifyOrderNumber || undefined,
       clientRef: clientRef || undefined,
       items: lineItems,
       customWork,
@@ -417,7 +419,8 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
     );
   }
 
-  const { customerName, contactNumber, city, deliveryAddress, source, items } = req.body;
+  const { customerName, contactNumber, city, deliveryAddress, source, items, shopifyOrderNumber } =
+    req.body;
   const customWork = req.body.customWork || [];
   const business = order.business;
 
@@ -472,6 +475,7 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
 
   order.customer = customer._id;
   if (source) order.source = source;
+  if (shopifyOrderNumber !== undefined) order.shopifyOrderNumber = shopifyOrderNumber || undefined;
   order.customerName = customerName;
   order.contactNumber = contactNumber;
   order.city = city;
@@ -817,6 +821,21 @@ export const updateOrderCustomerNote = asyncHandler(async (req, res) => {
   const order = req.resource;
 
   order.customerNote = req.body.customerNote || undefined;
+  order.updatedBy = req.user.id;
+  await order.save();
+
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   Set the Shopify store's own number for this order. Allowed at any status — a typo must
+ *         be fixable after dispatch, and it changes nothing but the reference.
+ * @route  PUT /api/v1/orders/:id/shopify-number  (orders:update — scoped)
+ */
+export const updateOrderShopifyNumber = asyncHandler(async (req, res) => {
+  const order = req.resource;
+
+  order.shopifyOrderNumber = req.body.shopifyOrderNumber || undefined;
   order.updatedBy = req.user.id;
   await order.save();
 

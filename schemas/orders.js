@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { cleanShopifyNumber } from '../utils/shopifyNumber.js';
 import { ATTEMPT_REASONS } from '../utils/constants.js';
 
 const id = z.string().min(1, 'Required');
@@ -27,6 +28,14 @@ const customWork = z.object({
   fromScratch: z.boolean().optional()
 });
 
+/** The Shopify store's own number for this order (reference only), cleaned as people copy it. */
+const shopifyOrderNumber = z
+  .string()
+  .max(40, 'That number is too long')
+  .transform(cleanShopifyNumber)
+  .pipe(z.string().max(30, 'That number is too long'))
+  .optional();
+
 export const orderCreateSchema = z
   .object({
     business: id,
@@ -35,6 +44,7 @@ export const orderCreateSchema = z
     city: z.string().optional(),
     deliveryAddress: z.string().optional(),
     customerNote: z.string().trim().max(500, 'Keep the note under 500 characters').optional(),
+    shopifyOrderNumber,
     /** Makes sending this order twice safe — see Order.clientRef. */
     clientRef: z.string().trim().min(1).max(64).optional(),
     advanceAmount: z.coerce.number().min(0).optional(),
@@ -59,6 +69,7 @@ export const orderUpdateSchema = z
     city: z.string().optional(),
     deliveryAddress: z.string().optional(),
     source: source.optional(),
+    shopifyOrderNumber,
     items: z.array(orderItem).default([]),
     customWork: z.array(customWork).max(20).default([])
   })
@@ -103,6 +114,11 @@ export const orderRefundReturnSchema = z.object({
   shippingShare: z.coerce.number().min(0, 'Can not be negative').optional(),
   scratchPieces: z.array(scratchPiece).max(20).optional(),
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+});
+
+/** Empty clears it. Allowed at any status — it changes nothing but the reference. */
+export const orderShopifyNumberSchema = z.object({
+  shopifyOrderNumber: shopifyOrderNumber.default('')
 });
 
 /** An empty note clears it. */
