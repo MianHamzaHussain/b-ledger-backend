@@ -116,4 +116,5 @@ test('due now counts booked orders whose day has come, not future ones or releas
   await book('2026-12-19'); // future
   await book('2026-10-25', 'pending'); // released
   assert.equal((await orderSummary(biz._id, NOW)).dueNow, 2);
+  assert.equal((await orderSummary(biz._id, NOW)).courierReady, 0);
 });

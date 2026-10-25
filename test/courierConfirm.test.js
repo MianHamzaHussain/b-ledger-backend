@@ -7,6 +7,7 @@ import { confirmCourierStatus } from '../controllers/orderController.js';
 import { orderCourierConfirmSchema } from '../schemas/orders.js';
 import { clearCityCache } from '../utils/couriers/booking.js';
 import { runCourierSync } from '../utils/courierSync.js';
+import { orderSummary } from '../utils/orderSummary.js';
 import { admin, fakePostex, restoreFetch, setupOrder, dispatchBooked } from './helpers/courier.js';
 
 /**
@@ -54,8 +55,10 @@ test('delivered: the order is delivered the normal way, with the courier’s fee
     transactionTax: 29,
     transactionStatusHistory: hist(['0005', 'Delivered'])
   });
+  assert.equal((await orderSummary(made.biz._id)).courierReady, 1, 'the strip counts it');
   const out = await confirm(made);
   assert.equal(out.body.data.confirmed, 1);
+  assert.equal((await orderSummary(made.biz._id)).courierReady, 0);
 
   const fresh = await Order.findById(made.order._id);
   assert.equal(fresh.status, 'delivered');
