@@ -54,6 +54,7 @@ import {
   deleteOrderMoney,
   getPriceHint,
   getOrderSummary,
+  getDeliverers,
   keepOrderCredit,
   addCustomCost,
   deleteCustomCost
@@ -95,6 +96,21 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/summary', can('orders', 'read'), getOrderSummary);
+
+/**
+ * @swagger
+ * /orders/deliverers:
+ *   get:
+ *     summary: Names already used as "delivered by" (newest first, up to 20)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: Array of names }
+ *       404: { description: Outside your assigned businesses }
+ */
+router.get('/deliverers', can('orders', 'read'), getDeliverers);
 
 /**
  * @swagger
@@ -161,7 +177,8 @@ router
         'contactNumber',
         'trackingId',
         'reversalTrackingId',
-        'shopifyOrderNumber'
+        'shopifyOrderNumber',
+        'deliveredBy'
       ],
       ORDER_LIST_FIELDS
     ),

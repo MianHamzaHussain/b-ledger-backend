@@ -105,6 +105,16 @@ export const orderStatusSchema = z.object({
   ]),
   /** Required when the new status is `booked`. */
   bookedFor: day.optional(),
+  /** Dispatch: we deliver it ourselves — instead of a courier. Needs `deliveredBy`. */
+  selfDelivery: z.boolean().optional(),
+  /** Who is taking it (an employee or anyone). */
+  deliveredBy: z.string().trim().max(60, 'Keep the name under 60 characters').optional(),
+  /** Delivered by us: was the cash collected? Defaults to yes. */
+  collected: z.boolean().optional(),
+  /** Where the collected cash (or our delivery cost) goes — a money account; Cash if left out. */
+  collectInto: id.optional(),
+  /** What the delivery cost us was paid from; Cash if left out. */
+  costAccount: id.optional(),
   courier: id.optional(),
   /** The courier's bill for the outcome — the delivery fee on `delivered`, the
    *  return fee on `returned`. Optional: usually billed on the courier invoice. */

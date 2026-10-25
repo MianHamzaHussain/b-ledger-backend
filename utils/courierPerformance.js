@@ -175,6 +175,65 @@ export const courierPerformance = async (business, { from, to, by }) => {
     minDecided: MIN_DECIDED,
     cancelledBeforeDispatch,
     totals,
-    rows
+    rows,
+    selfDelivery: await selfDeliveryRows(businessId, range)
+  };
+};
+
+/**
+ * Parcels we took ourselves, per person: how many went out, what became of them, what the trips
+ * cost and what cash came back. Money is paisa. No ratios against couriers — a person is not a
+ * courier, and the cost per parcel is the figure worth comparing.
+ */
+const selfDeliveryRows = async (businessId, range) => {
+  const grouped = await Order.aggregate([
+    { $match: { business: businessId, selfDelivery: true, dispatchedAt: range } },
+    {
+      $group: {
+        _id: { $ifNull: ['$deliveredBy', 'Unknown'] },
+        dispatched: { $sum: 1 },
+        delivered: { $sum: { $cond: [isDelivered, 1, 0] } },
+        returned: { $sum: is(ORDER_STATUS.RETURNED) },
+        inTransit: { $sum: is(ORDER_STATUS.DISPATCHED) },
+        costPaisa: {
+          $sum: {
+            $add: [{ $ifNull: ['$deliveryChargePaisa', 0] }, { $ifNull: ['$returnChargePaisa', 0] }]
+          }
+        },
+        collectedPaisa: {
+          $sum: {
+            $cond: [{ $ne: ['$selfCollectAccount', null] }, { $ifNull: ['$paidPaisa', 0] }, 0]
+          }
+        }
+      }
+    }
+  ]);
+
+  const rows = grouped
+    .map(g => ({
+      person: g._id,
+      dispatched: g.dispatched,
+      delivered: g.delivered,
+      returned: g.returned,
+      inTransit: g.inTransit,
+      costPaisa: g.costPaisa,
+      costPerParcelPaisa: g.dispatched > 0 ? Math.round(g.costPaisa / g.dispatched) : 0,
+      collectedPaisa: g.collectedPaisa
+    }))
+    .sort((a, b) => b.dispatched - a.dispatched || a.person.localeCompare(b.person));
+
+  const sum = key => rows.reduce((total, r) => total + r[key], 0);
+  const dispatched = sum('dispatched');
+  return {
+    rows,
+    totals: {
+      dispatched,
+      delivered: sum('delivered'),
+      returned: sum('returned'),
+      inTransit: sum('inTransit'),
+      costPaisa: sum('costPaisa'),
+      costPerParcelPaisa: dispatched > 0 ? Math.round(sum('costPaisa') / dispatched) : 0,
+      collectedPaisa: sum('collectedPaisa')
+    }
   };
 };

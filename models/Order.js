@@ -307,6 +307,14 @@ const OrderSchema = new mongoose.Schema(
     bookedFor: { type: String, match: [/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2026-12-19'] },
     /** The day the "due" alert was last sent — makes the daily reminder once-only per day. */
     bookingAlertedOn: { type: String },
+    /**
+     * We deliver this parcel ourselves — no courier, so no COD tax and no courier invoice. Set at
+     * dispatch, with `deliveredBy` (an employee or anyone: a label, not a user account).
+     */
+    selfDelivery: { type: Boolean, default: false },
+    deliveredBy: { type: String, trim: true, maxlength: 60 },
+    /** A self-delivered parcel's cash, taken at the door into this money account. */
+    selfCollectAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' },
     shopifyOrderNumber: { type: String, trim: true, maxlength: 30, set: cleanShopifyNumber },
     /** A free note on the order — editable at any status, even after dispatch. */
     note: { type: String, trim: true, maxlength: 1000 },

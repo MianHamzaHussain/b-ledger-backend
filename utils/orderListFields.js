@@ -16,6 +16,8 @@ export const ORDER_LIST_FIELDS = [
   'trackingId',
   'customerNote',
   'shopifyOrderNumber',
+  'selfDelivery',
+  'deliveredBy',
   'status',
   'bookedFor',
   'paymentStatus',

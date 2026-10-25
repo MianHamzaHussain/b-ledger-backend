@@ -868,6 +868,15 @@ courier is a business's own party, so nothing is combined across businesses.
   with two processes — from 09:00 Pakistan time, and keeps nudging daily until the order leaves
   booked. `/api/v1/health` carries `reminders.lastRunAt`; a stale value means it stopped. Any
   code that lists order statuses must learn `booked` (the trap).
+- **Self delivery** (`Order.selfDelivery` + `deliveredBy`, a name — not a user). A parcel we
+  take ourselves has **no courier**: dispatch needs only `deliveredBy` (tracking optional), and
+  `postOrderSale` takes the non-courier branch — **no COD tax, no courier receivable, no courier
+  invoice**. At delivery `collected` (default) books the cash straight into `collectInto` (Cash
+  if omitted) and marks the order paid; `collected:false` leaves it owed on the customer's khata
+  (a customer party is made) and unpaid. The trip's cost (`deliveryCharge`, with `note` as the
+  memo) is a Delivery/Return-charges expense paid from `costAccount` (`postCourierCost`'s
+  `options.account`). The courier report skips these (`courier: {$ne: null}`) and returns them
+  apart as `selfDelivery` per person. `GET /orders/deliverers` suggests names.
 - **Owner withdrawals are not an expense.** `profitAndLoss` also returns
   `ownerTookPaisa` (every capital-sourced entry's debit to an equity account, except
   Retained Earnings — so Drawings **and** partner capital accounts, but not a profit

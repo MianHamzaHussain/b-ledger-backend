@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import Order, { heldPaisaOf } from '../models/Order.js';
@@ -13,6 +14,7 @@ import {
   postOrderSale,
   postOrderRemittance,
   postReturnCharge,
+  postDeliveryCharge,
   computeRemittance
 } from '../utils/orderPosting.js';
 import { notify } from '../utils/notify.js';
@@ -732,7 +734,27 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   // sub-ledgered to) and gets back a tracking number — both known right now.
   // The charge is NOT: the courier bills by weight, city and outcome, so it is
   // taken when the parcel lands (delivered / returned / exchanged) instead.
-  if (status === ORDER_STATUS.DISPATCHED) {
+  if (status === ORDER_STATUS.DISPATCHED && req.body.selfDelivery) {
+    // We take it ourselves: no courier, so none of a courier's tax or invoice. The tracking
+    // number is optional (a slip may have been made on TCS or PostEx, and scanning still works).
+    if (req.body.courier) {
+      return next(new ErrorResponse('A parcel we deliver ourselves has no courier', 400));
+    }
+    if (order.isSwap) {
+      return next(
+        new ErrorResponse('A swap goes with the courier that takes the old item back', 400)
+      );
+    }
+    if (!req.body.deliveredBy) {
+      return next(new ErrorResponse('Enter who is delivering it', 400));
+    }
+    order.courier = undefined;
+    order.selfDelivery = true;
+    order.deliveredBy = req.body.deliveredBy;
+    const slip = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+    order.trackingId = slip || undefined;
+    order.attemptsTracked = true;
+  } else if (status === ORDER_STATUS.DISPATCHED) {
     const courier = await resolveCourier(order.business, req.body.courier);
     // A swap goes with the courier that takes the old item back at the door.
     if (order.isSwap && order.courier && String(courier) !== String(order.courier)) {
@@ -741,6 +763,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
       );
     }
     order.courier = courier;
+    order.selfDelivery = false;
+    order.deliveredBy = undefined;
     const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
@@ -781,11 +805,44 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     }
   }
 
+  // We delivered it ourselves: say where the cash went. Collected → straight into the money
+  // account chosen (Cash if none); not collected → owed by the customer on their khata, and the
+  // order stays unpaid exactly as a courier's would until it is settled.
+  const selfDelivered = status === ORDER_STATUS.DELIVERED && order.selfDelivery;
+  let collectedPaisa = 0;
+  if (selfDelivered && !order.saleEntry) {
+    if (req.body.collected === false) {
+      order.customerParty = await upsertCustomerParty(
+        order.business,
+        order.customerName,
+        order.contactNumber,
+        req.user.id
+      );
+    } else {
+      const money = await resolveMoney(order.business, { account: req.body.collectInto }, req.user);
+      order.selfCollectAccount = money.account;
+      collectedPaisa = toPaisa(order.codAmount);
+    }
+  }
+
   // Delivery is where revenue and cost of goods are recognised (once).
   if (status === ORDER_STATUS.DELIVERED && !order.saleEntry) {
     const entry = await postOrderSale(order, req.user.id);
     if (entry) order.saleEntry = entry._id;
     await moveCustomWipToCogs(order, req.user.id);
+  }
+
+  if (selfDelivered && collectedPaisa > 0) {
+    order.paymentStatus = PAYMENT_STATUS.PAID;
+    order.paidPaisa = collectedPaisa;
+  }
+  // What it cost us to take it ourselves (petrol, rider) — an expense paid from a money account.
+  if (selfDelivered && chargeKnown && chargePaisa > 0) {
+    const from = await resolveMoney(order.business, { account: req.body.costAccount }, req.user);
+    await postDeliveryCharge(order, fromPaisa(chargePaisa), req.user.id, {
+      account: from.account,
+      note: req.body.note
+    });
   }
 
   // A return unwinds whatever was booked, and what the courier billed for the
@@ -799,7 +856,17 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     }
     if (chargeKnown) {
       order.returnChargePaisa = chargePaisa;
-      if (chargePaisa > 0) await postReturnCharge(order, fromPaisa(chargePaisa), req.user.id);
+      if (chargePaisa > 0) {
+        const from = order.selfDelivery
+          ? await resolveMoney(order.business, { account: req.body.costAccount }, req.user)
+          : null;
+        await postReturnCharge(
+          order,
+          fromPaisa(chargePaisa),
+          req.user.id,
+          from ? { account: from.account, note: req.body.note } : undefined
+        );
+      }
     }
   }
 
@@ -1019,6 +1086,29 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
   }
 
   res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   The names already used as "delivered by" in a business — so a name is picked, not
+ *         retyped three different ways. Newest first.
+ * @route  GET /api/v1/orders/deliverers?business=  (orders:read — scoped)
+ */
+export const getDeliverers = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  const rows = await Order.aggregate([
+    {
+      $match: { business: new mongoose.Types.ObjectId(String(business)), deliveredBy: { $gt: '' } }
+    },
+    { $group: { _id: '$deliveredBy', last: { $max: '$createdAt' } } },
+    { $sort: { last: -1 } },
+    { $limit: 20 }
+  ]);
+  res.status(200).json({ success: true, data: rows.map(r => r._id) });
 });
 
 /**
