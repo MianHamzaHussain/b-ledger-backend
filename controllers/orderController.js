@@ -134,7 +134,8 @@ export const getOrder = asyncHandler(async (req, res) => {
   // will be collected on delivery — so it's a counter sale only if it came in as
   // a walk-in.
   let remittance;
-  if (!order.courier && order.source === SALES_CHANNELS.WALK_IN) {
+  // A parcel we deliver ourselves is the same: no courier, so no fee or tax to take off.
+  if ((!order.courier && order.source === SALES_CHANNELS.WALK_IN) || order.selfDelivery) {
     // Part-payments made from the customer's party page come off what is owed.
     const paidPaisa = order.paidPaisa || 0;
     remittance = {
@@ -148,7 +149,8 @@ export const getOrder = asyncHandler(async (req, res) => {
       deliveryKnown: true,
       settled: order.paymentStatus === PAYMENT_STATUS.PAID,
       // Flag the counter-sale case so the client can label it "owed by customer".
-      counterSale: true
+      counterSale: true,
+      selfDelivery: Boolean(order.selfDelivery)
     };
   } else {
     const business = await Business.findById(order.business).select('codTax');

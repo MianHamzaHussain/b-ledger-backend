@@ -14,7 +14,12 @@ import {
 import Order from '../models/Order.js';
 import JournalEntry from '../models/JournalEntry.js';
 import '../models/Category.js';
-import { createOrder, updateOrderStatus, getDeliverers } from '../controllers/orderController.js';
+import {
+  createOrder,
+  getOrder,
+  updateOrderStatus,
+  getDeliverers
+} from '../controllers/orderController.js';
 import { orderCreateSchema, orderStatusSchema } from '../schemas/orders.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { accountBalance } from '../utils/ledger.js';
@@ -197,4 +202,16 @@ test('the courier report keeps self parcels out of the couriers and lists them p
     }
   ]);
   assert.equal(out.selfDelivery.totals.costPaisa, toPaisa(600));
+});
+
+test('the order page preview shows the full COD, with no tax or courier fee, for a self parcel', async () => {
+  const { order } = await place();
+  await sendSelf(order);
+  const out = await runHandler(getOrder, { resource: await Order.findById(order._id) });
+  const r = out.body.data.remittance;
+  assert.equal(r.selfDelivery, true);
+  assert.equal(r.withholdingTax, 0);
+  assert.equal(r.salesTax, 0);
+  assert.equal(r.deliveryCharge, 0);
+  assert.equal(r.netReceivable, 5000);
 });
