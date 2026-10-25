@@ -12,6 +12,15 @@ export const courierDeps = { fetchImpl: (...args) => fetch(...args) };
 const PROVIDERS = { postex: createPostex };
 
 /**
+ * Point the adapter at a stand-in service (a local fake, for demos and recordings) — never in
+ * production, where a changed address would send real keys somewhere else.
+ */
+const testBase = () =>
+  process.env.POSTEX_BASE_URL && process.env.NODE_ENV !== 'production'
+    ? { base: process.env.POSTEX_BASE_URL, adviceBase: process.env.POSTEX_BASE_URL }
+    : {};
+
+/**
  * The adapter for a courier party that is connected AND switched on (`requireEnabled: false` is for
  * the Test button, which must work before booking is turned on), or a 400 saying why not. Re-reads the party
  * with its saved key (hidden from every normal read), decrypts it for this one call, and hands the
@@ -28,6 +37,10 @@ export const adapterFor = async (partyId, { requireEnabled = true } = {}) => {
   return {
     provider: link.provider,
     party,
-    api: make({ token: decryptSecret(link.tokenEnc), fetchImpl: courierDeps.fetchImpl })
+    api: make({
+      token: decryptSecret(link.tokenEnc),
+      fetchImpl: courierDeps.fetchImpl,
+      ...testBase()
+    })
   };
 };

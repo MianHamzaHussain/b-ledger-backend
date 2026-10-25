@@ -16,7 +16,8 @@ import logger from './logger.js';
  *    normal status path, because those two steps post sales, cost and stock.
  * If the courier later takes it back ("delivered" → "attempted"), the mark is removed again.
  */
-const EVERY_MS = 15 * 60 * 1000;
+// 15 minutes; COURIER_SYNC_SECONDS shortens it for demos (never below 10 s).
+const EVERY_MS = Math.max(Number(process.env.COURIER_SYNC_SECONDS) || 15 * 60, 10) * 1000;
 const BATCH = 20;
 const PER_RUN = 300;
 
