@@ -45,34 +45,45 @@ export const saveConnection = asyncHandler(async (req, res) => {
   ensureCourier(party);
   const { provider, token, pickupAddressCode, pickupAddressLabel, isEnabled } = req.body;
 
-  const link = party.integration ?? {};
-  const next = { ...(link.toObject?.() ?? link) };
-  if (provider) next.provider = provider;
+  // Field by field, never the whole `integration` object: the saved key is hidden from this read
+  // (select:false), so rewriting the object would silently delete it.
+  const set = { updatedBy: req.user.id };
+  const unset = {};
+  if (provider) set['integration.provider'] = provider;
   if (token) {
-    next.tokenEnc = encryptSecret(token);
-    next.hasToken = true;
-    next.lastError = undefined;
+    set['integration.tokenEnc'] = encryptSecret(token);
+    set['integration.hasToken'] = true;
+    unset['integration.lastError'] = 1;
   }
-  if (pickupAddressCode !== undefined) next.pickupAddressCode = pickupAddressCode || undefined;
-  if (pickupAddressLabel !== undefined) next.pickupAddressLabel = pickupAddressLabel || undefined;
+  if (pickupAddressCode !== undefined) {
+    if (pickupAddressCode) set['integration.pickupAddressCode'] = pickupAddressCode;
+    else unset['integration.pickupAddressCode'] = 1;
+  }
+  if (pickupAddressLabel !== undefined) {
+    if (pickupAddressLabel) set['integration.pickupAddressLabel'] = pickupAddressLabel;
+    else unset['integration.pickupAddressLabel'] = 1;
+  }
   if (isEnabled !== undefined) {
-    if (isEnabled && !(next.hasToken ?? link.hasToken)) {
+    if (isEnabled && !token && !party.integration?.hasToken) {
       throw new ErrorResponse('Save the key before turning booking on', 400);
     }
-    next.isEnabled = isEnabled;
+    set['integration.isEnabled'] = isEnabled;
   }
 
   await Party.updateOne(
     { _id: party._id },
-    { $set: { integration: next, updatedBy: req.user.id } }
+    { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}) }
   );
   logger.info(
-    { userId: req.user.id, party: String(party._id), provider: next.provider },
+    {
+      userId: req.user.id,
+      party: String(party._id),
+      provider: provider ?? party.integration?.provider
+    },
     'courier connection saved'
   );
 
-  const fresh = await Party.findById(party._id);
-  res.status(200).json({ success: true, data: view(fresh) });
+  res.status(200).json({ success: true, data: view(await Party.findById(party._id)) });
 });
 
 /** Ask the courier something harmless with the saved key: its pickup addresses. */

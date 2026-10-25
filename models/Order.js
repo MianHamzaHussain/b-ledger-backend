@@ -312,6 +312,31 @@ const OrderSchema = new mongoose.Schema(
      * dispatch, with `deliveredBy` (an employee or anyone: a label, not a user account).
      */
     selfDelivery: { type: Boolean, default: false },
+    /**
+     * The parcel as the courier's own service knows it (PostEx): booked from the dispatch dialog,
+     * then kept up to date by the status check. `lockedAt` stops a double tap booking two parcels.
+     */
+    courierBooking: {
+      type: new mongoose.Schema(
+        {
+          provider: { type: String },
+          trackingNumber: { type: String },
+          bookedAt: { type: Date },
+          lockedAt: { type: Date },
+          /** The courier's own words for where it is: "Booked", "Out For Delivery"… */
+          courierStatus: { type: String },
+          courierStatusAt: { type: Date },
+          history: { type: [{ code: String, message: String, _id: false }], default: undefined },
+          lastSyncAt: { type: Date },
+          /** What the courier says it charged — rupees. Filled in when it reports delivered/returned. */
+          fee: { type: Number },
+          tax: { type: Number },
+          /** Waiting for a person's tap: the courier says it was delivered / returned. */
+          confirmable: { type: String, enum: ['delivered', 'returned'] }
+        },
+        { _id: false }
+      )
+    },
     deliveredBy: { type: String, trim: true, maxlength: 60 },
     /** A self-delivered parcel's cash, taken at the door into this money account. */
     selfCollectAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' },
@@ -424,6 +449,8 @@ OrderSchema.index(
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, reversalTrackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, shopifyOrderNumber: 1 }, { sparse: true });
+// The courier status check: dispatched parcels that have a courier booking.
+OrderSchema.index({ status: 1, 'courierBooking.provider': 1 });
 // The reminder job's query: booked orders by due day, across businesses.
 OrderSchema.index({ status: 1, bookedFor: 1 });
 OrderSchema.index({ 'items.product': 1, 'items.variantId': 1 }); // price-hint lookup

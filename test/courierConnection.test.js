@@ -171,3 +171,15 @@ test('disconnecting forgets the key completely', async () => {
   const view = await runHandler(getConnection, { resource: await Party.findById(party._id) });
   assert.equal(view.body.data.hasToken, false);
 });
+
+test('changing the pickup address or the on/off switch keeps the saved key', async () => {
+  const party = await courier();
+  await save(party, { provider: 'postex', token: KEY });
+  await save(await Party.findById(party._id), { pickupAddressCode: '002', isEnabled: true });
+  await save(await Party.findById(party._id), { isEnabled: false });
+
+  const saved = await Party.findById(party._id).select('+integration.tokenEnc');
+  assert.equal(decryptSecret(saved.integration.tokenEnc), KEY, 'the key survived every later save');
+  assert.equal(saved.integration.pickupAddressCode, '002');
+  assert.equal(saved.integration.isEnabled, false);
+});

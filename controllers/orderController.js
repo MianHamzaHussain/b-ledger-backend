@@ -20,6 +20,8 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
+import { bookParcel } from '../utils/couriers/booking.js';
+import { adapterFor } from '../utils/couriers/index.js';
 import { normalizePhone } from '../utils/phone.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
@@ -776,7 +778,12 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     order.courier = courier;
     order.selfDelivery = false;
     order.deliveredBy = undefined;
-    const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+    let trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+    if (req.body.bookWithCourier) {
+      // The courier makes the tracking number itself; if it refuses, the order stays as it was.
+      const booked = await bookParcel(order, courier);
+      trackingId = booked.trackingNumber;
+    }
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
     // From now on a failed try at the door can be logged on this parcel.
@@ -1097,6 +1104,28 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
   }
 
   res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   The courier's airway bill (a PDF) for an order booked through its service. Fetched by the
+ *         server with the saved key, so the key never reaches the browser.
+ * @route  GET /api/v1/orders/:id/airway-bill  (orders:read — scoped)
+ */
+export const getAirwayBill = asyncHandler(async (req, res, next) => {
+  const order = req.resource;
+  const tracking = order.courierBooking?.trackingNumber;
+  if (!tracking || !order.courier) {
+    return next(new ErrorResponse('This order was not booked through a courier service', 400));
+  }
+  const { api } = await adapterFor(order.courier, { requireEnabled: false });
+  const pdf = await api.airwayBill([tracking]);
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="airway-bill-${tracking}.pdf"`
+    })
+    .send(pdf);
 });
 
 /**

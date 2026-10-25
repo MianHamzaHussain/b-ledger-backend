@@ -105,6 +105,8 @@ export const orderStatusSchema = z.object({
   ]),
   /** Required when the new status is `booked`. */
   bookedFor: day.optional(),
+  /** Dispatch: book the parcel with the courier's own service (PostEx) instead of typing a tracking number. */
+  bookWithCourier: z.boolean().optional(),
   /** Dispatch: we deliver it ourselves — instead of a courier. Needs `deliveredBy`. */
   selfDelivery: z.boolean().optional(),
   /** Who is taking it (an employee or anyone). */

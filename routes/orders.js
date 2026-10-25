@@ -55,6 +55,7 @@ import {
   getPriceHint,
   getOrderSummary,
   getDeliverers,
+  getAirwayBill,
   keepOrderCredit,
   addCustomCost,
   deleteCustomCost
@@ -111,6 +112,21 @@ router.get('/summary', can('orders', 'read'), getOrderSummary);
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/deliverers', can('orders', 'read'), getDeliverers);
+
+/**
+ * @swagger
+ * /orders/{id}/airway-bill:
+ *   get:
+ *     summary: The courier's airway bill PDF for an order booked through its service
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+ *     responses:
+ *       200: { description: A PDF }
+ *       400: { description: The order was not booked through a courier service }
+ *       502: { description: The courier refused or could not be reached }
+ */
+router.get('/:id/airway-bill', can('orders', 'read'), loadScoped(Order), getAirwayBill);
 
 /**
  * @swagger
