@@ -23,6 +23,7 @@ import ErrorResponse from './utils/errorResponse.js';
 import { getAllowedOrigins } from './utils/cors.js';
 import { initSocket } from './utils/socket.js';
 import { reminderStatus, startBookingReminders } from './utils/bookingReminders.js';
+import { courierSyncStatus, startCourierSync } from './utils/courierSync.js';
 
 const dirName = path.dirname(fileURLToPath(import.meta.url));
 
@@ -136,7 +137,9 @@ app.get('/api/v1/health', (req, res) => {
     uptime: process.uptime(),
     env: process.env.NODE_ENV,
     // A stale lastRunAt means the booked-order reminders have stopped.
-    reminders: reminderStatus()
+    reminders: reminderStatus(),
+    // The courier status check (PostEx): a stale lastRunAt means it has stopped.
+    courierSync: courierSyncStatus()
   });
 });
 
@@ -158,6 +161,10 @@ server.listen(PORT, () =>
 // Alerts for booked orders whose day has come: catches up now, then every ten minutes.
 const stopReminders = startBookingReminders();
 process.on('SIGTERM', stopReminders);
+
+// Where each parcel booked through a courier's service is, checked every 15 minutes.
+const stopCourierSync = startCourierSync();
+process.on('SIGTERM', stopCourierSync);
 
 process.on('unhandledRejection', err => {
   logger.error({ err }, 'unhandled rejection');

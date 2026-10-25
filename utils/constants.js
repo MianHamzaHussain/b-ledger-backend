@@ -176,7 +176,9 @@ export const NOTIFICATION_TYPES = {
   NEW_ORDER: 'new-order',
   ORDER_PAID: 'order-paid',
   LOW_STOCK: 'low-stock',
-  BOOKING_DUE: 'booking-due'
+  BOOKING_DUE: 'booking-due',
+  // The courier says a parcel was delivered / returned — a person confirms it.
+  COURIER_READY: 'courier-ready'
 };
 
 /** Name of the protected, full-access role created by the seeder. */

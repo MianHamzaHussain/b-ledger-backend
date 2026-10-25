@@ -1,25 +1,17 @@
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
-import {
-  connect,
-  clear,
-  disconnect,
-  makeBusiness,
-  makeProduct,
-  makeParty,
-  runHandler,
-  userId
-} from './helpers/db.js';
+import { connect, clear, disconnect } from './helpers/db.js';
 import Order from '../models/Order.js';
-import Party from '../models/Party.js';
-import '../models/Category.js';
-import { createOrder, updateOrderStatus, getAirwayBill } from '../controllers/orderController.js';
-import { saveConnection } from '../controllers/courierConnectionController.js';
-import { orderCreateSchema, orderStatusSchema } from '../schemas/orders.js';
-import { courierConnectionSchema } from '../schemas/parties.js';
+import { getAirwayBill } from '../controllers/orderController.js';
 import { courierDeps } from '../utils/couriers/index.js';
 import { bookParcel, clearCityCache } from '../utils/couriers/booking.js';
+import {
+  fakePostex,
+  restoreFetch,
+  setupOrder as setup,
+  dispatchBooked as dispatch,
+  KEY
+} from './helpers/courier.js';
 
 /**
  * Dispatching with "book with the courier": the parcel is made at PostEx, the tracking number comes
@@ -29,100 +21,13 @@ import { bookParcel, clearCityCache } from '../utils/couriers/booking.js';
 before(connect);
 after(disconnect);
 afterEach(async () => {
-  courierDeps.fetchImpl = (...a) => fetch(...a);
+  restoreFetch();
   clearCityCache();
   await clear();
 });
 
-process.env.COURIER_SECRET_KEY = crypto.randomBytes(32).toString('hex');
-const admin = { id: userId, role: { fullAccess: true } };
-
-const reply = (body, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
-
-/** A fake PostEx that serves cities and books parcels, remembering every create. */
-const fakePostex = ({ cities = ['Lahore', 'Karachi'], failCreate } = {}) => {
-  const creates = [];
-  courierDeps.fetchImpl = async (url, init) => {
-    const u = String(url);
-    if (u.includes('get-operational-city')) {
-      return reply({ statusCode: '200', dist: cities.map(c => ({ operationalCityName: c })) });
-    }
-    if (u.includes('create-order')) {
-      creates.push(JSON.parse(init.body));
-      if (failCreate) return reply({ statusCode: '400', statusMessage: failCreate }, 400);
-      return reply({
-        statusCode: '200',
-        dist: { trackingNumber: `CX-${1000 + creates.length}`, orderStatus: 'UnBooked' }
-      });
-    }
-    return reply({ statusCode: '200', dist: [] });
-  };
-  return creates;
-};
-
-let n = 0;
-const setup = async ({
-  city = 'Lahore',
-  address = 'House 5, Gulberg',
-  phone = '0300-1234567',
-  connected = true
-} = {}) => {
-  const biz = await makeBusiness({ name: `Shop ${(n += 1)}` });
-  const courier = await makeParty(biz._id, 'courier');
-  if (connected) {
-    await runHandler(saveConnection, {
-      user: admin,
-      resource: courier,
-      body: courierConnectionSchema.parse({
-        provider: 'postex',
-        token: 'pk_secret_key_123',
-        pickupAddressCode: '001'
-      })
-    });
-    await runHandler(saveConnection, {
-      user: admin,
-      resource: await Party.findById(courier._id),
-      body: courierConnectionSchema.parse({ isEnabled: true })
-    });
-  }
-  const product = await makeProduct(biz._id);
-  const out = await runHandler(createOrder, {
-    user: admin,
-    body: orderCreateSchema.parse({
-      business: String(biz._id),
-      customerName: 'Sana Khan',
-      contactNumber: phone,
-      city,
-      deliveryAddress: address,
-      customerNote: 'Gift pack',
-      items: [
-        {
-          product: String(product._id),
-          variantId: String(product.variants[0]._id),
-          quantity: 2,
-          unitPrice: 2000
-        }
-      ]
-    })
-  });
-  return { biz, courier, order: await Order.findById(out.body.data._id) };
-};
-
-const dispatch = (order, courier, extra = {}) =>
-  runHandler(updateOrderStatus, {
-    user: admin,
-    resource: order,
-    body: orderStatusSchema.parse({
-      status: 'dispatched',
-      courier: String(courier._id),
-      bookWithCourier: true,
-      ...extra
-    })
-  });
-
 test('dispatching books the parcel itself: the tracking number comes back and the order moves', async () => {
-  const creates = fakePostex();
+  const { creates } = fakePostex();
   const { order, courier } = await setup();
   await dispatch(order, courier);
 
@@ -136,7 +41,7 @@ test('dispatching books the parcel itself: the tracking number comes back and th
 });
 
 test('the parcel carries what PostEx asks for, built from the order', async () => {
-  const creates = fakePostex();
+  const { creates } = fakePostex();
   const { order, courier } = await setup({ phone: '+92 300 1234567' });
   await dispatch(order, courier);
   const sent = creates[0];
@@ -153,7 +58,7 @@ test('the parcel carries what PostEx asks for, built from the order', async () =
 });
 
 test('a city PostEx does not serve stops the booking, and the order does not move', async () => {
-  const creates = fakePostex({ cities: ['Karachi'] });
+  const { creates } = fakePostex({ cities: ['Karachi'] });
   const { order, courier } = await setup({ city: 'Lahore' });
   await assert.rejects(dispatch(order, courier), /does not deliver to Lahore/);
   assert.equal((await Order.findById(order._id)).status, 'pending');
@@ -174,21 +79,21 @@ test('PostEx refusing the parcel leaves the order as it was, and says why', asyn
 });
 
 test('a landline instead of a mobile number is asked about before anything is sent', async () => {
-  const creates = fakePostex();
+  const { creates } = fakePostex();
   const { order, courier } = await setup({ phone: '042 111 222 333' });
   await assert.rejects(dispatch(order, courier), /mobile number/);
   assert.equal(creates.length, 0);
 });
 
 test('a missing delivery address is asked for before anything is sent', async () => {
-  const creates = fakePostex();
+  const { creates } = fakePostex();
   const { order, courier } = await setup({ address: '' });
   await assert.rejects(dispatch(order, courier), /delivery address/);
   assert.equal(creates.length, 0);
 });
 
 test('booking twice makes one parcel: the second finds the first', async () => {
-  const creates = fakePostex();
+  const { creates } = fakePostex();
   const { order, courier } = await setup();
   const first = await bookParcel(order, courier._id);
   const second = await bookParcel(await Order.findById(order._id), courier._id);
@@ -199,7 +104,7 @@ test('booking twice makes one parcel: the second finds the first', async () => {
 });
 
 test('two taps at the same moment still make one parcel', async () => {
-  const creates = fakePostex();
+  const { creates } = fakePostex();
   const { order, courier } = await setup();
   const results = await Promise.allSettled([
     bookParcel(await Order.findById(order._id), courier._id),
@@ -224,17 +129,9 @@ test('a courier that is not connected can not be booked, and says so', async () 
 });
 
 test('without "book with courier" dispatch still works by typing a tracking number', async () => {
-  const creates = fakePostex();
+  const { creates } = fakePostex();
   const { order, courier } = await setup();
-  await runHandler(updateOrderStatus, {
-    user: admin,
-    resource: order,
-    body: orderStatusSchema.parse({
-      status: 'dispatched',
-      courier: String(courier._id),
-      trackingId: 'TCS-77'
-    })
-  });
+  await dispatch(order, courier, { bookWithCourier: false, trackingId: 'TCS-77' });
   assert.equal((await Order.findById(order._id)).trackingId, 'TCS-77');
   assert.equal(creates.length, 0);
 });
@@ -275,7 +172,7 @@ test('the airway bill is fetched by the server with the saved key, as a PDF', as
   assert.match(sent.body.toString(), /^%PDF/);
   assert.equal(sent.headers['Content-Type'], 'application/pdf');
   assert.match(asked.url, /get-invoice\?trackingNumbers=CX-1001$/);
-  assert.equal(asked.token, 'pk_secret_key_123');
+  assert.equal(asked.token, KEY);
 });
 
 test('an order that was not booked through a courier has no airway bill', async () => {
