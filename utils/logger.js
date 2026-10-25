@@ -43,7 +43,10 @@ const logger = pino({
       'req.headers.cookie',
       'res.headers["set-cookie"]',
       'password',
-      '*.password'
+      '*.password',
+      // A courier key is typed once into the connect box — never written to a log.
+      'req.body.token',
+      '*.tokenEnc'
     ],
     censor: '[redacted]'
   },

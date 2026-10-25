@@ -47,6 +47,22 @@ const PartySchema = new mongoose.Schema(
      * into Meezan"). Remembered from its last invoice so the next one starts there.
      */
     defaultMoneyAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' },
+    /**
+     * Courier only: its connection to the courier's own service (PostEx), so a parcel can be booked
+     * and tracked without typing. The key is saved encrypted (utils/secretBox.js), hidden from every
+     * normal read (`select: false`), and no endpoint ever returns it — only `hasToken`.
+     */
+    integration: {
+      provider: { type: String, enum: ['postex'] },
+      tokenEnc: { type: String, select: false },
+      hasToken: { type: Boolean, default: false },
+      isEnabled: { type: Boolean, default: false },
+      /** Which of the merchant's pickup addresses to book from. */
+      pickupAddressCode: { type: String, trim: true },
+      pickupAddressLabel: { type: String, trim: true },
+      lastCheckedAt: { type: Date },
+      lastError: { type: String }
+    },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
   },
@@ -55,5 +71,13 @@ const PartySchema = new mongoose.Schema(
 
 PartySchema.index({ business: 1, name: 1 });
 PartySchema.index({ business: 1, type: 1 });
+
+// Belt and braces: the key is select:false already, and is stripped from any JSON as well.
+PartySchema.set('toJSON', {
+  transform: (doc, ret) => {
+    if (ret.integration) delete ret.integration.tokenEnc;
+    return ret;
+  }
+});
 
 export default mongoose.model('Party', PartySchema);
