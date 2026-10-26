@@ -1,5 +1,6 @@
 import Product from '../models/Product.js';
 import Business from '../models/Business.js';
+import { renameOnOpenOrders } from '../utils/orderNames.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import { createCrudHandlers } from '../utils/crudController.js';
 
@@ -54,6 +55,7 @@ export const updateProduct = asyncHandler(async (req, res) => {
   const product = req.resource;
   const { name, lowStockThreshold, status, variants, allowOversell } = req.body;
 
+  const renamed = name != null && name !== product.name;
   if (name != null) product.name = name;
   if (lowStockThreshold != null) product.lowStockThreshold = lowStockThreshold;
   if (status != null) product.status = status;
@@ -88,5 +90,7 @@ export const updateProduct = asyncHandler(async (req, res) => {
 
   product.updatedBy = req.user.id;
   await product.save();
+  // Orders that have not shipped follow the new name; shipped ones keep what they sold under.
+  if (renamed) await renameOnOpenOrders(product._id, product.name);
   res.status(200).json({ success: true, data: await product.populate('category', 'name status') });
 });

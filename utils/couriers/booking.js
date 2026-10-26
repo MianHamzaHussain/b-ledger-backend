@@ -3,6 +3,7 @@ import ErrorResponse from '../errorResponse.js';
 import { isMobile, normalizePhone } from '../phone.js';
 import { pakistanDay } from '../pakistanDay.js';
 import { adapterFor } from './index.js';
+import { liveItemNames, nameUpdates } from '../orderNames.js';
 
 /**
  * Book an order's parcel with the courier's own service and keep what comes back.
@@ -29,43 +30,60 @@ const deliveryCities = async (partyId, api) => {
   return names;
 };
 
-/** "Kurta (M) ×2, Lawn Suit" — what PostEx prints as the parcel's contents. */
-const contents = order =>
+/** The slip's Remarks box is small; PostEx documents no limit, so we keep what it can print. */
+export const REMARKS_MAX = 250;
+
+/**
+ * "Kurta (M) ×2, Lawn Suit" — what PostEx prints as the parcel's contents. `names` are the products'
+ * current names (one per line); without them the order's own saved names are used.
+ */
+const contents = (order, names = []) =>
   [
     ...order.items.map(
-      i =>
-        `${i.productName}${i.variantLabel && i.variantLabel !== 'Default' ? ` (${i.variantLabel})` : ''}${i.quantity > 1 ? ` x${i.quantity}` : ''}`
+      (i, index) =>
+        `${names[index] ?? i.productName}${i.variantLabel && i.variantLabel !== 'Default' ? ` (${i.variantLabel})` : ''}${i.quantity > 1 ? ` x${i.quantity}` : ''}`
     ),
     ...(order.customWork ?? []).map(w => w.description)
   ]
     .join(', ')
     .slice(0, 300);
 
-/** What the courier needs, built from the order — every field it asks for in the guide. */
-export const parcelFor = (order, pickupAddressCode) => {
-  const phone = normalizePhone(order.contactNumber);
-  if (!isMobile(phone)) {
-    throw new ErrorResponse(
-      'PostEx needs the customer’s mobile number (03xx xxxxxxx). Correct the number on the order first.',
-      400
+/** Everything wrong with the order for a courier, in plain words, in the order a person would fix it. */
+export const parcelProblems = order => {
+  const problems = [];
+  if (!isMobile(normalizePhone(order.contactNumber))) {
+    problems.push(
+      'PostEx needs the customer’s mobile number (03xx xxxxxxx). Correct the number on the order first.'
     );
   }
   if (!order.deliveryAddress?.trim()) {
-    throw new ErrorResponse('Add the delivery address on the order before booking a courier', 400);
+    problems.push('Add the delivery address on the order before booking a courier');
   }
   if (!order.city?.trim()) {
-    throw new ErrorResponse('Add the customer’s city on the order before booking a courier', 400);
+    problems.push('Add the customer’s city on the order before booking a courier');
   }
+  return problems;
+};
+
+/**
+ * What the courier needs, built from the order — every field it asks for in the guide. `remarks` is what
+ * the slip's Remarks box prints (default: what the customer asked for); `names` the products' current names.
+ */
+export const parcelFor = (order, pickupAddressCode, { names, remarks } = {}) => {
+  const [problem] = parcelProblems(order);
+  if (problem) throw new ErrorResponse(problem, 400);
+  const phone = normalizePhone(order.contactNumber);
   const pieces =
     order.items.reduce((sum, i) => sum + i.quantity, 0) + (order.customWork?.length ?? 0);
   return {
     orderRefNumber: String(order.orderNumber),
     invoicePayment: order.codAmount,
-    orderDetail: contents(order),
+    orderDetail: contents(order, names),
     customerName: order.customerName,
     customerPhone: phone,
     deliveryAddress: order.deliveryAddress.trim(),
-    transactionNotes: order.customerNote ?? '',
+    // Only what the customer asked for — the shop's own internal note is never sent.
+    transactionNotes: (remarks ?? order.customerNote ?? '').trim().slice(0, REMARKS_MAX),
     cityName: order.city,
     invoiceDivision: 1,
     items: Math.max(1, pieces),
@@ -78,7 +96,7 @@ export const parcelFor = (order, pickupAddressCode) => {
  * Book `order` with its courier. Returns `{ trackingNumber, provider, already }` — `already` is
  * true when this order was booked earlier and nothing new was created.
  */
-export const bookParcel = async (order, courierId) => {
+export const bookParcel = async (order, courierId, { remarks } = {}) => {
   const { api, provider, party } = await adapterFor(courierId);
 
   const earlier = order.courierBooking;
@@ -92,7 +110,9 @@ export const bookParcel = async (order, courierId) => {
     );
   }
 
-  const parcel = parcelFor(order, party.integration.pickupAddressCode);
+  // The slip must carry the article's name as it is called NOW, not as it was when the order was saved.
+  const names = await liveItemNames(order);
+  const parcel = parcelFor(order, party.integration.pickupAddressCode, { names, remarks });
   const cities = await deliveryCities(courierId, api);
   if (!cities.has(parcel.cityName.trim().toLowerCase())) {
     throw new ErrorResponse(
@@ -136,9 +156,14 @@ export const bookParcel = async (order, courierId) => {
             trackingNumber: made.trackingNumber,
             bookedAt: new Date(),
             courierStatus: made.orderStatus ?? 'UnBooked',
-            courierStatusAt: new Date()
+            courierStatusAt: new Date(),
+            // What PostEx was actually given, so the order can say so (and notice a later edit).
+            remarks: parcel.transactionNotes,
+            sentContents: parcel.orderDetail
           },
-          trackingId: made.trackingNumber
+          trackingId: made.trackingNumber,
+          // From here the order carries the names the slip shows.
+          ...nameUpdates(order, names)
         }
       },
       { timestamps: false }
@@ -219,4 +244,45 @@ export const attachParcel = async (order, courierId, trackingNumber) => {
     { timestamps: false }
   );
   return { trackingNumber, provider };
+};
+
+/**
+ * What the courier WOULD receive for this order — the same parcel `bookParcel` builds, with nothing sent
+ * and nothing saved — plus every problem in plain words. The dispatch screen shows it so nobody books
+ * blind: the article name, the remarks, the amount and the city are all visible before the tap.
+ */
+export const previewParcel = async (order, courierId, { remarks } = {}) => {
+  const { api, party } = await adapterFor(courierId, { requireEnabled: false });
+  const names = await liveItemNames(order);
+  const problems = parcelProblems(order);
+
+  let parcel = null;
+  if (!problems.length) {
+    parcel = parcelFor(order, party.integration?.pickupAddressCode ?? '', { names, remarks });
+    // The courier's list of cities is a network call: if it fails the preview still works, it just can not say.
+    try {
+      const cities = await deliveryCities(courierId, api);
+      if (!cities.has(parcel.cityName.trim().toLowerCase())) {
+        problems.push(`PostEx does not deliver to ${parcel.cityName}`);
+      }
+    } catch {
+      /* not checked — the booking itself will check again */
+    }
+  }
+  if (!party.integration?.pickupAddressCode) {
+    problems.push('Choose which pickup address to book from in this courier’s settings');
+  }
+
+  return {
+    contents: parcel?.orderDetail ?? '',
+    remarks: parcel?.transactionNotes ?? (remarks ?? order.customerNote ?? '').trim(),
+    customerName: order.customerName,
+    phone: parcel?.customerPhone ?? '',
+    city: order.city ?? '',
+    deliveryAddress: order.deliveryAddress ?? '',
+    amount: order.codAmount,
+    pieces: parcel?.items ?? 0,
+    pickup: party.integration?.pickupAddressLabel ?? '',
+    problems
+  };
 };

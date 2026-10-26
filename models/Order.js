@@ -158,6 +158,9 @@ const CustomCostSchema = new mongoose.Schema(
     materialQty: { type: Number },
     /** Where the money came from, as it read at the time. */
     accountName: { type: String },
+    /** Who it was paid to (a supplier), and their name as it read at the time. */
+    paidTo: { type: mongoose.Schema.ObjectId, ref: 'Party' },
+    paidToName: { type: String },
     date: { type: Date, default: Date.now },
     entry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry', required: true },
     by: { type: mongoose.Schema.ObjectId, ref: 'User' }
@@ -332,7 +335,10 @@ const OrderSchema = new mongoose.Schema(
           fee: { type: Number },
           tax: { type: Number },
           /** Waiting for a person's tap: the courier says it was delivered / returned. */
-          confirmable: { type: String, enum: ['delivered', 'returned'] }
+          confirmable: { type: String, enum: ['delivered', 'returned'] },
+          /** What the courier was given to print: the Remarks box and the article line. */
+          remarks: { type: String },
+          sentContents: { type: String }
         },
         { _id: false }
       )

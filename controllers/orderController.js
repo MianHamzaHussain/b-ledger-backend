@@ -20,7 +20,12 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
-import { attachParcel, bookParcel, findUnbookedFor } from '../utils/couriers/booking.js';
+import {
+  attachParcel,
+  bookParcel,
+  findUnbookedFor,
+  previewParcel
+} from '../utils/couriers/booking.js';
 import { adapterFor } from '../utils/couriers/index.js';
 import { normalizePhone } from '../utils/phone.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
@@ -781,7 +786,7 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     let trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
     if (req.body.bookWithCourier) {
       // The courier makes the tracking number itself; if it refuses, the order stays as it was.
-      const booked = await bookParcel(order, courier);
+      const booked = await bookParcel(order, courier, { remarks: req.body.courierRemarks });
       trackingId = booked.trackingNumber;
     } else if (req.body.attachCourierParcel) {
       await attachParcel(order, courier, req.body.attachCourierParcel);
@@ -1195,6 +1200,20 @@ export const getAirwayBill = asyncHandler(async (req, res, next) => {
 });
 
 /**
+ * @desc   What the courier would receive if this order were booked now — the article line, the remarks,
+ *         the amount, the city — and every problem in plain words. Sends and saves nothing.
+ * @route  GET /api/v1/orders/:id/parcel-preview?courier=&remarks=  (orders:update — scoped)
+ */
+export const getParcelPreview = asyncHandler(async (req, res, next) => {
+  if (!req.query.courier) return next(new ErrorResponse('Choose the courier first', 400));
+  const courier = await resolveCourier(req.resource.business, req.query.courier);
+  const data = await previewParcel(req.resource, courier, {
+    remarks: typeof req.query.remarks === 'string' ? req.query.remarks : undefined
+  });
+  res.status(200).json({ success: true, data });
+});
+
+/**
  * @desc   Parcels already made on the courier's site for this order's customer — to pick one
  *         instead of pasting a tracking number.
  * @route  GET /api/v1/orders/:id/courier-parcels?courier=  (orders:read — scoped)
@@ -1231,11 +1250,17 @@ export const getLoadSheet = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc   Cancel a parcel at the courier before it is picked up. The order is then returned with
- *         no charge — the goods never left, so stock goes back — through the normal status path.
- *         If the courier refuses (already picked up), nothing here changes.
- * @route  POST /api/v1/orders/:id/courier-cancel  (orders:update — scoped)
+ * @desc   Cancel a parcel at the courier before it is picked up. If the courier refuses (already
+ *         picked up), nothing here changes. Then, by choice:
+ *           reopen: true  — the order goes back to **Confirmed** with its tracking cleared and its stock
+ *                           still held, so a wrong slip is fixed on the order and booked again;
+ *           otherwise     — the order is **returned** with no charge (the goods never left, so stock
+ *                           goes back), through the normal status path.
+ * @route  POST /api/v1/orders/:id/courier-cancel  (orders:update — scoped)  body: { reopen? }
  */
+/** PostEx's history code for "Booking Cancelled by Merchant". */
+const CANCELLED_CODE = '0002';
+
 export const cancelCourierParcel = asyncHandler(async (req, res, next) => {
   const order = req.resource;
   const tracking = order.courierBooking?.trackingNumber;
@@ -1248,7 +1273,25 @@ export const cancelCourierParcel = asyncHandler(async (req, res, next) => {
     );
   }
   const { api } = await adapterFor(order.courier, { requireEnabled: false });
-  await api.cancel(tracking);
+  // A second try after the first one half-worked must not fail on "already cancelled".
+  const known = await api.track(tracking).catch(() => null);
+  const alreadyCancelled = known?.history?.at(-1)?.code === CANCELLED_CODE;
+  if (!alreadyCancelled) await api.cancel(tracking);
+
+  if (req.body?.reopen === true) {
+    // Dispatching posted nothing and the stock is held the same before and after it, so undoing it
+    // is just the order's own fields; the COD follows the advance again once it is not frozen.
+    order.status = ORDER_STATUS.CONFIRMED;
+    order.dispatchedAt = undefined;
+    order.trackingId = undefined;
+    order.attemptsTracked = false;
+    order.courierBooking = undefined;
+    order.updatedBy = req.user.id;
+    order.$locals.statusNote = 'Parcel cancelled at the courier before pickup — back to Confirmed';
+    await order.save();
+    return res.status(200).json({ success: true, data: order });
+  }
+
   const data = await changeStatusAsUser(order, req.user, {
     status: ORDER_STATUS.RETURNED,
     deliveryCharge: 0,
@@ -1430,12 +1473,18 @@ export const addCustomCost = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Costs can only be added before the order is dispatched', 400));
   }
 
-  const { description, amount, account, material, materialQty } = req.body;
+  const { description, amount, account, party, material, materialQty } = req.body;
   if (material) {
     await recordCustomCostFromMaterial(order, material, materialQty, req.user.id);
   } else {
+    const payee = mongoose.isValidObjectId(party)
+      ? await Party.findOne({ _id: party, business: order.business, type: PARTY_TYPES.SUPPLIER })
+      : null;
+    if (!payee) {
+      return next(new ErrorResponse('Choose who you paid — a supplier of this business', 400));
+    }
     const money = await resolveMoney(order.business, { account }, req.user);
-    await recordCustomCost(order, description, toPaisa(amount), money, req.user.id);
+    await recordCustomCost(order, description, toPaisa(amount), money, req.user.id, payee);
   }
   await order.save();
 

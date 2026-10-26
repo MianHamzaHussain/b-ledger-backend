@@ -36,6 +36,9 @@ import { partyTransactionSchema } from '../schemas/parties.js';
  * count is a loss. The Raw materials account always equals Σ material values.
  */
 
+// Every paid cost names who was paid; this is that supplier, made with each test's business.
+let supplierId;
+
 before(connect);
 after(disconnect);
 afterEach(clear);
@@ -46,6 +49,7 @@ const balance = async (biz, code) =>
 
 async function setup() {
   const biz = await makeBusiness();
+  supplierId = String((await makeParty(biz._id, 'supplier'))._id);
   const made = await runHandler(createMaterial, {
     body: { business: String(biz._id), name: 'Base dye', unit: 'piece' }
   });
@@ -104,7 +108,7 @@ async function batchUsing(biz, material, qty) {
           quantity: 20,
           costLines: [
             { material: String(material._id), materialQty: qty },
-            { label: 'Tailor', amount: 10000, fund: 'cash' }
+            { label: 'Tailor', amount: 10000, fund: 'cash', paidTo: supplierId }
           ]
         }
       ]
@@ -274,14 +278,14 @@ test('correcting a closed batch keeps its material as it was', async () => {
   await assert.rejects(
     correct([
       { material: String(material._id), materialQty: 12 },
-      { label: 'Tailor', amount: 10000, fund: 'cash' }
+      { label: 'Tailor', amount: 10000, fund: 'cash', paidTo: supplierId }
     ]),
     /material a closed batch used can not be changed/
   );
 
   await correct([
     { material: String(material._id), materialQty: 10 },
-    { label: 'Tailor', amount: 12000, fund: 'cash' }
+    { label: 'Tailor', amount: 12000, fund: 'cash', paidTo: supplierId }
   ]);
   // Material stays taken once: 100 − 10, and its account unchanged by the correction.
   assert.equal((await reload(material)).stock, 90);

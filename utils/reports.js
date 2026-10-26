@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import JournalEntry from '../models/JournalEntry.js';
 import Order from '../models/Order.js';
+import Product from '../models/Product.js';
 import { accountByCode, CODES } from './chartOfAccounts.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 import { parseBusinessDate } from './pakistanDay.js';
@@ -188,11 +189,21 @@ export const productProfitability = async (business, { from, to } = {}) => {
         cost: { $sum: { $multiply: ['$items.unitCost', '$items.quantity'] } }
       }
     },
+    // The article as it is called now; the order's saved name only when the product is gone. Without
+    // this a renamed article shows under whichever old name happened to come first.
+    {
+      $lookup: {
+        from: Product.collection.name,
+        localField: '_id',
+        foreignField: '_id',
+        as: 'live'
+      }
+    },
     {
       $project: {
         _id: 0,
         product: '$_id',
-        name: 1,
+        name: { $ifNull: [{ $arrayElemAt: ['$live.name', 0] }, '$name'] },
         quantity: 1,
         revenue: 1,
         cost: 1,

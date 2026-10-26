@@ -55,8 +55,16 @@ async function setup() {
     { label: 'M', costPrice: 1000, salePrice: 3000, stock: 10 }
   ]);
   const courier = await makeParty(biz._id, 'courier');
+  const supplier = await makeParty(biz._id, 'supplier');
   const acc = async code => (await accountByCode(biz._id, code))._id;
-  return { biz, product, courier, cash: String(await acc(CODES.CASH)), acc };
+  return {
+    biz,
+    product,
+    courier,
+    supplier: String(supplier._id),
+    cash: String(await acc(CODES.CASH)),
+    acc
+  };
 }
 
 const net = async (ctx, code) => accountBalance(ctx.biz._id, await ctx.acc(code));
@@ -212,7 +220,12 @@ async function scratchOrder(ctx) {
   });
   await runHandler(addCustomCost, {
     resource: order,
-    body: customCostSchema.parse({ description: 'Silk', amount: 9000, account: ctx.cash })
+    body: customCostSchema.parse({
+      description: 'Silk',
+      amount: 9000,
+      account: ctx.cash,
+      party: ctx.supplier
+    })
   });
   return Order.findById(order._id);
 }

@@ -107,8 +107,9 @@ router.get('/summary', can('parties', 'read'), getPartySummary);
  *       - { in: query, name: type, required: true, schema: { type: string, enum: [supplier, reseller, employee, courier, customer, lender] } }
  *       - { in: query, name: search, schema: { type: string } }
  *       - { in: query, name: limit, schema: { type: integer, maximum: 20 } }
+ *       - { in: query, name: page, schema: { type: integer } }
  *     responses:
- *       200: { description: "[{ _id, name, type, phone, accountId, booksWithService? }]" }
+ *       200: { description: "[{ _id, name, type, phone, accountId, booksWithService? }] and pagination.next while more remain" }
  *       403: { description: Not allowed to find this kind of party }
  *       404: { description: Business outside your scope }
  */

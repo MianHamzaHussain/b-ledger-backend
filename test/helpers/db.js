@@ -13,6 +13,21 @@ import { ensureChart } from '../../utils/chartOfAccounts.js';
  */
 const uri = process.env.MONGO_TEST_URI || 'mongodb://127.0.0.1:27017/b_ledger_test';
 
+/**
+ * `clear()` empties every collection and `disconnect()` DROPS the database, so a test run pointed at a
+ * real database (a mistyped MONGO_TEST_URI, a copied .env) would destroy it. Refuse anything that is not
+ * plainly a throwaway test database.
+ */
+export const assertTestDatabase = connectionString => {
+  const name = new URL(connectionString).pathname.replace(/^\//, '').split('?')[0];
+  if (!/test/i.test(name)) {
+    throw new Error(
+      `Refusing to run tests against database "${name || '(none)'}": its name must contain "test".`
+    );
+  }
+};
+assertTestDatabase(uri);
+
 export const oid = () => new mongoose.Types.ObjectId();
 export const userId = oid();
 
