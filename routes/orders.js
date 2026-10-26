@@ -60,6 +60,7 @@ import {
   getDeliverers,
   getAirwayBill,
   getCourierParcels,
+  getParcelPreview,
   getLoadSheet,
   cancelCourierParcel,
   confirmCourierStatus,
@@ -225,6 +226,23 @@ router.get('/:id/airway-bill', can('orders', 'read'), loadScoped(Order), getAirw
  *       200: { description: "[{ trackingNumber, orderRefNumber, cityName, invoicePayment }]" }
  */
 router.get('/:id/courier-parcels', can('orders', 'read'), loadScoped(Order), getCourierParcels);
+
+/**
+ * @swagger
+ * /orders/{id}/parcel-preview:
+ *   get:
+ *     summary: What the courier would receive if this order were booked now (sends nothing)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *       - { in: query, name: courier, required: true, schema: { type: string } }
+ *       - { in: query, name: remarks, schema: { type: string, maxLength: 250 } }
+ *     responses:
+ *       200: { description: "{ contents, remarks, phone, city, amount, pieces, pickup, problems[] }" }
+ *       400: { description: The courier is not connected }
+ */
+router.get('/:id/parcel-preview', can('orders', 'update'), loadScoped(Order), getParcelPreview);
 
 router.post('/:id/courier-cancel', can('orders', 'update'), loadScoped(Order), cancelCourierParcel);
 

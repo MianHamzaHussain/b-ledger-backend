@@ -107,6 +107,12 @@ export const orderStatusSchema = z.object({
   bookedFor: day.optional(),
   /** Dispatch: book the parcel with the courier's own service (PostEx) instead of typing a tracking number. */
   bookWithCourier: z.boolean().optional(),
+  /** Dispatch + book: what the courier's slip prints under Remarks (default: the customer's note). */
+  courierRemarks: z
+    .string()
+    .trim()
+    .max(250, 'Keep the courier message under 250 characters')
+    .optional(),
   /** Dispatch: use a parcel already made on the courier's own site (its tracking number). */
   attachCourierParcel: z.string().trim().min(3).max(60).optional(),
   /** Dispatch: we deliver it ourselves — instead of a courier. Needs `deliveredBy`. */

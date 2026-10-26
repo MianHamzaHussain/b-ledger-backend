@@ -335,7 +335,10 @@ const OrderSchema = new mongoose.Schema(
           fee: { type: Number },
           tax: { type: Number },
           /** Waiting for a person's tap: the courier says it was delivered / returned. */
-          confirmable: { type: String, enum: ['delivered', 'returned'] }
+          confirmable: { type: String, enum: ['delivered', 'returned'] },
+          /** What the courier was given to print: the Remarks box and the article line. */
+          remarks: { type: String },
+          sentContents: { type: String }
         },
         { _id: false }
       )

@@ -20,7 +20,12 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
-import { attachParcel, bookParcel, findUnbookedFor } from '../utils/couriers/booking.js';
+import {
+  attachParcel,
+  bookParcel,
+  findUnbookedFor,
+  previewParcel
+} from '../utils/couriers/booking.js';
 import { adapterFor } from '../utils/couriers/index.js';
 import { normalizePhone } from '../utils/phone.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
@@ -781,7 +786,7 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     let trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
     if (req.body.bookWithCourier) {
       // The courier makes the tracking number itself; if it refuses, the order stays as it was.
-      const booked = await bookParcel(order, courier);
+      const booked = await bookParcel(order, courier, { remarks: req.body.courierRemarks });
       trackingId = booked.trackingNumber;
     } else if (req.body.attachCourierParcel) {
       await attachParcel(order, courier, req.body.attachCourierParcel);
@@ -1192,6 +1197,20 @@ export const getAirwayBill = asyncHandler(async (req, res, next) => {
       'Content-Disposition': `inline; filename="airway-bill-${tracking}.pdf"`
     })
     .send(pdf);
+});
+
+/**
+ * @desc   What the courier would receive if this order were booked now — the article line, the remarks,
+ *         the amount, the city — and every problem in plain words. Sends and saves nothing.
+ * @route  GET /api/v1/orders/:id/parcel-preview?courier=&remarks=  (orders:update — scoped)
+ */
+export const getParcelPreview = asyncHandler(async (req, res, next) => {
+  if (!req.query.courier) return next(new ErrorResponse('Choose the courier first', 400));
+  const courier = await resolveCourier(req.resource.business, req.query.courier);
+  const data = await previewParcel(req.resource, courier, {
+    remarks: typeof req.query.remarks === 'string' ? req.query.remarks : undefined
+  });
+  res.status(200).json({ success: true, data });
 });
 
 /**
