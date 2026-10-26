@@ -858,6 +858,30 @@ A courier Party can be connected to its own service (`Party.integration`; PostEx
 - The courier's fee/tax is **its delivery charge**, not the FBR COD withholding — check one settled parcel against the statement before trusting the prefill.
 - Tests inject `courierDeps.fetchImpl`; no test can reach a real courier. `npm run postex:check` is a read-only local check of a key.
 
+### 10.10 Round 8 rules — names, remarks, payees (2026-10-26)
+
+- **Names follow the product until dispatch, then freeze** (`utils/orderNames.js`). A line's
+  `productName` is a snapshot, but renaming a product renames it on orders in `pending | confirmed |
+booked` (`renameOnOpenOrders`), and booking a parcel reads the **live** name for the slip and saves it
+  on the order in the same write. Dispatched and later orders keep the name they sold under. The profit
+  report shows the live name once per article.
+- **The slip carries what the customer asked for.** `transactionNotes` = the dispatcher's
+  `courierRemarks` (default: the order's **Customer note**, max 250), never the internal `note`. The
+  booking saves `courierBooking.remarks` and `sentContents`, so the order can say what was given and warn
+  when the note changed afterwards (PostEx can not update a booked parcel).
+- **Preview before booking** — `GET /orders/:id/parcel-preview` calls the same `parcelFor` as the booking
+  and sends nothing; it lists every problem in plain words.
+- **A cost that is Paid names who was paid** (production batch costs and order custom-work costs). It posts
+  the way goods-received "paid now" does — Dr cost / Cr Payables [supplier], then Dr Payables [supplier] /
+  Cr the account — so the supplier's Khata shows the bill **and** the payment and ends at zero. An open
+  draft with an unnamed paid cost can not close. "On credit" is unchanged.
+- **Cancel a courier parcel** (`POST /orders/:id/courier-cancel`): `reopen: true` sends the order back to
+  **Confirmed** (tracking and booking cleared, stock still held — dispatching posts nothing), otherwise it
+  is returned with no charge. A parcel the courier already shows as cancelled does not block it.
+- **Test and demo settings can not reach real data:** `POSTEX_BASE_URL` / `COURIER_SYNC_SECONDS` stop the
+  server starting in production; tests refuse a database whose name lacks "test"; `npm run find:testdata`
+  is a read-only scan of a real database for records that look like test data.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from
