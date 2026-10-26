@@ -22,6 +22,8 @@ import errorHandler from './middlewares/errorHandler.js';
 import ErrorResponse from './utils/errorResponse.js';
 import { getAllowedOrigins } from './utils/cors.js';
 import { initSocket } from './utils/socket.js';
+import mongoose from 'mongoose';
+import { createShutdown } from './utils/shutdown.js';
 import { reminderStatus, startBookingReminders } from './utils/bookingReminders.js';
 import { courierSyncStatus, startCourierSync } from './utils/courierSync.js';
 
@@ -50,7 +52,7 @@ app.set('query parser', 'extended');
 
 const server = http.createServer(app);
 
-initSocket(server);
+const io = initSocket(server);
 
 // Security headers first, so everything below is covered.
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
@@ -160,11 +162,25 @@ server.listen(PORT, () =>
 
 // Alerts for booked orders whose day has come: catches up now, then every ten minutes.
 const stopReminders = startBookingReminders();
-process.on('SIGTERM', stopReminders);
 
 // Where each parcel booked through a courier's service is, checked every 15 minutes.
 const stopCourierSync = startCourierSync();
-process.on('SIGTERM', stopCourierSync);
+
+// One shutdown for SIGTERM (systemd restarts and deploys) and Ctrl+C. See utils/shutdown.js for why a
+// bare `process.on('SIGTERM', stopTimer)` is not enough: it stops the process from exiting at all.
+const closeHttp = () =>
+  new Promise(resolve => {
+    // Disconnects every websocket and stops taking new connections; resolves once the server is closed.
+    io.close(() => resolve());
+    // Idle keep-alive connections (the proxy's) would hold it open; drop them now and any stragglers soon.
+    server.closeIdleConnections();
+    setTimeout(() => server.closeAllConnections(), 3000).unref();
+  });
+const shutdown = createShutdown({
+  log: logger,
+  steps: [stopReminders, stopCourierSync, closeHttp, () => mongoose.connection.close()]
+});
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => void shutdown(signal));
 
 process.on('unhandledRejection', err => {
   logger.error({ err }, 'unhandled rejection');
