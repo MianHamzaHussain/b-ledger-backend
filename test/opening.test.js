@@ -102,7 +102,7 @@ test('material already on the shelf: into Raw materials, no cash out', async () 
     resource: material,
     body: materialPurchaseSchema.parse({ quantity: 50, amount: 5000, opening: true })
   });
-  assert.equal(out.body.data.paidFrom, 'Already had it (opening)');
+  assert.equal(out.body.data.paidFrom, 'Opening stock (no payment)');
   assert.equal((await Material.findById(material._id)).stock, 50);
   assert.equal(await net(biz, CODES.RAW_MATERIALS), 500000);
   assert.equal(await net(biz, CODES.CASH), 0);

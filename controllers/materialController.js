@@ -193,7 +193,7 @@ export const buyMaterial = asyncHandler(async (req, res, next) => {
     quantity: qty,
     valuePaisa: paisa,
     party: onCredit || paidToSupplier ? party : undefined,
-    paidFrom: opening ? 'Already had it (opening)' : onCredit ? undefined : money.name,
+    paidFrom: opening ? 'Opening stock (no payment)' : onCredit ? undefined : money.name,
     entry: entry._id,
     note,
     date: entry.date,
