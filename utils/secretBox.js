@@ -13,9 +13,16 @@ import ErrorResponse from './errorResponse.js';
  */
 const keyBytes = () => {
   const hex = process.env.COURIER_SECRET_KEY ?? '';
-  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+  if (!hex.trim()) {
     throw new ErrorResponse(
       'Courier connections are not set up on this server yet (COURIER_SECRET_KEY is missing)',
+      503
+    );
+  }
+  // Present but wrong is a different fix from missing: say which, so nobody hunts for a line that is there.
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new ErrorResponse(
+      'COURIER_SECRET_KEY is set but not valid: it must be exactly 64 characters, using only 0-9 and a-f',
       503
     );
   }
