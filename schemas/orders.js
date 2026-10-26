@@ -251,12 +251,14 @@ export const orderCreditSchema = z.object({
   amount: z.coerce.number().positive('Must be more than 0')
 });
 
-/** Paid for (what, how much, from where) — or taken from the material store. */
+/** Paid for (what, how much, from where, to whom) — or taken from the material store. */
 export const customCostSchema = z.union([
   z.object({
     description: z.string().trim().min(1, 'Describe the cost').max(200),
     amount: z.coerce.number().positive('Must be more than 0'),
-    account: z.string().min(1, 'Choose where the money came from')
+    account: z.string().min(1, 'Choose where the money came from'),
+    // Money that leaves must have someone receiving it, so the supplier's Khata can show it.
+    party: z.string().min(1, 'Choose who you paid')
   }),
   z.object({
     material: z.string().min(1, 'Choose the material'),

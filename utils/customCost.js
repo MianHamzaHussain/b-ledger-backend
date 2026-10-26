@@ -6,20 +6,24 @@ import MaterialMove from '../models/MaterialMove.js';
 import { takeMaterial, putBackMaterial, qtyText } from './materials.js';
 
 /**
- * Record a material/labor cost for a custom order.
- * Books Dr CUSTOM_WIP / Cr moneyAccount.
+ * Record a material/labor cost for a custom order, paid to a supplier (`party`).
+ * Books Dr CUSTOM_WIP / Cr Payables [supplier], then Dr Payables [supplier] / Cr the account it left —
+ * the supplier's Khata shows the bill and the payment, and their balance ends where it began.
  */
-export const recordCustomCost = async (order, description, amountPaisa, money, userId) => {
+export const recordCustomCost = async (order, description, amountPaisa, money, userId, party) => {
   await ensureChart(order.business);
   const wipAcc = await accountByCode(order.business, CODES.CUSTOM_WIP);
+  const payable = await accountByCode(order.business, CODES.ACCOUNTS_PAYABLE);
   const label = `${orderLabel(order)} · ${description}`;
 
   const entry = await postEntry({
     business: order.business,
-    memo: `Custom work material — ${label}`,
+    memo: `Custom work material — ${label} (${party.name})`,
     source: { kind: JOURNAL_SOURCES.CUSTOM_COST, ref: String(order._id) },
     lines: [
       { account: wipAcc._id, label, debitPaisa: amountPaisa },
+      { account: payable._id, party: party._id, label, creditPaisa: amountPaisa },
+      { account: payable._id, party: party._id, label, debitPaisa: amountPaisa },
       { account: money.account, label, creditPaisa: amountPaisa }
     ],
     userId
@@ -29,6 +33,8 @@ export const recordCustomCost = async (order, description, amountPaisa, money, u
     description,
     amountPaisa,
     accountName: money.partner ? `${money.name} (partner)` : money.name,
+    paidTo: party._id,
+    paidToName: party.name,
     entry: entry._id,
     by: userId
   });

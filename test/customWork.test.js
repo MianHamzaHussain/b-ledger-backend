@@ -15,7 +15,9 @@ import { orderCreateSchema, orderStatusSchema } from '../schemas/orders.js';
 import { createOrder, updateOrderStatus, addCustomCost } from '../controllers/orderController.js';
 import { toPaisa } from '../utils/money.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { accountBalance } from '../utils/ledger.js';
+import { accountBalance, partyStatement } from '../utils/ledger.js';
+import { customCostSchema } from '../schemas/orders.js';
+import { deleteCustomCost } from '../controllers/orderController.js';
 import { reverseJournalEntry } from '../controllers/financeController.js';
 
 before(connect);
@@ -26,11 +28,13 @@ async function setup() {
   const biz = await makeBusiness();
   const product = await makeProduct(biz._id);
   const courier = await makeParty(biz._id, 'courier');
+  const supplier = await makeParty(biz._id, 'supplier');
   const acc = async code => (await accountByCode(biz._id, code))._id;
   return {
     biz,
     product,
     courier,
+    supplier: String(supplier._id),
     cash: String(await acc(CODES.CASH)),
     bank: String(await acc(CODES.BANK)),
     liability: await acc(CODES.CUSTOMER_ADVANCES)
@@ -130,7 +134,7 @@ test('a cost added to a pending order shows up in customCosts and posts Dr CUSTO
 
   await runHandler(addCustomCost, {
     resource: order,
-    body: { description: 'Lace', amount: 300, account: ctx.cash }
+    body: { description: 'Lace', amount: 300, account: ctx.cash, party: ctx.supplier }
   });
   order = await Order.findById(order._id);
 
@@ -155,7 +159,7 @@ test('delivering that order moves that exact amount from CUSTOM_WIP to COGS', as
 
   await runHandler(addCustomCost, {
     resource: order,
-    body: { description: 'Lace', amount: 300, account: ctx.cash }
+    body: { description: 'Lace', amount: 300, account: ctx.cash, party: ctx.supplier }
   });
   order = await Order.findById(order._id);
 
@@ -189,7 +193,7 @@ test('cancelling the order instead moves it to CUSTOM_WRITE_OFF', async () => {
 
   await runHandler(addCustomCost, {
     resource: order,
-    body: { description: 'Lace', amount: 300, account: ctx.cash }
+    body: { description: 'Lace', amount: 300, account: ctx.cash, party: ctx.supplier }
   });
   order = await Order.findById(order._id);
 
@@ -214,7 +218,7 @@ test('reopening a cancelled order undoes the write-off', async () => {
   });
   await runHandler(addCustomCost, {
     resource: order,
-    body: { description: 'Lace', amount: 300, account: ctx.cash }
+    body: { description: 'Lace', amount: 300, account: ctx.cash, party: ctx.supplier }
   });
   order = await Order.findById(order._id);
   order = await setStatus(order, { status: 'cancelled' });
@@ -234,7 +238,7 @@ test('a material cost entry is undone on its order, never from the journal', asy
   });
   const out = await runHandler(addCustomCost, {
     resource: order,
-    body: { description: 'Lace', amount: 300, account: ctx.cash }
+    body: { description: 'Lace', amount: 300, account: ctx.cash, party: ctx.supplier }
   });
   const entry = await JournalEntry.findById(out.body.data.customCosts[0].entry);
   await assert.rejects(
@@ -260,5 +264,65 @@ test('a reduction can not take the total below 0', async () => {
   await assert.rejects(
     newOrder(ctx, { customWork: [{ description: 'Everything off', price: -5000 }] }),
     /can't be below 0/
+  );
+});
+
+test('a paid custom cost shows in the supplier’s Khata as a bill and a payment, ending at zero', async () => {
+  const ctx = await setup();
+  const order = await newOrder(ctx, {
+    customWork: [{ description: 'Shorten sleeves', price: 500 }]
+  });
+  await runHandler(addCustomCost, {
+    resource: order,
+    body: { description: 'Lace', amount: 300, account: ctx.cash, party: ctx.supplier }
+  });
+
+  const { rows, balancePaisa } = await partyStatement(ctx.biz._id, ctx.supplier);
+  assert.equal(rows.length, 2, 'the bill and the payment');
+  assert.equal(balancePaisa, 0);
+  assert.equal((await Order.findById(order._id)).customCosts[0].paidToName, 'Test supplier');
+});
+
+test('a paid custom cost with nobody paid is refused before anything posts', () => {
+  assert.equal(
+    customCostSchema.safeParse({ description: 'Lace', amount: 300, account: 'x' }).success,
+    false
+  );
+});
+
+test('the person paid must be a supplier of this business', async () => {
+  const ctx = await setup();
+  const order = await newOrder(ctx, { customWork: [{ description: 'Hem', price: 500 }] });
+  const other = await makeBusiness({ name: 'Other' });
+  const stranger = String((await makeParty(other._id, 'supplier'))._id);
+  for (const party of [stranger, ctx.courier._id, 'nonsense']) {
+    await assert.rejects(
+      runHandler(addCustomCost, {
+        resource: order,
+        body: { description: 'Lace', amount: 300, account: ctx.cash, party: String(party) }
+      }),
+      /Choose who you paid/
+    );
+  }
+  assert.equal((await Order.findById(order._id)).customCosts.length, 0);
+});
+
+test('removing that cost reverses both rows, so the Khata shows the undo and still ends at zero', async () => {
+  const ctx = await setup();
+  const order = await newOrder(ctx, { customWork: [{ description: 'Hem', price: 500 }] });
+  await runHandler(addCustomCost, {
+    resource: order,
+    body: { description: 'Lace', amount: 300, account: ctx.cash, party: ctx.supplier }
+  });
+  const saved = await Order.findById(order._id);
+  await runHandler(deleteCustomCost, {
+    resource: saved,
+    params: { costId: String(saved.customCosts[0]._id) }
+  });
+  assert.equal((await Order.findById(order._id)).customCosts.length, 0);
+  assert.equal((await partyStatement(ctx.biz._id, ctx.supplier)).balancePaisa, 0);
+  assert.equal(
+    await accountBalance(ctx.biz._id, (await accountByCode(ctx.biz._id, CODES.CASH))._id),
+    0
   );
 });

@@ -1430,12 +1430,18 @@ export const addCustomCost = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Costs can only be added before the order is dispatched', 400));
   }
 
-  const { description, amount, account, material, materialQty } = req.body;
+  const { description, amount, account, party, material, materialQty } = req.body;
   if (material) {
     await recordCustomCostFromMaterial(order, material, materialQty, req.user.id);
   } else {
+    const payee = mongoose.isValidObjectId(party)
+      ? await Party.findOne({ _id: party, business: order.business, type: PARTY_TYPES.SUPPLIER })
+      : null;
+    if (!payee) {
+      return next(new ErrorResponse('Choose who you paid — a supplier of this business', 400));
+    }
     const money = await resolveMoney(order.business, { account }, req.user);
-    await recordCustomCost(order, description, toPaisa(amount), money, req.user.id);
+    await recordCustomCost(order, description, toPaisa(amount), money, req.user.id, payee);
   }
   await order.save();
 

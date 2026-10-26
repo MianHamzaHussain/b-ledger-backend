@@ -7,7 +7,8 @@ import {
   makeBusiness,
   makeProduct,
   runHandler,
-  userId
+  userId,
+  makeParty
 } from './helpers/db.js';
 import Product from '../models/Product.js';
 import Material from '../models/Material.js';
@@ -23,6 +24,9 @@ import { createBatch, closeBatch, updateBatch } from '../controllers/productionC
  * sizes, so only the stitching costs (tailor, lace…) post to the books.
  */
 
+// Every paid cost names who was paid; this is that supplier, made with each test's business.
+let supplierId;
+
 before(connect);
 after(disconnect);
 afterEach(clear);
@@ -31,6 +35,7 @@ const admin = { id: userId, role: { fullAccess: true } };
 
 async function setup() {
   const biz = await makeBusiness();
+  supplierId = String((await makeParty(biz._id, 'supplier'))._id);
   const product = await makeProduct(biz._id, [
     { label: 'Unstitched', costPrice: 2500, salePrice: 4500, stock: 20 },
     { label: 'M', costPrice: 0, salePrice: 4500, stock: 0 },
@@ -65,7 +70,7 @@ const standardLines = ctx => [
   {
     variantId: ctx.id('M'),
     quantity: 5,
-    costLines: [{ label: 'Tailor', amount: 2000, fund: 'cash' }]
+    costLines: [{ label: 'Tailor', amount: 2000, fund: 'cash', paidTo: supplierId }]
   },
   { variantId: ctx.id('L'), quantity: 3, costLines: [] }
 ];
@@ -147,7 +152,9 @@ test('a from-stock cost sent by the client is ignored, not added on top', async 
     {
       variantId: ctx.id('M'),
       quantity: 5,
-      costLines: [{ label: 'Fake', amount: 99999, fund: 'cash', fromStock: true }]
+      costLines: [
+        { label: 'Fake', amount: 99999, fund: 'cash', paidTo: supplierId, fromStock: true }
+      ]
     }
   ]);
   await close(created.body.data._id);
@@ -169,7 +176,7 @@ test('correcting a closed stitch keeps its from-stock lines and does not take st
         {
           variantId: ctx.id('M'),
           quantity: 5,
-          costLines: [{ label: 'Tailor', amount: 2500, fund: 'cash' }]
+          costLines: [{ label: 'Tailor', amount: 2500, fund: 'cash', paidTo: supplierId }]
         },
         { variantId: ctx.id('L'), quantity: 3, costLines: [] }
       ]

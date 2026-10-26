@@ -7,7 +7,8 @@ import {
   makeBusiness,
   makeProduct,
   runHandler,
-  userId
+  userId,
+  makeParty
 } from './helpers/db.js';
 import Product from '../models/Product.js';
 import ProductionBatch from '../models/ProductionBatch.js';
@@ -24,6 +25,9 @@ import { toPaisa } from '../utils/money.js';
  * up in COGS — so inventory and the product's valuation stay in step.
  */
 
+// Every paid cost names who was paid; this is that supplier, made with each test's business.
+let supplierId;
+
 before(connect);
 after(disconnect);
 afterEach(clear);
@@ -31,11 +35,12 @@ afterEach(clear);
 const admin = { id: userId, role: { fullAccess: true } };
 const staff = { id: userId, role: { fullAccess: false, permissions: [] } };
 
-const costLines = amount => [{ label: 'Cloth', amount, fund: 'cash' }];
+const costLines = amount => [{ label: 'Cloth', amount, fund: 'cash', paidTo: supplierId }];
 
 /** 10 units closed at Rs 10,000 (unit 1,000), then 4 of them sold. */
 async function closedBatchWithSales() {
   const biz = await makeBusiness();
+  supplierId = String((await makeParty(biz._id, 'supplier'))._id);
   const product = await makeProduct(biz._id, [
     { label: 'M', costPrice: 0, salePrice: 2000, stock: 0 }
   ]);

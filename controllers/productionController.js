@@ -90,11 +90,19 @@ const buildBatchLines = (product, lines, source = null, withFromStock = true) =>
       if (fund === 'opening') {
         return { label, amountPaisa: toPaisa(amount), onCredit: false, opening: true };
       }
-      if (fund === 'cash' || fund === 'bank') {
-        return { label, amountPaisa: toPaisa(amount), method: fund, onCredit: false };
-      }
-      if (fund.startsWith(MONEY_PREFIX) || fund.startsWith(PARTNER_MONEY_PREFIX)) {
-        return { label, amountPaisa: toPaisa(amount), onCredit: false, moneyRef: fund };
+      // A cost paid from an account must say WHO was paid: money that leaves with no one receiving it
+      // leaves the supplier's Khata unable to answer "what did we pay them?".
+      const isPaid =
+        fund === 'cash' ||
+        fund === 'bank' ||
+        fund.startsWith(MONEY_PREFIX) ||
+        fund.startsWith(PARTNER_MONEY_PREFIX);
+      if (isPaid) {
+        const paidTo = c.paidTo ? String(c.paidTo) : '';
+        if (!paidTo) throw new ErrorResponse(`Choose who you paid for "${label}"`, 400);
+        const paid = { label, amountPaisa: toPaisa(amount), onCredit: false, party: paidTo };
+        if (fund === 'cash' || fund === 'bank') return { ...paid, method: fund };
+        return { ...paid, moneyRef: fund };
       }
       return { label, amountPaisa: toPaisa(amount), onCredit: true, party: fund };
     });
@@ -164,11 +172,13 @@ const resolveMaterialLines = async (business, batchLines) => {
   return batchLines;
 };
 
-/** Every on-credit cost must name a party that belongs to this business. */
+/** Every cost that names a supplier — owed to them, or paid to them — must name one of this business. */
 const validateCostParties = async (business, batchLines) => {
   const ids = [
     ...new Set(
-      batchLines.flatMap(l => (l.costLines || []).filter(c => c.onCredit).map(c => String(c.party)))
+      batchLines.flatMap(l =>
+        (l.costLines || []).filter(c => c.onCredit || c.party).map(c => String(c.party))
+      )
     )
   ];
   if (!ids.length) return;
@@ -210,6 +220,9 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
 
   const debits = [];
   const groups = new Map();
+  // Paid to a supplier: their payable is raised and cleared in the same entry, so the Khata shows the
+  // bill AND the payment (as goods-received "paid now" does) and the balance ends where it began.
+  const settles = new Map();
   for (const line of batch.lines) {
     for (const c of line.costLines || []) {
       // Stock moved between sizes: nothing was spent, so nothing posts.
@@ -237,6 +250,14 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
       } else if (c.onCredit) {
         key = `payable:${c.party}`;
         cl = { account: payable._id, party: c.party, creditPaisa: 0 };
+      } else if (c.party) {
+        key = `payable:${c.party}`;
+        cl = { account: payable._id, party: c.party, creditPaisa: 0 };
+        const from = c.moneyAccount || (c.method === 'bank' ? bank._id : cash._id);
+        const sk = `${c.party}|${from}`;
+        const s = settles.get(sk) || { party: c.party, account: from, paisa: 0 };
+        s.paisa += amt;
+        settles.set(sk, s);
       } else if (c.moneyAccount) {
         key = `money:${c.moneyAccount}`;
         cl = { account: c.moneyAccount, creditPaisa: 0 };
@@ -260,7 +281,14 @@ const postBatchEntry = async (batch, prod, userId, memoPrefix = 'Production') =>
     business: batch.business,
     memo: `${memoPrefix} — ${articleOf(prod)}`,
     source: { kind: JOURNAL_SOURCES.BATCH, ref: String(batch._id) },
-    lines: [...debits, ...groups.values()],
+    lines: [
+      ...debits,
+      ...groups.values(),
+      ...[...settles.values()].flatMap(s => [
+        { account: payable._id, party: s.party, debitPaisa: s.paisa },
+        { account: s.account, creditPaisa: s.paisa }
+      ])
+    ],
     userId
   });
 };
@@ -490,6 +518,18 @@ export const closeBatch = asyncHandler(async (req, res, next) => {
       if (l.variantId != null && l.salePrice != null)
         overrides[String(l.variantId)] = Number(l.salePrice);
     }
+  }
+
+  const unnamed = batch.lines
+    .flatMap(l => l.costLines || [])
+    .find(c => !c.onCredit && !c.opening && !c.material && !c.fromStock && !c.party);
+  if (unnamed) {
+    return next(
+      new ErrorResponse(
+        `Choose who you paid for "${unnamed.label}" — open the batch and pick the supplier before closing`,
+        400
+      )
+    );
   }
 
   await ensureChart(batch.business);
