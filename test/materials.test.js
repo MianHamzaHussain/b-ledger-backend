@@ -60,7 +60,8 @@ async function setup() {
 const buy = async (material, quantity, amount, extra = {}) =>
   runHandler(buyMaterial, {
     resource: await Material.findById(material._id),
-    body: { quantity, amount, method: 'cash', ...extra }
+    // Paid now names who was paid (this business's supplier) unless a test says otherwise.
+    body: { quantity, amount, method: 'cash', party: supplierId, ...extra }
   });
 
 const reload = m => Material.findById(m._id);
@@ -420,4 +421,22 @@ test('undoing a paid-now purchase leaves the supplier at 0 with the reversal in 
   const { rows } = await partyStatement(biz._id, supplier._id);
   assert.equal(rows.length, 4, 'two original rows and their two reversals');
   assert.equal(await balance(biz, CODES.CASH), 0);
+});
+
+test('buying a material with Paid now and nobody paid is refused, and nothing is booked', async () => {
+  const { biz, material } = await setup();
+  await assert.rejects(buy(material, 10, 5000, { party: undefined }), /Choose who you paid/);
+  assert.equal((await reload(material)).stock, 0);
+  assert.equal(await balance(biz, CODES.RAW_MATERIALS), 0);
+});
+
+test('on credit and opening stock are unchanged: credit names who is owed, opening needs nobody', async () => {
+  const { biz, material } = await setup();
+  await assert.rejects(
+    buy(material, 10, 5000, { onCredit: true, party: undefined }),
+    /Choose the supplier this is owed to/
+  );
+  await buy(material, 10, 5000, { opening: true, party: undefined });
+  assert.equal((await reload(material)).stock, 10);
+  assert.equal(await balance(biz, CODES.RAW_MATERIALS), 500000);
 });

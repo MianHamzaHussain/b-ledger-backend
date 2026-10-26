@@ -120,8 +120,12 @@ export const buyMaterial = asyncHandler(async (req, res, next) => {
   if (onCredit && !opening && !party) {
     return next(new ErrorResponse('Choose the supplier this is owed to', 400));
   }
-  // A supplier is named on credit, and optionally when paid now (so their Khata
-  // shows the bill and its payment). Either way it must be this business's.
+  // Money that leaves must say who received it: a supplier is named on credit AND when paid now (so
+  // their Khata shows the bill and its payment). Opening stock moves no money and needs none.
+  if (!onCredit && !opening && !party) {
+    return next(new ErrorResponse('Choose who you paid', 400));
+  }
+  // Either way it must be this business's.
   if (party && !opening && !(await Party.exists({ _id: party, business }))) {
     return next(new ErrorResponse('That supplier is not a party of this business', 400));
   }
