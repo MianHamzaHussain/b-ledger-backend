@@ -171,3 +171,27 @@ test('the scope is the widest permission that allows it', () => {
   );
   assert.equal(lookupScope(userWith([biz], ['orders', ['update']]), 'supplier'), null);
 });
+
+test('it pages like every list: five at a time, a next page while more remain, none after the last', async () => {
+  const biz = await makeBusiness();
+  for (const name of ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7']) {
+    await makeParty(biz._id, 'courier', { name });
+  }
+  const dispatcher = userWith([biz], ['orders', ['update']]);
+  const q = page =>
+    ask(dispatcher, { business: String(biz._id), type: 'courier', limit: '5', page });
+
+  const first = await q('1');
+  assert.deepEqual(
+    first.body.data.map(p => p.name),
+    ['A1', 'A2', 'A3', 'A4', 'A5']
+  );
+  assert.deepEqual(first.body.pagination, { next: { page: 2, limit: 5 } });
+
+  const second = await q('2');
+  assert.deepEqual(
+    second.body.data.map(p => p.name),
+    ['A6', 'A7']
+  );
+  assert.deepEqual(second.body.pagination, {}, 'the last page names no next page');
+});

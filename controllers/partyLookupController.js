@@ -11,7 +11,7 @@ const escape = text => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * @desc   Pick a party for a task — name, phone and account id only, never a balance or a statement.
  *         Allowed for whoever has the permission for the task that needs the person (a dispatcher
  *         may pick a courier), or Khata access. See utils/partyLookup.js.
- * @route  GET /api/v1/parties/lookup?business=&type=&search=&limit=
+ * @route  GET /api/v1/parties/lookup?business=&type=&search=&limit=&page=  (pages like every list: `pagination.next`)
  */
 export const lookupParties = asyncHandler(async (req, res, next) => {
   const { business, type, search = '' } = req.query;
@@ -31,14 +31,19 @@ export const lookupParties = asyncHandler(async (req, res, next) => {
   }
 
   const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), MAX);
+  const page = Math.max(Math.floor(Number(req.query.page)) || 1, 1);
   const find = { business, type, isActive: true };
   if (String(search).trim()) find.name = { $regex: escape(String(search).trim()), $options: 'i' };
 
-  const parties = await Party.find(find)
+  // One extra row says whether another page exists, without a second count query.
+  const found = await Party.find(find)
     .select('name phone accountId type integration.isEnabled')
-    .sort('name')
-    .limit(limit)
+    .sort('name _id')
+    .skip((page - 1) * limit)
+    .limit(limit + 1)
     .lean();
+  const parties = found.slice(0, limit);
+  const pagination = found.length > limit ? { next: { page: page + 1, limit } } : {};
 
   const data = parties.map(p => ({
     _id: p._id,
@@ -51,5 +56,5 @@ export const lookupParties = asyncHandler(async (req, res, next) => {
       ? { booksWithService: Boolean(p.integration?.isEnabled) }
       : {})
   }));
-  res.status(200).json({ success: true, count: data.length, data });
+  res.status(200).json({ success: true, count: data.length, pagination, data });
 });
