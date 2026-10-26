@@ -35,6 +35,8 @@ test('a list row carries what was ordered, with no price or cost', async () => {
   }).save();
 
   const [row] = await Order.find({ business: biz._id }).select(ORDER_LIST_FIELDS).lean();
+  // The row shows who it is for by phone number — WhatsApp customers are known by it.
+  assert.equal(row.contactNumber, '03001112222');
   assert.deepEqual(
     Object.keys(row.items[0]).sort(),
     ['productName', 'quantity', 'variantLabel'].sort()

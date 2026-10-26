@@ -12,6 +12,7 @@ export const ORDER_LIST_FIELDS = [
   'dailySerial',
   'orderDay',
   'customerName',
+  'contactNumber',
   'city',
   'trackingId',
   'customerNote',

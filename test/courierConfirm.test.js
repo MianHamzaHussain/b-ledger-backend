@@ -204,3 +204,82 @@ test('only a dispatched, courier-booked parcel can be cancelled there', async ()
     /dispatched parcel booked through a courier/
   );
 });
+
+test('cancel and reopen: the order goes back to Confirmed, tracking cleared, stock still held, and can be booked again', async () => {
+  const { creates } = fakePostex({});
+  const made = await setupOrder();
+  await dispatchBooked(made.order, made.courier);
+  const stockBefore = (await Product.findById(made.order.items[0].product)).variants[0].stock;
+
+  const out = await runHandler(cancelCourierParcel, {
+    user: admin,
+    resource: await Order.findById(made.order._id),
+    body: { reopen: true }
+  });
+  assert.equal(out.body.data.status, 'confirmed');
+
+  const fresh = await Order.findById(made.order._id);
+  assert.equal(fresh.status, 'confirmed');
+  assert.equal(fresh.trackingId, undefined);
+  assert.equal(fresh.courierBooking, undefined);
+  assert.equal(fresh.dispatchedAt, undefined);
+  assert.equal(fresh.attemptsTracked, false);
+  assert.match(fresh.statusHistory.at(-1).note, /back to Confirmed/);
+  assert.equal(
+    (await Product.findById(made.order.items[0].product)).variants[0].stock,
+    stockBefore,
+    'the pieces are still held for this order'
+  );
+
+  // The fix is made on the order, then it is booked again — a second, new parcel.
+  await dispatchBooked(fresh, made.courier);
+  assert.equal(creates.length, 2);
+  assert.equal((await Order.findById(made.order._id)).trackingId, 'CX-1002');
+});
+
+test('cancel and reopen leaves the order untouched if the courier refuses', async () => {
+  fakePostex({});
+  const made = await setupOrder();
+  await dispatchBooked(made.order, made.courier);
+  fakePostex({ failCancel: 'Order already picked up' });
+
+  await assert.rejects(
+    runHandler(cancelCourierParcel, {
+      user: admin,
+      resource: await Order.findById(made.order._id),
+      body: { reopen: true }
+    }),
+    /already picked up/
+  );
+  const fresh = await Order.findById(made.order._id);
+  assert.equal(fresh.status, 'dispatched');
+  assert.equal(fresh.trackingId, 'CX-1001');
+});
+
+test('a parcel already cancelled at the courier does not block the reopen', async () => {
+  fakePostex({});
+  const made = await setupOrder();
+  await dispatchBooked(made.order, made.courier);
+  // The courier says it is cancelled already; asking it to cancel again would fail.
+  const { calls } = fakePostex({
+    failCancel: 'Order is already cancelled',
+    tracking: {
+      'CX-1001': {
+        transactionStatus: 'Cancelled',
+        transactionStatusHistory: [
+          {
+            transactionStatusMessageCode: '0002',
+            transactionStatusMessage: 'Booking Cancelled by Merchant'
+          }
+        ]
+      }
+    }
+  });
+  await runHandler(cancelCourierParcel, {
+    user: admin,
+    resource: await Order.findById(made.order._id),
+    body: { reopen: true }
+  });
+  assert.ok(!calls.some(u => u.includes('cancel-order')), 'no second cancel was sent');
+  assert.equal((await Order.findById(made.order._id)).status, 'confirmed');
+});

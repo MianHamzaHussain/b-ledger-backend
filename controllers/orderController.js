@@ -1250,11 +1250,17 @@ export const getLoadSheet = asyncHandler(async (req, res, next) => {
 });
 
 /**
- * @desc   Cancel a parcel at the courier before it is picked up. The order is then returned with
- *         no charge — the goods never left, so stock goes back — through the normal status path.
- *         If the courier refuses (already picked up), nothing here changes.
- * @route  POST /api/v1/orders/:id/courier-cancel  (orders:update — scoped)
+ * @desc   Cancel a parcel at the courier before it is picked up. If the courier refuses (already
+ *         picked up), nothing here changes. Then, by choice:
+ *           reopen: true  — the order goes back to **Confirmed** with its tracking cleared and its stock
+ *                           still held, so a wrong slip is fixed on the order and booked again;
+ *           otherwise     — the order is **returned** with no charge (the goods never left, so stock
+ *                           goes back), through the normal status path.
+ * @route  POST /api/v1/orders/:id/courier-cancel  (orders:update — scoped)  body: { reopen? }
  */
+/** PostEx's history code for "Booking Cancelled by Merchant". */
+const CANCELLED_CODE = '0002';
+
 export const cancelCourierParcel = asyncHandler(async (req, res, next) => {
   const order = req.resource;
   const tracking = order.courierBooking?.trackingNumber;
@@ -1267,7 +1273,25 @@ export const cancelCourierParcel = asyncHandler(async (req, res, next) => {
     );
   }
   const { api } = await adapterFor(order.courier, { requireEnabled: false });
-  await api.cancel(tracking);
+  // A second try after the first one half-worked must not fail on "already cancelled".
+  const known = await api.track(tracking).catch(() => null);
+  const alreadyCancelled = known?.history?.at(-1)?.code === CANCELLED_CODE;
+  if (!alreadyCancelled) await api.cancel(tracking);
+
+  if (req.body?.reopen === true) {
+    // Dispatching posted nothing and the stock is held the same before and after it, so undoing it
+    // is just the order's own fields; the COD follows the advance again once it is not frozen.
+    order.status = ORDER_STATUS.CONFIRMED;
+    order.dispatchedAt = undefined;
+    order.trackingId = undefined;
+    order.attemptsTracked = false;
+    order.courierBooking = undefined;
+    order.updatedBy = req.user.id;
+    order.$locals.statusNote = 'Parcel cancelled at the courier before pickup — back to Confirmed';
+    await order.save();
+    return res.status(200).json({ success: true, data: order });
+  }
+
   const data = await changeStatusAsUser(order, req.user, {
     status: ORDER_STATUS.RETURNED,
     deliveryCharge: 0,
