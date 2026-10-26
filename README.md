@@ -423,6 +423,12 @@ sudo kill -HUP "$(systemctl show -p MainPID --value bledger-api)"
 sleep 6; systemctl is-active bledger-api            # active again, new PID
 ```
 
+**A restart takes seconds.** `sudo systemctl restart bledger-api` (and every deploy) should finish in about
+two seconds: the API stops its timers, closes connections and the database, then exits (`utils/shutdown.js`). If
+the journal ever shows `State 'stop-sigterm' timed out. Killing.`, the API is hanging on shutdown again — that was
+a 90-second outage on every deploy until 2026-10-27, caused by a `SIGTERM` listener that stopped a timer but never
+exited. Time it: `time sudo systemctl restart bledger-api`.
+
 Then `sudo reboot`, wait two minutes, and the health check must answer without
 you touching anything. Add an external uptime check (for example UptimeRobot,
 free) on `https://backend.bledger.org/api/v1/health` so an outage reaches you instead of
