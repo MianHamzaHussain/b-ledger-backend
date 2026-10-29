@@ -168,6 +168,12 @@ export const orderLoadSheetSchema = z.object({
   orderIds: z.array(id).min(1, 'Choose at least one order').max(100)
 });
 
+/** Print many airway bills at once — up to 100, in the order they were ticked. */
+export const orderAirwayBillsSchema = z.object({
+  business: id,
+  orderIds: z.array(id).min(1, 'Choose at least one order').max(100, 'Print at most 100 at a time')
+});
+
 /** Book the orders that were waiting for a courier city that has reopened. */
 export const orderBookWaitingSchema = z.object({
   business: id,

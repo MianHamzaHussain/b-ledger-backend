@@ -1,4 +1,5 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { protect } from '../middlewares/auth.js';
 import {
   can,
@@ -28,6 +29,7 @@ import {
   orderLoadSheetSchema,
   orderPhrasesSchema,
   orderBookWaitingSchema,
+  orderAirwayBillsSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -64,6 +66,7 @@ import {
   refreshCourierStatus,
   getRequestPhrases,
   bookWaitingOrders,
+  printAirwayBills,
   setRequestPhrases,
   getCourierParcels,
   getParcelPreview,
@@ -161,6 +164,51 @@ router.get('/summary', can('orders', 'read'), getOrderSummary);
  *     responses:
  *       200: { description: "{ booked, results: [{ id, ok, reason? }] }" }
  */
+/**
+ * Printing many bills asks the courier several times; a few batches a minute is plenty for a person, and
+ * a stuck button must not hammer the courier's service.
+ */
+const airwayBillLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  keyGenerator: req => String(req.user?.id ?? 'anonymous'),
+  message: { success: false, error: 'Too many bill batches. Wait a minute and try again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { keyGeneratorIpFallback: false }
+});
+
+/**
+ * @swagger
+ * /orders/airway-bills:
+ *   post:
+ *     summary: The airway bills of many orders as one PDF (up to 100, in the order ticked)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business, orderIds]
+ *             properties:
+ *               business: { type: string }
+ *               orderIds: { type: array, maxItems: 100, items: { type: string } }
+ *     responses:
+ *       200: { description: "A PDF. `X-Airway-Skipped` names any parcel the courier gave no bill for." }
+ *       400: { description: None of them was booked through a courier service }
+ *       429: { description: Too many batches }
+ */
+router.post(
+  '/airway-bills',
+  can('orders', 'read'),
+  airwayBillLimiter,
+  restrictBusinessToScope(),
+  validate(orderAirwayBillsSchema),
+  printAirwayBills
+);
+
 router.post(
   '/book-waiting',
   can('orders', 'update'),

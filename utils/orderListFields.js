@@ -41,6 +41,7 @@ export const ORDER_LIST_FIELDS = [
   'awaitingCity.openedAt',
   'courierBooking.provider',
   'courierBooking.courierStatus',
+  'courierBooking.billPrinted',
   'courierBooking.phase',
   'courierBooking.needsAttention',
   // Each reason only (not the notes) — the row says "Attempt 2 — customer not available".

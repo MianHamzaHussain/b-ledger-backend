@@ -968,6 +968,16 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   dispatch path — one tap, because a booking creates a real parcel. A changed city, or a successful booking,
   clears the hold.
 
+- **Many airway bills as one PDF** (R9-10). `POST /orders/airway-bills { business, orderIds ≤ 100 }`
+  (`orders:read`, business in scope, 20 batches a minute per user) asks the courier **10 bills a call, three
+  calls at a time** (PostEx's limit is 10 and one PDF per call), retries a rejected call **parcel by parcel**
+  so one bad parcel never blocks the rest, and stitches the PDFs with `pdf-lib` (pure JavaScript, pinned) in
+  **the order ticked**. Another business's order is never named or fetched; an order with no courier parcel
+  is listed in the `X-Airway-Skipped` header (exposed to the browser) and the rest print. A bill that
+  printed stamps `courierBooking.billPrinted / billPrintedAt / billPrintedBy` (the single bill does too);
+  a new booking starts `billPrinted: false`, which is what the "Not printed yet" filter reads — bookings made
+  before this release have no flag and do not appear under it.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

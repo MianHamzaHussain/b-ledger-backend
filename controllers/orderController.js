@@ -22,6 +22,7 @@ import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
 import { refreshParcel } from '../utils/courierSync.js';
 import { assertNotBlocked } from '../utils/customerBlock.js';
+import { airwayBillsFor } from '../utils/airwayBills.js';
 import {
   buildTimeline,
   itemsSummary,
@@ -1368,6 +1369,41 @@ export const refreshCourierStatus = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data });
 });
 
+/** Stamp parcels as printed (who, when) — the list shows "Printed" and filters "Not printed yet". */
+const markBillsPrinted = (ids, userId) =>
+  Order.updateMany(
+    { _id: { $in: ids } },
+    {
+      $set: {
+        'courierBooking.billPrinted': true,
+        'courierBooking.billPrintedAt': new Date(),
+        'courierBooking.billPrintedBy': userId
+      }
+    },
+    { timestamps: false }
+  );
+
+/**
+ * @desc   The airway bills of up to 100 ticked orders as ONE PDF, in the order ticked. A parcel the
+ *         courier would not give a bill for is named in `X-Airway-Skipped`; the rest still print.
+ * @route  POST /api/v1/orders/airway-bills  (orders:read — business must be in scope)
+ */
+export const printAirwayBills = asyncHandler(async (req, res) => {
+  const { business, orderIds } = req.body;
+  const { pdf, printed, skipped } = await airwayBillsFor({ business, orderIds });
+  await markBillsPrinted(printed, req.user.id);
+
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="airway-bills-${pakistanDay()}.pdf"`,
+      'Access-Control-Expose-Headers': 'X-Airway-Skipped',
+      'X-Airway-Skipped': skipped.map(s => `#${s.orderNumber}`).join(', ')
+    })
+    .send(pdf);
+});
+
 /**
  * @desc   The courier's airway bill (a PDF) for an order booked through its service. Fetched by the
  *         server with the saved key, so the key never reaches the browser.
@@ -1381,6 +1417,7 @@ export const getAirwayBill = asyncHandler(async (req, res, next) => {
   }
   const { api } = await adapterFor(order.courier, { requireEnabled: false });
   const pdf = await api.airwayBill([tracking]);
+  await markBillsPrinted([order._id], req.user.id);
   res
     .status(200)
     .set({

@@ -384,6 +384,10 @@ const OrderSchema = new mongoose.Schema(
           phaseAt: { type: Date },
           /** A failed try or a review hold — what the "Needs attention" count and filter read. */
           needsAttention: { type: Boolean, default: undefined },
+          /** The airway bill was printed — lets the list show "Printed" and filter "Not printed yet". */
+          billPrinted: { type: Boolean },
+          billPrintedAt: { type: Date },
+          billPrintedBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
           lastSyncAt: { type: Date },
           /** What the courier says it charged — rupees. Filled in when it reports delivered/returned. */
           fee: { type: Number },

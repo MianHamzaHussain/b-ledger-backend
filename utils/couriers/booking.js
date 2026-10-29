@@ -183,7 +183,8 @@ export const bookParcel = async (order, courierId, { remarks } = {}) => {
             courierStatusAt: new Date(),
             // What PostEx was actually given, so the order can say so (and notice a later edit).
             remarks: parcel.transactionNotes,
-            sentContents: parcel.orderDetail
+            sentContents: parcel.orderDetail,
+            billPrinted: false
           },
           trackingId: made.trackingNumber,
           // From here the order carries the names the slip shows.
