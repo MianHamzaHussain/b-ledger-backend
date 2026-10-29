@@ -15,21 +15,34 @@ export const orderSummary = async (business, now = new Date()) => {
   const today = { $gte: startOfPakistanDay(day), $lte: endOfPakistanDay(day) };
   const scope = { business: new mongoose.Types.ObjectId(String(business)) };
 
-  const [createdToday, dispatchedToday, deliveredToday, dueNow, courierReady, grouped] =
-    await Promise.all([
-      Order.countDocuments({ ...scope, createdAt: today }),
-      Order.countDocuments({ ...scope, dispatchedAt: today }),
-      Order.countDocuments({ ...scope, deliveredAt: today }),
-      // Booked orders whose day has come (or gone) — what the daily alert is about.
-      Order.countDocuments({ ...scope, status: 'booked', bookedFor: { $lte: day } }),
-      // Parcels the courier says are delivered / returned, waiting for one tap to confirm.
-      Order.countDocuments({
-        ...scope,
-        status: 'dispatched',
-        'courierBooking.confirmable': { $exists: true }
-      }),
-      Order.aggregate([{ $match: scope }, { $group: { _id: '$status', count: { $sum: 1 } } }])
-    ]);
+  const [
+    createdToday,
+    dispatchedToday,
+    deliveredToday,
+    dueNow,
+    courierReady,
+    needsAttention,
+    grouped
+  ] = await Promise.all([
+    Order.countDocuments({ ...scope, createdAt: today }),
+    Order.countDocuments({ ...scope, dispatchedAt: today }),
+    Order.countDocuments({ ...scope, deliveredAt: today }),
+    // Booked orders whose day has come (or gone) — what the daily alert is about.
+    Order.countDocuments({ ...scope, status: 'booked', bookedFor: { $lte: day } }),
+    // Parcels the courier says are delivered / returned, waiting for one tap to confirm.
+    Order.countDocuments({
+      ...scope,
+      status: 'dispatched',
+      'courierBooking.confirmable': { $exists: true }
+    }),
+    // A failed delivery try, or the courier holding the parcel for review.
+    Order.countDocuments({
+      ...scope,
+      status: 'dispatched',
+      'courierBooking.needsAttention': true
+    }),
+    Order.aggregate([{ $match: scope }, { $group: { _id: '$status', count: { $sum: 1 } } }])
+  ]);
 
   const byStatus = Object.fromEntries(grouped.map(g => [g._id, g.count]));
   return {
@@ -38,6 +51,7 @@ export const orderSummary = async (business, now = new Date()) => {
     deliveredToday,
     dueNow,
     courierReady,
+    needsAttention,
     pending: byStatus.pending ?? 0,
     byStatus
   };

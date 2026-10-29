@@ -1,8 +1,10 @@
 import Order from '../models/Order.js';
 import { notify } from './notify.js';
+import ErrorResponse from './errorResponse.js';
 import { adapterFor } from './couriers/index.js';
 import { NOTIFICATION_TYPES, ORDER_STATUS } from './constants.js';
 import logger from './logger.js';
+import { NEEDS_ATTENTION, PHASES, phaseOf } from './couriers/statusWords.js';
 
 /**
  * Keep dispatched parcels in step with the courier. PostEx has no webhook, so this ASKS: every few
@@ -42,6 +44,7 @@ export const readStatus = ({ status: text = '', history = [] }) => {
 /** "Attempt Made: Customer not available" → our reason list, with the courier's words kept as the note. */
 export const attemptReason = message => {
   const m = message.toLowerCase();
+  if (/reschedul|later|another day|postpone|delay|tomorrow/.test(m)) return 'rescheduled';
   if (/refus|not interested|cancel/.test(m)) return 'refused';
   if (/wrong|incomplete|incorrect|address|location/.test(m)) return 'wrong-address';
   if (/unreach|not respond|no answer|switched off|phone|contact/.test(m)) return 'unreachable';
@@ -66,7 +69,25 @@ const apply = async (order, fresh) => {
     set['courierBooking.courierStatusAt'] = new Date();
     out.updated = true;
   }
-  set['courierBooking.history'] = fresh.history;
+  // The journey, each step stamped with when WE first noticed it (PostEx sends no time of its own):
+  // a step already stored keeps its stamp, so "seen 3:15 pm" never slides forward on a later check.
+  const stored = order.courierBooking.history ?? [];
+  const noticed = new Date();
+  set['courierBooking.history'] = fresh.history.map((h, i) => ({
+    ...h,
+    seenAt: stored[i]?.code === h.code && stored[i]?.seenAt ? stored[i].seenAt : noticed
+  }));
+
+  // The courier's state in plain phases, and whether it needs a person's eye.
+  const phase = phaseOf(fresh);
+  const phaseChanged = phase !== order.courierBooking.phase;
+  if (phaseChanged) {
+    set['courierBooking.phase'] = phase;
+    set['courierBooking.phaseAt'] = noticed;
+    out.updated = true;
+  }
+  if (NEEDS_ATTENTION.has(phase)) set['courierBooking.needsAttention'] = true;
+  else if (order.courierBooking.needsAttention) unset['courierBooking.needsAttention'] = 1;
 
   // Both fees, in rupees, as the courier reports them (only meaningful once it has settled the parcel).
   if (kind === 'delivered') {
@@ -109,6 +130,29 @@ const apply = async (order, fresh) => {
   if (result.modifiedCount === 1 && added.length) out.updated = true;
   if (result.modifiedCount !== 1) return { updated: false, ready: false };
 
+  const who = `#${order.orderNumber} ${order.customerName}`;
+  // A new failed try rings the bell once, with the courier's reason (the attempts filter above means
+  // a second run adds nothing, so it can not ring twice).
+  if (added.length) {
+    await notify({
+      business: order.business,
+      type: NOTIFICATION_TYPES.COURIER_ISSUE,
+      title: `Delivery try failed — ${who}`,
+      body: added.at(-1).note.replace(/^PostEx:\s*/, ''),
+      link: `/orders/${order._id}`
+    });
+  }
+  // "Delivery under review" rings once, when the parcel first enters it.
+  if (phaseChanged && phase === PHASES.UNDER_REVIEW) {
+    await notify({
+      business: order.business,
+      type: NOTIFICATION_TYPES.COURIER_ISSUE,
+      title: `The courier is reviewing the delivery — ${who}`,
+      body: 'Open the order to see what it says.',
+      link: `/orders/${order._id}`
+    });
+  }
+
   if (out.ready) {
     await notify({
       business: order.business,
@@ -119,6 +163,29 @@ const apply = async (order, fresh) => {
     });
   }
   return out;
+};
+
+/**
+ * Ask the courier about ONE parcel right now — for the "Refresh now" button, so nobody waits for the
+ * next 15-minute pass while a customer is on the phone. Applies exactly what the pass would. A second
+ * tap within a few seconds reuses the first answer instead of asking again.
+ */
+const REFRESH_COOLDOWN_MS = 10_000;
+export const refreshParcel = async order => {
+  const tracking = order.courierBooking?.trackingNumber;
+  if (order.status !== ORDER_STATUS.DISPATCHED || !tracking || !order.courier) {
+    throw new ErrorResponse(
+      'Only a dispatched parcel booked through a courier can be refreshed',
+      400
+    );
+  }
+  const last = order.courierBooking.lastSyncAt;
+  if (last && Date.now() - new Date(last).getTime() < REFRESH_COOLDOWN_MS) return order;
+
+  const { api } = await adapterFor(order.courier);
+  const fresh = await api.track(tracking);
+  await apply(order, fresh);
+  return Order.findById(order._id);
 };
 
 /** One pass: ask each connected courier about its parcels that are still out. */

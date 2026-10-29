@@ -20,6 +20,7 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
+import { refreshParcel } from '../utils/courierSync.js';
 import {
   buildTimeline,
   itemsSummary,
@@ -1283,6 +1284,16 @@ export const confirmCourierStatus = asyncHandler(async (req, res) => {
     success: true,
     data: { confirmed: results.filter(r => r.ok).length, results }
   });
+});
+
+/**
+ * @desc   Ask the courier about this one parcel right now and apply what it says — the same thing
+ *         the 15-minute check does, on demand.
+ * @route  POST /api/v1/orders/:id/courier-refresh  (orders:update — scoped)
+ */
+export const refreshCourierStatus = asyncHandler(async (req, res) => {
+  const data = await refreshParcel(req.resource);
+  res.status(200).json({ success: true, data });
 });
 
 /**

@@ -914,6 +914,19 @@ by, system }`. `by` is the token's user, never the body; a system event (the cou
   records). It is an email, not a bell: notifications are per business, and a security notice must reach
   only that person. The mail door is `signInAlertDeps.send` — tests replace it.
 
+- **The courier's journey in plain phases** (`utils/couriers/statusWords.js`, R9-1). Each status check
+  saves `courierBooking.phase` (`booked · at-warehouse · on-route · attempt-failed · under-review ·
+delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobody has mapped is `unknown`,
+  and the screen shows PostEx's own words** — never a guess. A cancel wording beats the returned code
+  (0002 is also "Booking Cancelled by Merchant"). `needsAttention` is set only for a **failed try or a
+  review hold**; routine steps stay quiet. Each history step carries `seenAt` — when WE first noticed it
+  (PostEx sends no time), kept stable across later checks. A **new failed try** and **the start of a review
+  hold** ring the bell once (`courier-issue`; the attempts-count filter on the write means two runs cannot
+  both add the same try). `rescheduled` is an attempt reason (a delay, counted apart from a refusal).
+  `POST /orders/:id/courier-refresh` (`orders:update`) asks PostEx about one parcel now and applies the
+  same `apply()` the 15-minute pass does (10 s cool-down). `GET /orders/summary` carries `needsAttention`;
+  the list rows carry `courierBooking.phase`, `needsAttention` and `deliveryAttempts.reason` (reasons only).
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

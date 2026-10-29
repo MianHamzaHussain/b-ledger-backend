@@ -363,7 +363,16 @@ const OrderSchema = new mongoose.Schema(
           /** The courier's own words for where it is: "Booked", "Out For Delivery"… */
           courierStatus: { type: String },
           courierStatusAt: { type: Date },
-          history: { type: [{ code: String, message: String, _id: false }], default: undefined },
+          /** Each step of the journey; `seenAt` is when WE noticed it (PostEx sends no time of its own). */
+          history: {
+            type: [{ code: String, message: String, seenAt: Date, _id: false }],
+            default: undefined
+          },
+          /** The courier's state in a few plain phases (utils/couriers/statusWords.js), and since when. */
+          phase: { type: String },
+          phaseAt: { type: Date },
+          /** A failed try or a review hold — what the "Needs attention" count and filter read. */
+          needsAttention: { type: Boolean, default: undefined },
           lastSyncAt: { type: Date },
           /** What the courier says it charged — rupees. Filled in when it reports delivered/returned. */
           fee: { type: Number },

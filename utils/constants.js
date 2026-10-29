@@ -7,6 +7,8 @@ export const ATTEMPT_REASONS = {
   REFUSED: 'refused',
   WRONG_ADDRESS: 'wrong-address',
   UNREACHABLE: 'unreachable',
+  // The customer asked for it to come another day — a delay, counted apart from a refusal.
+  RESCHEDULED: 'rescheduled',
   OTHER: 'other'
 };
 
@@ -178,7 +180,9 @@ export const NOTIFICATION_TYPES = {
   LOW_STOCK: 'low-stock',
   BOOKING_DUE: 'booking-due',
   // The courier says a parcel was delivered / returned — a person confirms it.
-  COURIER_READY: 'courier-ready'
+  COURIER_READY: 'courier-ready',
+  // A parcel needs a look: a failed delivery try, or the courier holding it for review.
+  COURIER_ISSUE: 'courier-issue'
 };
 
 /** Name of the protected, full-access role created by the seeder. */

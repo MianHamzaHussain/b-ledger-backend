@@ -59,6 +59,7 @@ import {
   getCourierReady,
   getDeliverers,
   getAirwayBill,
+  refreshCourierStatus,
   getCourierParcels,
   getParcelPreview,
   getLoadSheet,
@@ -198,6 +199,26 @@ router.post(
  *       502: { description: The courier refused or could not be reached }
  */
 router.get('/:id/airway-bill', can('orders', 'read'), loadScoped(Order), getAirwayBill);
+
+/**
+ * @swagger
+ * /orders/{id}/courier-refresh:
+ *   post:
+ *     summary: Ask the courier about this parcel now and apply its answer
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: The order with its fresh courier status }
+ *       400: { description: Not a dispatched parcel booked through a courier }
+ */
+router.post(
+  '/:id/courier-refresh',
+  can('orders', 'update'),
+  loadScoped(Order),
+  refreshCourierStatus
+);
 
 /**
  * @swagger
