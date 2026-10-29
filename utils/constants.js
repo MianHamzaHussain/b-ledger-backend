@@ -184,7 +184,9 @@ export const NOTIFICATION_TYPES = {
   // A parcel needs a look: a failed delivery try, or the courier holding it for review.
   COURIER_ISSUE: 'courier-issue',
   // The courier lists a city again that it had refused — held orders can be booked.
-  COURIER_CITY_OPEN: 'courier-city-open'
+  COURIER_CITY_OPEN: 'courier-city-open',
+  // The courier paid a batch of parcels into its wallet (the expected amount).
+  COURIER_PAID: 'courier-paid'
 };
 
 /** Name of the protected, full-access role created by the seeder. */

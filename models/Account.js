@@ -50,6 +50,14 @@ const AccountSchema = new mongoose.Schema(
      * money names one of these (or a partner), never a bare "cash"/"bank".
      */
     moneyKind: { type: String, enum: Object.values(MONEY_KINDS) },
+    /**
+     * Money the courier is holding for the shop (the "PostEx wallet"). It is credited when the courier pays a
+     * parcel and debited when it takes a charge; it can not be spent — the only way out is **Move money** to
+     * the shop's own bank or cash, so it is refused as a source for refunds, expenses, salaries and payments.
+     */
+    heldByCourier: { type: Boolean },
+    /** The courier party whose wallet this is (one wallet per courier). */
+    courier: { type: mongoose.Schema.ObjectId, ref: 'Party' },
     /** Bank account / wallet number as the owner reads it, e.g. "…4521". */
     number: { type: String, trim: true, maxlength: [40, 'Number is too long'] },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
@@ -60,6 +68,11 @@ const AccountSchema = new mongoose.Schema(
 
 /** One code per business. */
 AccountSchema.index({ business: 1, code: 1 }, { unique: true });
+// One wallet per courier: two syncs racing to create it cannot make two.
+AccountSchema.index(
+  { business: 1, courier: 1 },
+  { unique: true, partialFilterExpression: { courier: { $exists: true } } }
+);
 
 /** The normal side is a fact of the account's type, not an input. */
 AccountSchema.pre('validate', function () {

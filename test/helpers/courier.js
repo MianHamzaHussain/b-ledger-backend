@@ -35,7 +35,9 @@ export const fakePostex = ({
   tracking = {},
   failBulk,
   failCancel,
-  unbooked = []
+  unbooked = [],
+  // Tracking numbers the courier says it has paid out (its payment-status answer).
+  paid = []
 } = {}) => {
   const creates = [];
   const calls = [];
@@ -59,6 +61,13 @@ export const fakePostex = ({
       return reply({
         statusCode: '200',
         dist: { trackingNumber: `CX-${1000 + creates.length}`, orderStatus: 'UnBooked' }
+      });
+    }
+    if (u.includes('payment-status/')) {
+      const n = decodeURIComponent(u.split('payment-status/')[1]);
+      return reply({
+        statusCode: '200',
+        dist: paid.includes(n) ? { settle: true, settlementDate: '2026-10-28' } : { settle: false }
       });
     }
     if (u.includes('get-unbooked-orders')) return reply({ statusCode: '200', dist: unbooked });

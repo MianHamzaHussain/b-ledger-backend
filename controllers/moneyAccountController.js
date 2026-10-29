@@ -132,7 +132,10 @@ export const recordTransfer = asyncHandler(async (req, res, next) => {
   const paisa = toPaisa(Number(req.body.amount));
   if (!(paisa > 0)) return next(new ErrorResponse('Enter an amount greater than zero', 400));
 
-  const source = await resolveMoney(business, { account: from }, req.user);
+  // The courier's wallet can only be moved OUT of (to the shop's bank or cash) — never into, never spent.
+  const source = await resolveMoney(business, { account: from }, req.user, {
+    allowCourierHeld: true
+  });
   const target = await resolveMoney(business, { account: to }, req.user);
 
   const entry = await postEntry({

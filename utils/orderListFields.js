@@ -42,6 +42,7 @@ export const ORDER_LIST_FIELDS = [
   'awaitingCity.openedAt',
   'courierBooking.provider',
   'courierBooking.courierStatus',
+  'courierBooking.codSettledAt',
   'courierBooking.billPrinted',
   'courierBooking.phase',
   'courierBooking.needsAttention',

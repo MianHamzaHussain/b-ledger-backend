@@ -1019,6 +1019,21 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   from `server.js`), not imported, to keep the courier code free of the order controller. If a confirm
   fails the parcel simply stays ready for a person.
 
+- **The courier's wallet** (R9-6, `utils/courierWallet.js`). Money the courier holds for the shop — a wallet-kind
+  money account flagged `Account.heldByCourier` (+ `courier`), made the first time it is needed, one per courier.
+  **Off unless an admin turns on `integration.recordPayments`** (after comparing the first batch with the
+  courier's statement: the courier's call says only paid / not paid, so the amount is **calculated**, not read).
+  When on, about hourly: a delivered, unpaid, COD parcel **whose fee is known** that the courier says it paid is
+  recorded in one entry, **Dr wallet / Cr COD receivable [courier]** for the receivable **as booked at
+  delivery** (read from the sale entry, so it clears to exactly zero even if the COD-tax settings changed), the
+  parcel is marked paid (`courierSettlement`, so **undoing the entry from the journal reopens it**), and the
+  bell rings once per batch (`courier-paid`). A returned parcel's charge, already booked against the courier by the
+  standard Returned posting, is moved onto the wallet (**Dr COD receivable / Cr wallet**), so the wallet shows a
+  **minus** until a payout nets it. Parcels are claimed in a conditional write first, so two runs cannot pay one
+  twice. **The wallet cannot be spent**: `resolveMoney` refuses a `heldByCourier` account for refunds, expenses,
+  salaries and payments (a server rule, not only the screen); `Move money` may take it as the **source** only
+  (`allowCourierHeld`), never as the destination.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

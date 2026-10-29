@@ -410,6 +410,16 @@ const OrderSchema = new mongoose.Schema(
           /** A failed try or a review hold — what the "Needs attention" count and filter read. */
           needsAttention: { type: Boolean, default: undefined },
           /** The airway bill was printed — lets the list show "Printed" and filter "Not printed yet". */
+          /** When the courier was last asked whether it had paid this parcel, and when it said it had. */
+          paymentCheckedAt: { type: Date },
+          codSettledAt: { type: Date },
+          /** Held while a payment / charge batch is being posted, so two runs cannot post one parcel twice. */
+          settleClaim: { type: String },
+          settleClaimedAt: { type: Date },
+          chargeClaim: { type: String },
+          chargeClaimedAt: { type: Date },
+          /** A returned parcel's charge moved onto the courier's wallet — set once. */
+          walletChargeEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
           billPrinted: { type: Boolean },
           billPrintedAt: { type: Date },
           billPrintedBy: { type: mongoose.Schema.ObjectId, ref: 'User' },

@@ -74,7 +74,12 @@ export const partnerCurrentAccount = async partner => {
  * isn't one of this business's active money accounts or partners, and 403 when
  * someone without Partners access names a partner.
  */
-export const resolveMoney = async (business, { account, method } = {}, user) => {
+export const resolveMoney = async (
+  business,
+  { account, method } = {},
+  user,
+  { allowCourierHeld = false } = {}
+) => {
   await ensureMoneyKinds(business);
 
   if (typeof account === 'string' && account.startsWith(PARTNER_MONEY_PREFIX)) {
@@ -99,6 +104,14 @@ export const resolveMoney = async (business, { account, method } = {}, user) => 
       : null;
     if (!found) throw new ErrorResponse('Choose one of this business’s money accounts', 400);
     if (!found.isActive) throw new ErrorResponse(`${found.name} is closed`, 400);
+    // Money the courier is holding can not be handed to anyone: it has to be moved to the shop's own bank or
+    // cash first. Enforced here, so no screen and no hand-made request can pay from it.
+    if (found.heldByCourier && !allowCourierHeld) {
+      throw new ErrorResponse(
+        `${found.name} is money held by the courier. Move it to your bank or cash first (Money → Move money), then pay from there`,
+        400
+      );
+    }
     return { account: found._id, name: found.name };
   }
 
@@ -129,6 +142,7 @@ export const listMoneyAccounts = async (business, user, { includeClosed = false 
       number: a.number,
       code: a.code,
       isActive: a.isActive,
+      heldByCourier: Boolean(a.heldByCourier),
       balancePaisa: await accountBalance(business, a._id)
     }))
   );
@@ -170,4 +184,33 @@ export const createMoneyAccount = async (business, { name, kind, number }, userI
     number,
     createdBy: userId
   });
+};
+
+/**
+ * The wallet of one courier — money the courier is holding for the shop — made the first time it is needed.
+ * A normal wallet-kind money account, flagged `heldByCourier` so it can be moved out but never spent.
+ */
+export const courierWalletFor = async (business, courier, userId) => {
+  const existing = await Account.findOne({ business, courier: courier._id });
+  if (existing) return existing;
+
+  const made = await createMoneyAccount(
+    business,
+    { name: `${courier.name} wallet`, kind: MONEY_KINDS.WALLET },
+    userId
+  );
+  try {
+    return await Account.findOneAndUpdate(
+      { _id: made._id },
+      { $set: { heldByCourier: true, courier: courier._id } },
+      { returnDocument: 'after' }
+    );
+  } catch (err) {
+    // Another run made the wallet a moment ago (the unique index): use theirs, drop ours.
+    if (err?.code === 11000) {
+      await Account.deleteOne({ _id: made._id });
+      return Account.findOne({ business, courier: courier._id });
+    }
+    throw err;
+  }
 };
