@@ -45,6 +45,7 @@ import {
   getJournal,
   reverseJournalEntry,
   getProfitAndLoss,
+  getOwnerDraws,
   getBalanceSheet,
   getProductProfit,
   getPartyReport,
@@ -629,6 +630,22 @@ router.post(
  *       403: { description: Missing reports:read permission }
  */
 router.get('/reports/pnl', can('reports', 'read'), getProfitAndLoss);
+
+/**
+ * @swagger
+ * /finance/reports/owner-draws:
+ *   get:
+ *     summary: What owners took for home and personal use, by month, with profit and what was left in the business
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD; default six months back" }
+ *       - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD; default this month" }
+ *     responses:
+ *       200: { description: "One row per Pakistan month, newest first: took (by purpose and person), netProfit, leftInBusiness" }
+ */
+router.get('/reports/owner-draws', can('reports', 'read'), getOwnerDraws);
 
 /**
  * @swagger

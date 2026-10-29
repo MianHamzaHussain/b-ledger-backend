@@ -978,6 +978,18 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   a new booking starts `billPrinted: false`, which is what the "Not printed yet" filter reads — bookings made
   before this release have no flag and do not appear under it.
 
+- **What owners took, month by month** (R9-12). An owner withdrawal (partner `withdraw`, or the shared owner
+  account) now keeps `purpose` (`home` / `personal`) on its journal entry; older entries are read from their memo
+  ("Home expense…"), anything else is `other`. `GET /finance/reports/owner-draws?business=&from=&to=`
+  (`reports:read`) returns one row per **Pakistan month**, newest first, empty months included: what was taken
+  (by purpose and by person) beside that month's net profit and **left in the business** (profit − taken; below
+  zero means the shop is using up its own capital). It is the owner's own money, so it **never lowers
+  profit**. People without `partners:read` see one "Owner" row, never the names. **A drawing that was reversed
+  (and its reversal) is no longer counted** — before this, a mistaken withdrawal that was reversed still showed
+  in "Owner took" on the P&L. `Partner.monthlyAllowancePaisa` (set as `monthlyAllowance` in rupees, 0 clears)
+  is a **guide, never a lock**; `GET /partners/:id` returns `thisMonth { tookPaisa, allowancePaisa }`. No bell
+  at the limit: notifications are per business and would show one partner's drawings to staff.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

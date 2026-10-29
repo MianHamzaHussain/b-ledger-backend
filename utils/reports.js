@@ -4,7 +4,8 @@ import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import { accountByCode, CODES } from './chartOfAccounts.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
-import { parseBusinessDate } from './pakistanDay.js';
+import { parseBusinessDate, pakistanDay } from './pakistanDay.js';
+import Partner from '../models/Partner.js';
 
 const toId = value => new mongoose.Types.ObjectId(value);
 
@@ -76,26 +77,190 @@ const unbilledCourierCharges = async (business, { from, to } = {}) => {
 };
 
 /**
- * What owners took out of the business in the period — home and personal spending
- * included. It is not a business cost, so it stays out of profit and is shown below
- * it. With partners, a withdrawal debits the partner's own capital account instead of
- * Drawings, so every capital entry's debit to an equity account counts — except Retained
- * Earnings, which a profit share debits and which is not money leaving.
+ * The owner's drawings in a period: every DEBIT to an equity account (a partner's capital, or Drawings) by
+ * a capital entry — except Retained Earnings, which a profit share debits and which is not money
+ * leaving. A drawing that was reversed (and the reversal itself) is left out, so a mistaken entry does not
+ * count twice. `account` narrows it to one partner's capital account.
  */
-const ownerWithdrawalsPaisa = async (business, { from, to } = {}) => {
-  const entryMatch = { business: toId(business), 'source.kind': JOURNAL_SOURCES.CAPITAL };
+const drawingLines = async (business, { from, to, account } = {}) => {
+  const reversed = await JournalEntry.distinct('reversalOf', {
+    business: toId(business),
+    reversalOf: { $exists: true }
+  });
+  const entryMatch = {
+    business: toId(business),
+    'source.kind': JOURNAL_SOURCES.CAPITAL,
+    reversalOf: { $exists: false },
+    _id: { $nin: reversed }
+  };
   const range = dateRange(from, to);
   if (range) entryMatch.date = range;
 
+  const lineMatch = {
+    'a.type': 'equity',
+    'a.code': { $ne: CODES.RETAINED_EARNINGS },
+    'lines.debitPaisa': { $gt: 0 }
+  };
+  if (account) lineMatch['lines.account'] = toId(account);
+
+  return { entryMatch, lineMatch };
+};
+
+/**
+ * What owners took out of the business in the period — home and personal spending
+ * included. It is not a business cost, so it stays out of profit and is shown below
+ * it. With partners, a withdrawal debits the partner's own capital account instead of Drawings.
+ */
+const ownerWithdrawalsPaisa = async (business, opts = {}) => {
+  const { entryMatch, lineMatch } = await drawingLines(business, opts);
   const [row] = await JournalEntry.aggregate([
     { $match: entryMatch },
     { $unwind: '$lines' },
     { $lookup: { from: 'accounts', localField: 'lines.account', foreignField: '_id', as: 'a' } },
     { $unwind: '$a' },
-    { $match: { 'a.type': 'equity', 'a.code': { $ne: CODES.RETAINED_EARNINGS } } },
+    { $match: lineMatch },
     { $group: { _id: null, debit: { $sum: '$lines.debitPaisa' } } }
   ]);
   return row?.debit ?? 0;
+};
+
+/** Pakistan calendar months, "2026-10", from `from` to `to` inclusive (both "YYYY-MM"). */
+const monthsBetween = (from, to) => {
+  const out = [];
+  let [y, m] = from.split('-').map(Number);
+  const [ty, tm] = to.split('-').map(Number);
+  while (y < ty || (y === ty && m <= tm)) {
+    out.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+  }
+  return out;
+};
+
+const monthBounds = month => {
+  const [y, m] = month.split('-').map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { from: `${month}-01`, to: `${month}-${String(last).padStart(2, '0')}` };
+};
+
+/**
+ * What the owners took for home and personal use, month by month (Pakistan months), who took it and what it
+ * was for — beside that month's profit and what was left in the business after it. Entries made before the
+ * purpose was kept read their memo ("Home expense…", "Personal expense…"); anything else is `other`.
+ * `partners` names each person; without it the money is one "Owner" row.
+ */
+export const ownerDrawsByMonth = async (
+  business,
+  { from, to, months = 6, now = new Date(), showPartners = true } = {}
+) => {
+  const thisMonth = pakistanDay(now).slice(0, 7);
+  const last = to ? to.slice(0, 7) : thisMonth;
+  let first = from ? from.slice(0, 7) : null;
+  if (!first) {
+    const [y, m] = last.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - months, 1));
+    first = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+  const monthList = monthsBetween(first, last);
+  const range = { from: monthBounds(first).from, to: monthBounds(last).to };
+
+  const { entryMatch, lineMatch } = await drawingLines(business, range);
+  const memoIs = re => ({
+    $regexMatch: { input: { $ifNull: ['$memo', ''] }, regex: re, options: 'i' }
+  });
+  const rows = await JournalEntry.aggregate([
+    { $match: entryMatch },
+    { $unwind: '$lines' },
+    { $lookup: { from: 'accounts', localField: 'lines.account', foreignField: '_id', as: 'a' } },
+    { $unwind: '$a' },
+    { $match: lineMatch },
+    {
+      $group: {
+        _id: {
+          month: { $dateToString: { format: '%Y-%m', date: '$date', timezone: 'Asia/Karachi' } },
+          account: '$lines.account',
+          purpose: {
+            $ifNull: [
+              '$purpose',
+              {
+                $cond: [
+                  memoIs('^home expense'),
+                  'home',
+                  { $cond: [memoIs('^personal expense'), 'personal', 'other'] }
+                ]
+              }
+            ]
+          }
+        },
+        took: { $sum: '$lines.debitPaisa' }
+      }
+    }
+  ]);
+
+  const partners = await Partner.find({ business }).select('name capitalAccount').lean();
+  const nameOf = new Map(partners.map(p => [String(p.capitalAccount), p.name]));
+
+  const byMonth = new Map(
+    monthList.map(m => [
+      m,
+      {
+        month: m,
+        tookPaisa: 0,
+        byPurpose: { home: 0, personal: 0, other: 0 },
+        byPartner: new Map()
+      }
+    ])
+  );
+  for (const r of rows) {
+    const bucket = byMonth.get(r._id.month);
+    if (!bucket) continue;
+    bucket.tookPaisa += r.took;
+    bucket.byPurpose[r._id.purpose] += r.took;
+    const who = showPartners ? (nameOf.get(String(r._id.account)) ?? 'Owner') : 'Owner';
+    bucket.byPartner.set(who, (bucket.byPartner.get(who) ?? 0) + r.took);
+  }
+
+  const out = [];
+  for (const month of monthList.reverse()) {
+    const b = byMonth.get(month);
+    const pnl = await profitAndLoss(business, monthBounds(month));
+    out.push({
+      month,
+      tookPaisa: b.tookPaisa,
+      byPurpose: b.byPurpose,
+      byPartner: [...b.byPartner].map(([name, tookPaisa]) => ({ name, tookPaisa })),
+      netProfitPaisa: pnl.netProfitPaisa,
+      // What the business kept of that month's profit after the owners took theirs; below zero = the
+      // shop is slowly using up its own capital.
+      leftInBusinessPaisa: pnl.netProfitPaisa - b.tookPaisa
+    });
+  }
+  return out;
+};
+
+/** One partner's drawings so far this Pakistan month, against what they planned to take. */
+export const partnerThisMonth = async (partner, now = new Date()) => {
+  const month = pakistanDay(now).slice(0, 7);
+  const { entryMatch, lineMatch } = await drawingLines(partner.business, {
+    ...monthBounds(month),
+    account: partner.capitalAccount
+  });
+  const [row] = await JournalEntry.aggregate([
+    { $match: entryMatch },
+    { $unwind: '$lines' },
+    { $lookup: { from: 'accounts', localField: 'lines.account', foreignField: '_id', as: 'a' } },
+    { $unwind: '$a' },
+    { $match: lineMatch },
+    { $group: { _id: null, took: { $sum: '$lines.debitPaisa' } } }
+  ]);
+  return {
+    month,
+    tookPaisa: row?.took ?? 0,
+    allowancePaisa: partner.monthlyAllowancePaisa ?? null
+  };
 };
 
 /** Income − expenses over a period. Income shows as credit-normal, expense debit-normal. */

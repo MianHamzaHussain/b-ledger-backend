@@ -37,6 +37,11 @@ const PartnerSchema = new mongoose.Schema(
       maxlength: [200, 'Note can not be more than 200 characters']
     },
     isActive: { type: Boolean, default: true },
+    /**
+     * What this partner plans to take each month for home and personal use (paisa). A guide, never a lock:
+     * the Partner page shows "taken this month" against it.
+     */
+    monthlyAllowancePaisa: { type: Number, min: 0 },
     /** The partner's own equity account — set by the controller on create. */
     capitalAccount: { type: mongoose.Schema.ObjectId, ref: 'Account', required: true },
     /**

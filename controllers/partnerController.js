@@ -8,6 +8,7 @@ import { postEntry, subledgerStatement, accountBalance } from '../utils/ledger.j
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { getNextSequence } from '../utils/sequence.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
+import { partnerThisMonth } from '../utils/reports.js';
 import { ACCOUNT_TYPES, JOURNAL_SOURCES } from '../utils/constants.js';
 
 /** A validated, positive paisa amount, or an ErrorResponse-throwing reject. */
@@ -68,6 +69,8 @@ export const getPartner = asyncHandler(async (req, res) => {
       ...partner.toObject(),
       capital: await capitalOf(partner.business, partner.capitalAccount),
       current: await currentOf(partner),
+      // Drawings so far this month against what this partner planned to take (a guide, never a lock).
+      thisMonth: await partnerThisMonth(partner),
       // Equity is credit-normal, so a credit grows capital — present the running
       // balance from the partner's side (positive = capital in the business).
       rows: rows.map(r => ({
@@ -132,6 +135,10 @@ export const updatePartner = asyncHandler(async (req, res) => {
   if (req.body.phone != null) partner.phone = req.body.phone;
   if (req.body.note != null) partner.note = req.body.note;
   if (req.body.isActive != null) partner.isActive = req.body.isActive;
+  // A monthly amount to take for home and personal use (rupees in, paisa kept); 0 clears it.
+  if (req.body.monthlyAllowance != null) {
+    partner.monthlyAllowancePaisa = toPaisa(req.body.monthlyAllowance) || undefined;
+  }
   partner.updatedBy = req.user.id;
   await partner.save();
   res.status(200).json({ success: true, data: partner });
@@ -170,7 +177,7 @@ export const deletePartner = asyncHandler(async (req, res, next) => {
  */
 const postCapitalMove = async (
   partner,
-  { amountRaw, method, account, invest, date, memo, user }
+  { amountRaw, method, account, invest, date, memo, user, purpose }
 ) => {
   const paisa = amountPaisa(amountRaw);
   await ensureChart(partner.business);
@@ -196,6 +203,8 @@ const postCapitalMove = async (
     memo: memo || defaultMemo,
     source: { kind: JOURNAL_SOURCES.CAPITAL },
     lines,
+    // Why money was taken out (home / personal) — only a withdrawal has one.
+    purpose: invest ? undefined : purpose,
     userId: user.id
   });
 };
@@ -234,6 +243,7 @@ export const withdrawPartner = asyncHandler(async (req, res) => {
     date: req.body.date,
     memo: req.body.memo,
     invest: false,
+    purpose: req.body.purpose,
     user: req.user
   });
   res.status(201).json({
