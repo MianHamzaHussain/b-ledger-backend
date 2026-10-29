@@ -22,6 +22,7 @@ import { hideCosts } from '../middlewares/permissions.js';
 import {
   createGoodsReceipt,
   getGoodsReceipt,
+  getReceiptSuppliers,
   returnGoods,
   updateGoodsReceiptNote,
   undoGoodsReceipt
@@ -540,4 +541,136 @@ test('a note edit racing an undo does not break either, and the books still agre
   assert.equal(after.note, 'edited');
   assert.equal((await variantOf(ctx, 'M')).stock, 10);
   assert.equal(await owed(ctx), 0);
+});
+
+// ── The suppliers list (R9-2): one row per supplier, newest delivery first ─────────────────────
+
+const suppliersOf = (ctx, query = {}, extra = {}) =>
+  runHandler(getReceiptSuppliers, {
+    user: admin,
+    query: { business: String(ctx.biz._id), ...query },
+    accessFilter: { business: { $in: [ctx.biz._id] } },
+    ...extra
+  }).then(r => r.body);
+
+const deliverTo = async (ctx, supplier, date, quantity = 3) => {
+  const receipt = await runHandler(createGoodsReceipt, {
+    user: admin,
+    body: goodsReceiptCreateSchema.parse({
+      business: String(ctx.biz._id),
+      party: String(supplier._id),
+      date,
+      lines: [
+        { product: String(ctx.product._id), variantId: ctx.idOf('M'), quantity, unitCost: 1000 }
+      ]
+    })
+  }).then(r => r.body.data);
+  return receipt;
+};
+
+test('the suppliers list has one row per supplier, newest delivery first, with counts', async () => {
+  const ctx = await setup();
+  const second = await makeParty(ctx.biz._id, 'supplier', { name: 'Noor Textiles' });
+  await deliverTo(ctx, ctx.supplier, '2026-10-01');
+  await deliverTo(ctx, ctx.supplier, '2026-10-20', 4);
+  await deliverTo(ctx, second, '2026-10-25', 2);
+
+  const { data, total } = await suppliersOf(ctx);
+  assert.equal(total, 2, 'two suppliers, not three deliveries');
+  assert.deepEqual(
+    data.map(r => r.name),
+    ['Noor Textiles', 'Bilal Fabrics'],
+    'the supplier delivered from most recently comes first'
+  );
+  const bilal = data[1];
+  assert.equal(bilal.deliveries, 2);
+  assert.equal(bilal.pieces, 7);
+  assert.equal(bilal.sentBackPieces, 0);
+  assert.equal(new Date(bilal.lastDeliveryAt).toISOString().slice(0, 10), '2026-10-20');
+});
+
+test('pieces sent back are counted, and a reversed delivery is not a delivery', async () => {
+  const ctx = await setup();
+  const kept = await deliverTo(ctx, ctx.supplier, '2026-10-10', 5);
+  await sendBack(ctx, await reload(kept._id), [{ lineId: String(kept.lines[0]._id), quantity: 2 }]);
+  const mistaken = await deliverTo(ctx, ctx.supplier, '2026-10-12', 3);
+  await runHandler(undoGoodsReceipt, { user: admin, resource: await reload(mistaken._id) });
+
+  const { data } = await suppliersOf(ctx);
+  assert.equal(data[0].deliveries, 1, 'the undone delivery is not counted');
+  assert.equal(data[0].pieces, 5);
+  assert.equal(data[0].sentBackPieces, 2);
+});
+
+test('the suppliers list pages five at a time and searches the name literally', async () => {
+  const ctx = await setup();
+  for (let i = 0; i < 7; i += 1) {
+    const supplier = await makeParty(ctx.biz._id, 'supplier', { name: `Mill ${i}` });
+    await deliverTo(ctx, supplier, `2026-10-${String(10 + i).padStart(2, '0')}`, 1);
+  }
+  const first = await suppliersOf(ctx);
+  assert.equal(first.count, 5);
+  assert.equal(first.total, 7);
+  assert.deepEqual(first.pagination.next, { page: 2, limit: 5 });
+  assert.equal((await suppliersOf(ctx, { page: '2' })).count, 2);
+
+  assert.equal((await suppliersOf(ctx, { search: 'mill 3' })).data[0].name, 'Mill 3');
+  assert.equal(
+    (await suppliersOf(ctx, { search: '.*' })).total,
+    0,
+    'a pattern is text, not a pattern'
+  );
+});
+
+test('another business is never in the list, and outside your scope is a 404', async () => {
+  const ctx = await setup();
+  const otherBiz = await makeBusiness({ name: 'Other Biz' });
+  const otherSupplier = await makeParty(otherBiz._id, 'supplier', { name: 'Secret Mill' });
+  const otherProduct = await makeProduct(otherBiz._id, [
+    { label: 'M', costPrice: 1000, salePrice: 2000, stock: 0 }
+  ]);
+  await runHandler(createGoodsReceipt, {
+    user: admin,
+    body: goodsReceiptCreateSchema.parse({
+      business: String(otherBiz._id),
+      party: String(otherSupplier._id),
+      lines: [
+        {
+          product: String(otherProduct._id),
+          variantId: String(otherProduct.variants[0]._id),
+          quantity: 2,
+          unitCost: 1000
+        }
+      ]
+    })
+  });
+
+  assert.equal((await suppliersOf(ctx)).total, 0, 'the other business delivery is not ours');
+  await assert.rejects(
+    suppliersOf(ctx, { business: String(otherBiz._id) }),
+    err => err.statusCode === 404
+  );
+});
+
+test('what was delivered in total is a cost: it vanishes without See costs, the rest stays', async () => {
+  const ctx = await setup();
+  await deliverTo(ctx, ctx.supplier, '2026-10-01', 3);
+
+  const reply = await new Promise((resolve, reject) => {
+    const res = { json: body => resolve(body) };
+    const user = { role: { fullAccess: false, permissions: [] }, permissionOverrides: [] };
+    hideCosts({ user }, res, () => {});
+    getReceiptSuppliers(
+      {
+        user,
+        query: { business: String(ctx.biz._id) },
+        accessFilter: { business: { $in: [ctx.biz._id] } }
+      },
+      { status: () => res, json: res.json },
+      reject
+    );
+  });
+  assert.equal(reply.data[0].totalCostPaisa, undefined);
+  assert.equal(reply.data[0].deliveries, 1);
+  assert.equal(reply.data[0].name, 'Bilal Fabrics');
 });

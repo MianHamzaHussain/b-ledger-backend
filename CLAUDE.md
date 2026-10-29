@@ -945,6 +945,15 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   when it moves the order to another number) **refuses a blocked number unless `confirmBlocked: true`**, before
   any stock is reserved; the override is saved as `Order.blockedOverride { by, at, reason }`. Per business.
 
+- **Goods received, by supplier** (R9-2). `GET /goods-receipts/suppliers?business=&search=&page=&limit=5`
+  (`goodsReceipts:read`, scoped, 404 outside scope) returns **one row per supplier** delivered from — newest
+  delivery first — with `deliveries`, `pieces`, `sentBackPieces`, `lastDeliveryAt` and (only with "See
+  costs", through the router's `hideCosts`) `totalCostPaisa`. A reversed delivery is not counted. It does
+  **not** carry what we owe: that is the supplier's Khata. A supplier's deliveries are the existing
+  `GET /goods-receipts?party=`; a delivery's items and per-line send-back are the existing detail and
+  `POST /goods-receipts/:id/send-back` (per-line quantities already worked — the screen was hiding them).
+  `utils/escapeRegex.js` is the shared literal-text matcher (typed text is never a pattern).
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

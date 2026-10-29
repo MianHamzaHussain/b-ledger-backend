@@ -11,6 +11,7 @@ import {
 } from '../schemas/goodsReceipts.js';
 import {
   getGoodsReceipts,
+  getReceiptSuppliers,
   getGoodsReceipt,
   createGoodsReceipt,
   updateGoodsReceiptNote,
@@ -74,6 +75,25 @@ router
     validate(goodsReceiptCreateSchema),
     createGoodsReceipt
   );
+
+/**
+ * @swagger
+ * /goods-receipts/suppliers:
+ *   get:
+ *     summary: One row per supplier delivered from — newest delivery first, searchable, five at a time
+ *     tags: [Goods received]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: search, schema: { type: string }, description: Part of the supplier's name }
+ *       - { in: query, name: page,  schema: { type: integer } }
+ *       - { in: query, name: limit, schema: { type: integer, default: 5 } }
+ *     responses:
+ *       200: { description: "name, lastDeliveryAt, deliveries, pieces, sentBackPieces and (with See costs) totalCostPaisa" }
+ *       404: { description: Business outside your scope }
+ */
+// Literal path before /:id.
+router.get('/suppliers', can('goodsReceipts', 'read'), getReceiptSuppliers);
 
 /**
  * @swagger

@@ -9,6 +9,7 @@ import { CSV_BOM, csvRow } from '../utils/csv.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import Order from '../models/Order.js';
 import { customerStats, NO_ORDERS } from '../utils/customerStats.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 /**
  * Customers — they appear when an order is placed (upserted by phone), and can also be added by
@@ -130,7 +131,7 @@ export const exportCustomers = asyncHandler(async (req, res, next) => {
 
   const filter = { business };
   if (search) {
-    const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const rx = new RegExp(escapeRegex(search), 'i');
     filter.$or = [{ name: rx }, { phone: rx }];
   }
 
@@ -149,8 +150,6 @@ export const exportCustomers = asyncHandler(async (req, res, next) => {
   logger.info({ userId: req.user.id, business, rows: count }, 'customers exported');
   res.end();
 });
-
-const escapeRegex = text => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** The digits of what was typed, in the stored form (03XXXXXXXXX): "+92 302", "302" and "0302" all search the same. */
 const phoneSearch = text => {
