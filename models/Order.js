@@ -71,6 +71,38 @@ export const heldPaisaOf = order =>
     0
   );
 
+/**
+ * One thing that changed on an order that is NOT a status step — a note, an address, a payment, a
+ * tracking number. Append-only; `by` is stamped from the token, never the request body, and a
+ * system event (the courier check) has no `by`. See utils/orderActivity.js.
+ */
+export const ACTIVITY_KINDS = [
+  'note',
+  'customer-note',
+  'details',
+  'items',
+  'payment',
+  'money',
+  'courier',
+  'cost',
+  'booking'
+];
+/** The log keeps the newest events only, so an order document can not grow without bound. */
+export const ACTIVITY_CAP = 300;
+
+const ActivityEventSchema = new mongoose.Schema(
+  {
+    kind: { type: String, enum: ACTIVITY_KINDS, required: true },
+    text: { type: String, required: true, trim: true, maxlength: 200 },
+    from: { type: String, trim: true, maxlength: 200 },
+    to: { type: String, trim: true, maxlength: 200 },
+    at: { type: Date, default: Date.now },
+    by: { type: mongoose.Schema.ObjectId, ref: 'User' },
+    system: { type: Boolean, default: undefined }
+  },
+  { _id: false }
+);
+
 /** One failed try at the door — kept apart from `statusHistory` because the status did not change. */
 const DeliveryAttemptSchema = new mongoose.Schema(
   {
@@ -274,6 +306,8 @@ const OrderSchema = new mongoose.Schema(
     },
     /** Every status change with its optional reason — the order's timeline. */
     statusHistory: { type: [StatusEventSchema], default: [] },
+    /** Every other change after the order was taken (R9-4) — who, when, from → to. */
+    activity: { type: [ActivityEventSchema], default: [] },
     /**
      * Failed tries while the parcel was out. `attemptsTracked` is set at dispatch,
      * so an order sent before staff could log attempts is not mistaken for one
@@ -435,7 +469,18 @@ const OrderSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User', required: true },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // The activity log is read through the order's merged `timeline` (cost events filtered by who is
+    // asking). Every other reply that returns the order must not carry the raw array, or a cost event
+    // would reach someone who may not see costs.
+    toJSON: {
+      transform: (_doc, ret) => {
+        delete ret.activity;
+        return ret;
+      }
+    }
+  }
 );
 
 OrderSchema.index({ business: 1, status: 1 });
@@ -490,6 +535,8 @@ OrderSchema.pre('save', async function () {
     if (dateField) this[dateField] = at;
     this.$locals.statusNote = undefined;
   }
+
+  if (this.activity.length > ACTIVITY_CAP) this.activity = this.activity.slice(-ACTIVITY_CAP);
 
   this.subtotal =
     this.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0) +

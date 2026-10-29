@@ -882,6 +882,20 @@ booked` (`renameOnOpenOrders`), and booking a parcel reads the **live** name for
   server starting in production; tests refuse a database whose name lacks "test"; `npm run find:testdata`
   is a read-only scan of a real database for records that look like test data.
 
+### 10.11 Round 9 rules (2026-10-29)
+
+- **The order's activity log** (`Order.activity`, `utils/orderActivity.js`). `statusHistory` is only status
+  steps; every other change after the order was taken — notes, the customer's request, a changed field
+  (`updateOrder` logs one event per **changed** field with from → to), items, tracking, Shopify number,
+  payment, advances/refunds, custom costs, booking — is one append-only event `{ kind, text, from, to, at,
+by, system }`. `by` is the token's user, never the body; a system event (the courier check) has no `by`.
+  A controller adds **one `logActivity` / `logTextChange` line before the `save()` it already does**, so the
+  log and the change commit together; an unchanged value logs nothing; the log keeps the newest 300.
+  `GET /orders/:id` returns a merged, newest-first **`timeline`** (status steps + activity) and **not** the
+  raw array; `toJSON` strips `activity` from every other reply, and **cost events are dropped for a reader
+  without `costs:read`** (their sentence holds the amount, which the route's field stripper cannot reach).
+  Orders from before this release start empty — past edits were never recorded.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

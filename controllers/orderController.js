@@ -21,6 +21,14 @@ import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
 import {
+  buildTimeline,
+  itemsSummary,
+  logActivity,
+  logFieldChanges,
+  logTextChange,
+  rupees
+} from '../utils/orderActivity.js';
+import {
   attachParcel,
   bookParcel,
   findUnbookedFor,
@@ -131,7 +139,8 @@ export const getOrder = asyncHandler(async (req, res) => {
     { path: 'customerParty', select: 'name phone' },
     { path: 'customer', select: 'name phone' },
     // The timeline names who made each change.
-    { path: 'statusHistory.by', select: 'name' }
+    { path: 'statusHistory.by', select: 'name' },
+    { path: 'activity.by', select: 'name' }
   ]);
 
   const codPaisa = toPaisa(order.codAmount);
@@ -193,7 +202,14 @@ export const getOrder = asyncHandler(async (req, res) => {
   const returnCharge =
     order.returnChargePaisa != null ? fromPaisa(order.returnChargePaisa) : undefined;
 
-  res.status(200).json({ success: true, data: { ...order.toObject(), remittance, returnCharge } });
+  // The raw activity array stays out of the reply: the merged, cost-filtered `timeline` is the one
+  // place the page reads it from, so a cost event can not leak through a second copy.
+  const data = order.toObject();
+  delete data.activity;
+  res.status(200).json({
+    success: true,
+    data: { ...data, remittance, returnCharge, timeline: buildTimeline(order, req.user) }
+  });
 });
 
 /**
@@ -417,11 +433,29 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   }
 });
 
+/** The plain-words fields an edit can change, each logged on its own. */
+const EDIT_LOGGED_FIELDS = [
+  { key: 'customerName', label: 'Customer name' },
+  { key: 'contactNumber', label: 'Contact number' },
+  { key: 'city', label: 'City' },
+  { key: 'deliveryAddress', label: 'Delivery address' },
+  { key: 'source', label: 'Source' },
+  { key: 'shopifyOrderNumber', label: 'Shopify order number' }
+];
+
+/** A comparable fingerprint of an order's lines (product, size, quantity, price; custom work). */
+const linesKey = (items = [], customWork = []) =>
+  JSON.stringify([
+    items.map(i => [String(i.product), String(i.variantId), i.quantity, i.unitPrice]),
+    customWork.map(w => [w.description, w.price])
+  ]);
+
 /**
  * @desc   Edit an order before it ships. Allowed only while it is still
  *         `pending`/`confirmed` — stock is held but nothing has posted to the
  *         ledger yet. Once dispatched, delivered or paid, history is fixed and
  *         the honest correction is cancel/return, never a silent edit.
+ *         Each changed field lands on the order's timeline, with who and from → to.
  * @route  PUT /api/v1/orders/:id  (orders:update — scoped)
  */
 export const updateOrder = asyncHandler(async (req, res, next) => {
@@ -498,6 +532,18 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
 
+  // What the order said before this edit, so the timeline can show "from → to" per field.
+  const before = {
+    customerName: order.customerName,
+    contactNumber: order.contactNumber,
+    city: order.city,
+    deliveryAddress: order.deliveryAddress,
+    source: order.source,
+    shopifyOrderNumber: order.shopifyOrderNumber
+  };
+  const linesBefore = linesKey(order.items, order.customWork);
+  const summaryBefore = itemsSummary(order);
+
   order.customer = customer._id;
   if (source) order.source = source;
   if (shopifyOrderNumber !== undefined) order.shopifyOrderNumber = shopifyOrderNumber || undefined;
@@ -508,6 +554,17 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   order.items = newItems;
   order.customWork = customWork;
   order.updatedBy = req.user.id;
+
+  logFieldChanges(order, req.user, before, EDIT_LOGGED_FIELDS);
+  if (linesKey(newItems, customWork) !== linesBefore) {
+    const count = newItems.reduce((s, i) => s + i.quantity, 0) + customWork.length;
+    logActivity(order, req.user, {
+      kind: 'items',
+      text: 'Items changed',
+      from: summaryBefore,
+      to: `${count} item${count === 1 ? '' : 's'} · ${rupees(newTotal)}`
+    });
+  }
   await order.save();
 
   res.status(200).json({ success: true, data: order });
@@ -788,9 +845,19 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
       // The courier makes the tracking number itself; if it refuses, the order stays as it was.
       const booked = await bookParcel(order, courier, { remarks: req.body.courierRemarks });
       trackingId = booked.trackingNumber;
+      logActivity(order, req.user, {
+        kind: 'booking',
+        text: 'Parcel booked with the courier’s service',
+        to: trackingId
+      });
     } else if (req.body.attachCourierParcel) {
       await attachParcel(order, courier, req.body.attachCourierParcel);
       trackingId = req.body.attachCourierParcel;
+      logActivity(order, req.user, {
+        kind: 'booking',
+        text: 'Existing courier parcel attached',
+        to: trackingId
+      });
     }
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
@@ -925,6 +992,12 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
 export const updateOrderCustomerNote = asyncHandler(async (req, res) => {
   const order = req.resource;
 
+  logTextChange(order, req.user, {
+    kind: 'customer-note',
+    label: 'Customer’s request',
+    before: order.customerNote,
+    after: req.body.customerNote
+  });
   order.customerNote = req.body.customerNote || undefined;
   order.updatedBy = req.user.id;
   await order.save();
@@ -952,6 +1025,14 @@ export const updateOrderBookedFor = asyncHandler(async (req, res, next) => {
   }
   assertNotPast(req.body.bookedFor);
 
+  if (order.bookedFor !== req.body.bookedFor) {
+    logActivity(order, req.user, {
+      kind: 'booking',
+      text: 'Booked day moved',
+      from: order.bookedFor,
+      to: req.body.bookedFor
+    });
+  }
   order.bookedFor = req.body.bookedFor;
   order.bookingAlertedOn = undefined;
   order.updatedBy = req.user.id;
@@ -968,6 +1049,12 @@ export const updateOrderBookedFor = asyncHandler(async (req, res, next) => {
 export const updateOrderShopifyNumber = asyncHandler(async (req, res) => {
   const order = req.resource;
 
+  logTextChange(order, req.user, {
+    kind: 'details',
+    label: 'Shopify order number',
+    before: order.shopifyOrderNumber,
+    after: req.body.shopifyOrderNumber
+  });
   order.shopifyOrderNumber = req.body.shopifyOrderNumber || undefined;
   order.updatedBy = req.user.id;
   await order.save();
@@ -983,6 +1070,12 @@ export const updateOrderShopifyNumber = asyncHandler(async (req, res) => {
 export const updateOrderNote = asyncHandler(async (req, res) => {
   const order = req.resource;
 
+  logTextChange(order, req.user, {
+    kind: 'note',
+    label: 'Order note',
+    before: order.note,
+    after: req.body.note
+  });
   order.note = req.body.note || undefined;
   order.updatedBy = req.user.id;
   await order.save();
@@ -997,7 +1090,14 @@ export const updateOrderNote = asyncHandler(async (req, res) => {
 export const updateOrderTracking = asyncHandler(async (req, res, next) => {
   const order = req.resource;
 
-  order.trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+  const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+  logTextChange(order, req.user, {
+    kind: 'courier',
+    label: 'Tracking number',
+    before: order.trackingId,
+    after: trackingId
+  });
+  order.trackingId = trackingId;
   order.updatedBy = req.user.id;
   await order.save();
 
@@ -1097,6 +1197,14 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     order.paymentEntry = undefined;
   }
 
+  if (order.paymentStatus !== paymentStatus) {
+    logActivity(order, req.user, {
+      kind: 'payment',
+      text: paymentStatus === PAYMENT_STATUS.PAID ? 'Marked paid' : 'Marked unpaid',
+      from: order.paymentStatus,
+      to: paymentStatus
+    });
+  }
   order.paymentStatus = paymentStatus;
   order.updatedBy = req.user.id;
   await order.save();
@@ -1485,7 +1593,13 @@ export const addCustomCost = asyncHandler(async (req, res, next) => {
     }
     const money = await resolveMoney(order.business, { account }, req.user);
     await recordCustomCost(order, description, toPaisa(amount), money, req.user.id, payee);
+    // A cost: the line carries the amount, so the timeline hides it from people who may not see costs.
+    logActivity(order, req.user, {
+      kind: 'cost',
+      text: `Custom cost added: ${description} — ${rupees(amount)}`
+    });
   }
+  if (material) logActivity(order, req.user, { kind: 'cost', text: 'Material cost added' });
   await order.save();
 
   res.status(200).json({ success: true, data: order });
@@ -1503,6 +1617,7 @@ export const deleteCustomCost = asyncHandler(async (req, res, next) => {
   }
 
   await removeCustomCost(order, req.params.costId, req.user.id);
+  logActivity(order, req.user, { kind: 'cost', text: 'Custom cost removed' });
   await order.save();
 
   res.status(200).json({ success: true, data: order });
