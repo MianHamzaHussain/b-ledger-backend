@@ -218,3 +218,16 @@ test('the key is never part of an error message', async () => {
   const { api } = px([json({ statusCode: '400', statusMessage: 'bad' }, 400)]);
   await assert.rejects(api.createOrder({}), err => !err.message.includes('secret-key'));
 });
+
+test('cities: a city PostEx lists but marks as not delivering (or not collecting) is left out', async () => {
+  const dist = [
+    { operationalCityName: 'Lahore', isDeliveryCity: 'true', isPickupCity: 'true' },
+    { operationalCityName: 'Sehwan', isDeliveryCity: 'false', isPickupCity: 'true' },
+    { operationalCityName: 'Quetta', isDeliveryCity: true, isPickupCity: false },
+    { operationalCityName: 'Multan' }
+  ];
+  const delivery = px([json({ statusCode: '200', dist })]);
+  assert.deepEqual(await delivery.api.cities('delivery'), ['Lahore', 'Quetta', 'Multan']);
+  const pickup = px([json({ statusCode: '200', dist })]);
+  assert.deepEqual(await pickup.api.cities('pickup'), ['Lahore', 'Sehwan', 'Multan']);
+});

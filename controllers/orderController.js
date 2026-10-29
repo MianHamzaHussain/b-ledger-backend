@@ -570,6 +570,8 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   if (shopifyOrderNumber !== undefined) order.shopifyOrderNumber = shopifyOrderNumber || undefined;
   order.customerName = customerName;
   order.contactNumber = contactNumber;
+  // A different city is a different question for the courier — stop waiting on the old one.
+  if (order.city !== city) order.awaitingCity = undefined;
   order.city = city;
   order.deliveryAddress = deliveryAddress;
   order.items = newItems;
@@ -864,7 +866,21 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     let trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
     if (req.body.bookWithCourier) {
       // The courier makes the tracking number itself; if it refuses, the order stays as it was.
-      const booked = await bookParcel(order, courier, { remarks: req.body.courierRemarks });
+      let booked;
+      try {
+        booked = await bookParcel(order, courier, { remarks: req.body.courierRemarks });
+      } catch (err) {
+        // Refused only because the courier does not serve this city: keep the order waiting for it, so
+        // when the courier lists the city again somebody is told and can book it in one tap.
+        if (err.code === 'CITY_NOT_SERVED') {
+          await Order.updateOne(
+            { _id: order._id },
+            { $set: { awaitingCity: { courier, city: err.city, since: new Date() } } },
+            { timestamps: false }
+          );
+        }
+        throw err;
+      }
       trackingId = booked.trackingNumber;
       logActivity(order, req.user, {
         kind: 'booking',
@@ -1258,6 +1274,42 @@ const changeStatusAsUser = (order, user, body) =>
     };
     updateOrderStatus({ user, resource: order, body }, res, reject);
   });
+
+/**
+ * @desc   Book, in one tap, the orders that were waiting for the courier to list their city and now can
+ *         be. Each goes through the NORMAL dispatch-and-book path (same checks, same books), one at a
+ *         time; an order that cannot be booked is reported and the rest carry on.
+ * @route  POST /api/v1/orders/book-waiting  (orders:update — business must be in scope)
+ */
+export const bookWaitingOrders = asyncHandler(async (req, res) => {
+  const { business, orderIds } = req.body;
+  const results = [];
+
+  for (const id of orderIds) {
+    const order = await Order.findOne({ _id: id, business });
+    const waiting = order?.awaitingCity;
+    if (!order || !waiting?.openedAt || !BEFORE_DISPATCH.includes(order.status)) {
+      results.push({ id, ok: false, reason: 'This order is not waiting for an open city' });
+      continue;
+    }
+    try {
+      await changeStatusAsUser(order, req.user, {
+        status: ORDER_STATUS.DISPATCHED,
+        courier: String(waiting.courier),
+        bookWithCourier: true,
+        note: `Booked once ${waiting.city} opened again`
+      });
+      results.push({ id, ok: true });
+    } catch (err) {
+      results.push({ id, ok: false, reason: err.message });
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: { booked: results.filter(r => r.ok).length, results }
+  });
+});
 
 /**
  * @desc   One tap for a batch: apply what the courier reports (delivered / returned) to every order

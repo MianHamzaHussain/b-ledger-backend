@@ -27,6 +27,7 @@ import {
   orderCourierConfirmSchema,
   orderLoadSheetSchema,
   orderPhrasesSchema,
+  orderBookWaitingSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -62,6 +63,7 @@ import {
   getAirwayBill,
   refreshCourierStatus,
   getRequestPhrases,
+  bookWaitingOrders,
   setRequestPhrases,
   getCourierParcels,
   getParcelPreview,
@@ -139,6 +141,34 @@ router.get('/summary', can('orders', 'read'), getOrderSummary);
  *     responses:
  *       200: { description: The saved list, duplicates removed }
  */
+/**
+ * @swagger
+ * /orders/book-waiting:
+ *   post:
+ *     summary: Book the orders that were waiting for a courier city that has reopened
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business, orderIds]
+ *             properties:
+ *               business: { type: string }
+ *               orderIds: { type: array, maxItems: 100, items: { type: string } }
+ *     responses:
+ *       200: { description: "{ booked, results: [{ id, ok, reason? }] }" }
+ */
+router.post(
+  '/book-waiting',
+  can('orders', 'update'),
+  restrictBusinessToScope(),
+  validate(orderBookWaitingSchema),
+  bookWaitingOrders
+);
+
 router.get('/phrases', can('orders', 'read'), getRequestPhrases);
 router.put(
   '/phrases',

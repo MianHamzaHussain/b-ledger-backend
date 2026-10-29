@@ -4,6 +4,7 @@ import { isMobile, normalizePhone } from '../phone.js';
 import { pakistanDay } from '../pakistanDay.js';
 import { adapterFor } from './index.js';
 import { liveItemNames, nameUpdates } from '../orderNames.js';
+import { cityMatchKey, nearCities } from '../cities.js';
 
 /**
  * Book an order's parcel with the courier's own service and keep what comes back.
@@ -13,21 +14,46 @@ import { liveItemNames, nameUpdates } from '../orderNames.js';
  * order at once — before anything else can fail — so a retry (or a second tap) finds that booking
  * and never makes a second parcel.
  */
-const CITY_TTL_MS = 6 * 60 * 60 * 1000;
+// An hour: PostEx opens and closes cities (it hides one where delivery is not available), and a reopened
+// city should be bookable within the hour — the courier check also reads it fresh (utils/cityWatch.js).
+const CITY_TTL_MS = 60 * 60 * 1000;
 const cityCache = new Map();
 /** A booking claimed longer ago than this is a crashed one, not an in-flight one. */
 const LOCK_MS = 60_000;
 
-export const clearCityCache = () => cityCache.clear();
+export const clearCityCache = partyId =>
+  partyId ? cityCache.delete(String(partyId)) : cityCache.clear();
 
-/** The cities the courier delivers to, remembered for a while — the list rarely changes. */
-const deliveryCities = async (partyId, api) => {
+/**
+ * The cities the courier delivers to, as `{ names, byKey }` — `byKey` maps a spelling-proof key to the
+ * COURIER's own spelling, which is what a booking must carry. Remembered for an hour; `fresh` asks again.
+ */
+export const courierCities = async (partyId, api, { fresh = false } = {}) => {
   const key = String(partyId);
   const hit = cityCache.get(key);
-  if (hit && Date.now() - hit.at < CITY_TTL_MS) return hit.names;
-  const names = new Set((await api.cities('delivery')).map(c => c.trim().toLowerCase()));
-  cityCache.set(key, { names, at: Date.now() });
-  return names;
+  if (!fresh && hit && Date.now() - hit.at < CITY_TTL_MS) return hit.value;
+  const names = (await api.cities('delivery')).map(c => String(c).trim()).filter(Boolean);
+  const value = { names, byKey: new Map(names.map(n => [cityMatchKey(n), n])) };
+  cityCache.set(key, { value, at: Date.now() });
+  return value;
+};
+
+/** The courier's spelling of a city it serves ("Islam Kot" → "Islamkot"), or null if it does not. */
+export const servedCity = (cities, typed) => cities.byKey.get(cityMatchKey(typed)) ?? null;
+
+/** The refusal for a city the courier does not serve — with what the person probably meant. */
+const cityNotServed = (provider, typed, cities) => {
+  const maybe = nearCities(cities.names, typed);
+  const err = new ErrorResponse(
+    `${provider === 'postex' ? 'PostEx' : 'This courier'} does not deliver to ${typed}${
+      maybe.length ? ` — did you mean ${maybe.join(' or ')}?` : ''
+    }`,
+    400
+  );
+  err.code = 'CITY_NOT_SERVED';
+  err.city = typed;
+  err.suggestions = maybe;
+  return err;
 };
 
 /** The slip's Remarks box is small; PostEx documents no limit, so we keep what it can print. */
@@ -113,13 +139,11 @@ export const bookParcel = async (order, courierId, { remarks } = {}) => {
   // The slip must carry the article's name as it is called NOW, not as it was when the order was saved.
   const names = await liveItemNames(order);
   const parcel = parcelFor(order, party.integration.pickupAddressCode, { names, remarks });
-  const cities = await deliveryCities(courierId, api);
-  if (!cities.has(parcel.cityName.trim().toLowerCase())) {
-    throw new ErrorResponse(
-      `${provider === 'postex' ? 'PostEx' : 'This courier'} does not deliver to ${parcel.cityName}`,
-      400
-    );
-  }
+  const cities = await courierCities(courierId, api);
+  const served = servedCity(cities, parcel.cityName);
+  if (!served) throw cityNotServed(provider, parcel.cityName, cities);
+  // Book with the COURIER's spelling of the place, not whatever was typed on the order.
+  parcel.cityName = served;
 
   // One booking at a time per order, and never a second one: the claim only succeeds while the order
   // has no tracking number AND nobody else holds it, so a double tap (or a retry after the first
@@ -164,7 +188,9 @@ export const bookParcel = async (order, courierId, { remarks } = {}) => {
           trackingId: made.trackingNumber,
           // From here the order carries the names the slip shows.
           ...nameUpdates(order, names)
-        }
+        },
+        // It is booked now — nothing is waiting for a city any more.
+        $unset: { awaitingCity: 1 }
       },
       { timestamps: false }
     );
@@ -257,13 +283,18 @@ export const previewParcel = async (order, courierId, { remarks } = {}) => {
   const problems = parcelProblems(order);
 
   let parcel = null;
+  let citySuggestions = [];
   if (!problems.length) {
     parcel = parcelFor(order, party.integration?.pickupAddressCode ?? '', { names, remarks });
     // The courier's list of cities is a network call: if it fails the preview still works, it just can not say.
     try {
-      const cities = await deliveryCities(courierId, api);
-      if (!cities.has(parcel.cityName.trim().toLowerCase())) {
-        problems.push(`PostEx does not deliver to ${parcel.cityName}`);
+      const cities = await courierCities(courierId, api);
+      if (!servedCity(cities, parcel.cityName)) {
+        const maybe = nearCities(cities.names, parcel.cityName);
+        problems.push(
+          `PostEx does not deliver to ${parcel.cityName}${maybe.length ? ` — did you mean ${maybe.join(' or ')}?` : ''}`
+        );
+        citySuggestions = maybe;
       }
     } catch {
       /* not checked — the booking itself will check again */
@@ -283,6 +314,8 @@ export const previewParcel = async (order, courierId, { remarks } = {}) => {
     amount: order.codAmount,
     pieces: parcel?.items ?? 0,
     pickup: party.integration?.pickupAddressLabel ?? '',
-    problems
+    problems,
+    // One tap to fix a near-miss spelling: what the courier lists that looks like the typed city.
+    citySuggestions
   };
 };

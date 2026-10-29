@@ -397,6 +397,21 @@ const OrderSchema = new mongoose.Schema(
         { _id: false }
       )
     },
+    /**
+     * Refused at booking only because the courier does not serve this city (yet). `openedAt` is set once,
+     * by the hourly check, when the courier lists the city again — the order is then ready to book.
+     */
+    awaitingCity: {
+      type: new mongoose.Schema(
+        {
+          courier: { type: mongoose.Schema.ObjectId, ref: 'Party' },
+          city: { type: String },
+          since: { type: Date },
+          openedAt: { type: Date }
+        },
+        { _id: false }
+      )
+    },
     deliveredBy: { type: String, trim: true, maxlength: 60 },
     /** A self-delivered parcel's cash, taken at the door into this money account. */
     selfCollectAccount: { type: mongoose.Schema.ObjectId, ref: 'Account' },

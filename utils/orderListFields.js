@@ -37,6 +37,8 @@ export const ORDER_LIST_FIELDS = [
   'reversalTrackingId',
   'awaitingReturn',
   // What the list shows about a courier-booked parcel — never its history or the raw key fields.
+  'awaitingCity.city',
+  'awaitingCity.openedAt',
   'courierBooking.provider',
   'courierBooking.courierStatus',
   'courierBooking.phase',

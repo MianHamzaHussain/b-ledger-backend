@@ -5,6 +5,7 @@ import { adapterFor } from './couriers/index.js';
 import { NOTIFICATION_TYPES, ORDER_STATUS } from './constants.js';
 import logger from './logger.js';
 import { NEEDS_ATTENTION, PHASES, phaseOf } from './couriers/statusWords.js';
+import { checkHeldCities } from './cityWatch.js';
 
 /**
  * Keep dispatched parcels in step with the courier. PostEx has no webhook, so this ASKS: every few
@@ -21,6 +22,7 @@ import { NEEDS_ATTENTION, PHASES, phaseOf } from './couriers/statusWords.js';
 // 15 minutes; COURIER_SYNC_SECONDS shortens it for demos (never below 10 s).
 const EVERY_MS = Math.max(Number(process.env.COURIER_SYNC_SECONDS) || 15 * 60, 10) * 1000;
 const BATCH = 20;
+const CITY_CHECK_MS = 60 * 60 * 1000;
 const PER_RUN = 300;
 
 const status = { lastRunAt: null, lastChecked: 0, lastUpdated: 0, lastReady: 0, lastErrors: 0 };
@@ -258,10 +260,16 @@ export const runCourierSync = async () => {
 /** Run now and then every 15 minutes; never overlaps itself, never takes the server down. */
 export const startCourierSync = ({ everyMs = EVERY_MS } = {}) => {
   let running = false;
+  let lastCityCheck = 0;
   const tick = async () => {
     if (running) return;
     running = true;
     try {
+      // Held orders: about once an hour, ask whether a refused city has reopened.
+      if (Date.now() - lastCityCheck >= CITY_CHECK_MS) {
+        lastCityCheck = Date.now();
+        await checkHeldCities().catch(err => logger.error({ err }, 'held city check failed'));
+      }
       const t = await runCourierSync();
       Object.assign(status, {
         lastRunAt: new Date().toISOString(),

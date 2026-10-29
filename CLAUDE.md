@@ -954,6 +954,20 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   `POST /goods-receipts/:id/send-back` (per-line quantities already worked — the screen was hiding them).
   `utils/escapeRegex.js` is the shared literal-text matcher (typed text is never a pattern).
 
+- **Cities and the courier** (R9-7). `GET /cities?business=&search=&page=&limit=5` (any signed-in user)
+  merges our standard list with each **connected** courier's own list — the courier's spelling wins, matching
+  ignores case, spaces and hyphens (`cityMatchKey`: "Islam Kot" = "Islamkot") — and marks each city
+  `served: { postex: true|false }`. A courier that cannot be asked shows no mark and never blocks the list; a
+  user outside the business gets the plain list, never the couriers' lists. **PostEx hides a city where delivery
+  is not available**, and the adapter also honours the guide's `isDeliveryCity` / `isPickupCity` flags. A
+  booking carries **the courier's own spelling** and a refused city names what was probably meant
+  (`nearCities`). The city cache is **an hour** (`POST /cities/refresh`, 1 min cool-down). An order refused
+  **only for its city** gets `awaitingCity`; the hourly check (`utils/cityWatch.js`, inside the courier tick)
+  reads the list **fresh**, marks the held orders open (`openedAt`, once) and rings the bell **once per
+  business and city** (`courier-city-open`); `POST /orders/book-waiting` then books them through the normal
+  dispatch path — one tap, because a booking creates a real parcel. A changed city, or a successful booking,
+  clears the hold.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

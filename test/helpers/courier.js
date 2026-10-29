@@ -43,7 +43,15 @@ export const fakePostex = ({
     const u = String(url);
     calls.push(u);
     if (u.includes('get-operational-city')) {
-      return reply({ statusCode: '200', dist: cities.map(c => ({ operationalCityName: c })) });
+      // A city is a name, or `{ name, isDeliveryCity }` to model PostEx listing one it does not deliver to.
+      return reply({
+        statusCode: '200',
+        dist: cities.map(c =>
+          typeof c === 'string'
+            ? { operationalCityName: c }
+            : { operationalCityName: c.name, isDeliveryCity: c.isDeliveryCity }
+        )
+      });
     }
     if (u.includes('create-order')) {
       creates.push(JSON.parse(init.body));

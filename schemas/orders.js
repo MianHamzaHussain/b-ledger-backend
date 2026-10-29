@@ -168,6 +168,12 @@ export const orderLoadSheetSchema = z.object({
   orderIds: z.array(id).min(1, 'Choose at least one order').max(100)
 });
 
+/** Book the orders that were waiting for a courier city that has reopened. */
+export const orderBookWaitingSchema = z.object({
+  business: id,
+  orderIds: z.array(id).min(1, 'Choose at least one order').max(100)
+});
+
 /** The business's own one-tap courier requests. The server also drops duplicates (any letter case). */
 export const orderPhrasesSchema = z.object({
   business: id,

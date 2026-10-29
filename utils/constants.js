@@ -182,7 +182,9 @@ export const NOTIFICATION_TYPES = {
   // The courier says a parcel was delivered / returned — a person confirms it.
   COURIER_READY: 'courier-ready',
   // A parcel needs a look: a failed delivery try, or the courier holding it for review.
-  COURIER_ISSUE: 'courier-issue'
+  COURIER_ISSUE: 'courier-issue',
+  // The courier lists a city again that it had refused — held orders can be booked.
+  COURIER_CITY_OPEN: 'courier-city-open'
 };
 
 /** Name of the protected, full-access role created by the seeder. */
