@@ -20,8 +20,16 @@ import {
 import { issueRefreshToken } from '../utils/refreshTokens.js';
 import { describeDevice, deviceLabel } from '../utils/userAgent.js';
 import { authenticateSocketToken } from '../utils/socket.js';
+import { noteSignIn, signInAlertDeps } from '../utils/signInAlert.js';
+import {
+  getUserSessions,
+  deleteUserSession,
+  signOutUserEverywhere
+} from '../controllers/userController.js';
 
 process.env.JWT_SECRET ??= 'test-secret';
+// Signing in from a second device sends an alert email; nothing in the suite may reach a mail server.
+signInAlertDeps.send = async () => {};
 
 before(connect);
 after(disconnect);
@@ -274,4 +282,154 @@ test('changing the password leaves exactly one session: this device', async () =
     'the old laptop token is dead (the new one replaces it)'
   );
   assert.equal((await runProtect(body.token)).err, undefined, 'the fresh token works');
+});
+
+const withKnown = id => User.findById(id).select('+knownDevices');
+
+test('the first sign-in on a tracked account records the device silently; a new one is emailed once', async () => {
+  const user = await makeUser();
+  const sent = [];
+  const send = async mail => sent.push(mail);
+  const req = ua => ({ headers: { 'user-agent': ua }, ip: '5.5.5.5' });
+
+  // An account never tracked before (a new user, or an old one right after the release).
+  user.lastLogin = new Date();
+  await user.save();
+  assert.equal(await noteSignIn(await withKnown(user._id), req(CHROME_WIN), { send }), 'recorded');
+  assert.equal(sent.length, 0, 'no alert for the device it began with');
+
+  assert.equal(await noteSignIn(await withKnown(user._id), req(CHROME_WIN), { send }), 'known');
+  assert.equal(sent.length, 0);
+
+  assert.equal(
+    await noteSignIn(await withKnown(user._id), req(SAFARI_IPHONE), { send }),
+    'alerted'
+  );
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].message, /Safari on iPhone/);
+  assert.match(sent[0].html, /Safari on iPhone/);
+
+  // Now it is familiar.
+  assert.equal(await noteSignIn(await withKnown(user._id), req(SAFARI_IPHONE), { send }), 'known');
+  assert.equal(sent.length, 1);
+});
+
+test('a failing email never breaks the sign-in', async () => {
+  const user = await makeUser();
+  user.lastLogin = new Date();
+  await user.save();
+  const req = ua => ({ headers: { 'user-agent': ua } });
+  await noteSignIn(await withKnown(user._id), req(CHROME_WIN), { send: async () => {} });
+
+  const outcome = await noteSignIn(await withKnown(user._id), req(SAFARI_IPHONE), {
+    send: async () => {
+      throw new Error('SMTP down');
+    }
+  });
+  assert.equal(outcome, 'alerted');
+});
+
+test('the sign-in email escapes what came from the request', async () => {
+  const user = await makeUser();
+  user.lastLogin = new Date();
+  user.name = '<script>alert(1)</script>';
+  await user.save();
+  const sent = [];
+  const req = ua => ({ headers: { 'user-agent': ua } });
+  await noteSignIn(await withKnown(user._id), req(CHROME_WIN), { send: async m => sent.push(m) });
+  await noteSignIn(await withKnown(user._id), req(SAFARI_IPHONE), {
+    send: async m => sent.push(m)
+  });
+  assert.ok(!sent[0].html.includes('<script>'), 'no raw markup from a user name');
+});
+
+/** An admin (full access) and a plain user who may edit users, for the admin session routes. */
+const makeStaff = async () => {
+  const adminRole = await Role.create({ name: 'Boss', permissions: [], fullAccess: true });
+  const admin = await User.create({
+    name: 'Boss',
+    email: 'boss@b-ledger.pk',
+    phone: '+923001111111',
+    password: 'password1',
+    role: adminRole._id
+  });
+  const clerkRole = await Role.create({ name: 'Clerk', permissions: [] });
+  const clerk = await User.create({
+    name: 'Clerk',
+    email: 'clerk@b-ledger.pk',
+    phone: '+923002222222',
+    password: 'password1',
+    role: clerkRole._id
+  });
+  return {
+    admin: await User.findById(admin._id).populate('role'),
+    clerk: await User.findById(clerk._id).populate('role')
+  };
+};
+
+test("an admin can list and remove another user's devices", async () => {
+  const { admin } = await makeStaff();
+  const ali = await makeUser('ali@b-ledger.pk');
+  await signIn(ali, CHROME_WIN, '1.1.1.1');
+  await signIn(ali, SAFARI_IPHONE, '2.2.2.2');
+
+  const { body } = await run(getUserSessions, { user: admin, params: { id: String(ali._id) } });
+  assert.equal(body.count, 2);
+
+  const target = body.data.find(d => d.os === 'iPhone');
+  await run(deleteUserSession, {
+    user: admin,
+    params: { id: String(ali._id), sid: String(target._id) }
+  });
+  assert.equal(await Session.countDocuments({ user: ali._id }), 1);
+
+  await assert.rejects(
+    run(deleteUserSession, {
+      user: admin,
+      params: { id: String(ali._id), sid: String(target._id) }
+    }),
+    err => err.statusCode === 404,
+    'a device already gone is a 404'
+  );
+});
+
+test("a non-admin who may edit users can not touch an Admin's sign-ins", async () => {
+  const { admin, clerk } = await makeStaff();
+  await signIn(admin, CHROME_WIN, '1.1.1.1');
+
+  await assert.rejects(
+    run(getUserSessions, { user: clerk, params: { id: String(admin._id) } }),
+    err => err.statusCode === 403
+  );
+  await assert.rejects(
+    run(signOutUserEverywhere, { user: clerk, params: { id: String(admin._id) } }),
+    err => err.statusCode === 403
+  );
+  assert.equal(await Session.countDocuments({ user: admin._id }), 1, 'the Admin is untouched');
+});
+
+test('sign out everywhere also kills a token from before sessions existed', async () => {
+  const { admin } = await makeStaff();
+  const ali = await makeUser('ali@b-ledger.pk');
+  const newer = await signIn(ali, CHROME_WIN, '1.1.1.1');
+  const legacyToken = (await User.findById(ali._id).select('+tokenVersion')).getSignedJwtToken();
+  assert.equal((await runProtect(legacyToken)).err, undefined);
+
+  const { body } = await run(signOutUserEverywhere, {
+    user: admin,
+    params: { id: String(ali._id) }
+  });
+
+  assert.equal(body.data.signedOut, 1);
+  assert.equal(await Session.countDocuments({ user: ali._id }), 0);
+  assert.equal((await runProtect(newer.token)).err?.statusCode, 401);
+  assert.equal((await runProtect(legacyToken)).err?.statusCode, 401, 'the no-sid token dies too');
+});
+
+test('a bad user id is a 404, not a crash', async () => {
+  const { admin } = await makeStaff();
+  await assert.rejects(
+    run(getUserSessions, { user: admin, params: { id: 'not-an-id' } }),
+    err => err.statusCode === 404
+  );
 });

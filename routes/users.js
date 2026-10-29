@@ -12,7 +12,10 @@ import {
   updateUser,
   deleteUser,
   reinviteUser,
-  getPresence
+  getPresence,
+  getUserSessions,
+  deleteUserSession,
+  signOutUserEverywhere
 } from '../controllers/userController.js';
 
 const router = express.Router();
@@ -36,6 +39,52 @@ router.use(protect);
  */
 // Literal sub-path before the parameterised /:id routes.
 router.post('/:id/reinvite', can('users', 'create'), reinviteUser);
+
+/**
+ * @swagger
+ * /users/{id}/sessions:
+ *   get:
+ *     summary: The devices a user is signed in on (browser, system, address, last active)
+ *     tags: [Users]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: The user's sessions }
+ *       403: { description: Not allowed to manage an Admin's sign-ins }
+ *       404: { description: User not found }
+ */
+router.get('/:id/sessions', can('users', 'update'), getUserSessions);
+
+/**
+ * @swagger
+ * /users/{id}/sessions/{sid}:
+ *   delete:
+ *     summary: Sign one of a user's devices out
+ *     tags: [Users]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *       - { in: path, name: sid, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: Signed out }
+ *       404: { description: Not one of that user's devices }
+ */
+router.delete('/:id/sessions/:sid', can('users', 'update'), deleteUserSession);
+
+/**
+ * @swagger
+ * /users/{id}/sign-out-all:
+ *   post:
+ *     summary: Sign a user out of every device
+ *     tags: [Users]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "{ signedOut: n }" }
+ */
+router.post('/:id/sign-out-all', can('users', 'update'), signOutUserEverywhere);
 
 /**
  * @swagger

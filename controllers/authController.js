@@ -16,6 +16,7 @@ import {
   refreshCookieOptions,
   clearCookieOptions
 } from '../utils/refreshTokens.js';
+import { noteSignIn } from '../utils/signInAlert.js';
 import {
   createSession,
   listSessions,
@@ -61,7 +62,7 @@ export const login = asyncHandler(async (req, res, next) => {
   // set or changed) — every sign-in would then need a silent refresh to work.
   const user = await User.findOne({
     $or: [{ email: identifier.toLowerCase() }, { phone: identifier }]
-  }).select('+password +mustChangePassword +tokenVersion');
+  }).select('+password +mustChangePassword +tokenVersion +knownDevices');
 
   // Same message and same code path for "no such user" and "wrong password",
   // so the response cannot be used to enumerate accounts.
@@ -72,6 +73,11 @@ export const login = asyncHandler(async (req, res, next) => {
   if (user.status === 'inactive') {
     return next(new ErrorResponse('Your account is inactive. Please contact administrator.', 401));
   }
+
+  // A device this person has not used before gets an email — checked BEFORE lastLogin moves, because
+  // a first-ever sign-in must record the device silently.
+  const outcome = await noteSignIn(user, req);
+  logger.info({ userId: String(user._id), outcome, ip: req.ip }, 'sign-in');
 
   // Stamp the sign-in (drives "last login" and the verified badge). updateOne
   // rather than save() to skip the password-hash hook on an unchanged password.

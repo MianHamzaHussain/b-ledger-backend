@@ -123,6 +123,12 @@ const UserSchema = new mongoose.Schema(
      * of API responses; `protect` re-requests it explicitly.
      */
     tokenVersion: { type: Number, default: 0, select: false },
+    /**
+     * Coarse fingerprints (browser|system|kind, never an address) of devices this person has signed in
+     * from, newest last. Only used to tell a new device from a familiar one for the sign-in email.
+     * Left undefined until the first sign-in after the feature, so nobody is alerted about every old device.
+     */
+    knownDevices: { type: [String], default: undefined, select: false },
     /** Web Push endpoints for PWA background notifications. */
     pushSubscriptions: [
       {

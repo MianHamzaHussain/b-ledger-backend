@@ -906,6 +906,13 @@ by, system }`. `by` is the token's user, never the body; a system event (the cou
   rotated refresh token coming back (`detectReuse`, via `Session.previousHashes`) is a copied cookie: that
   device's session is revoked. Cookies from before sessions adopt one (`isLegacy`) on their first refresh;
   access tokens with no `sid` simply expire within 15 minutes. Needs `TRUST_PROXY_HOPS` for the address.
+  **Admins** (`users:update`) have `GET /users/:id/sessions`, `DELETE /users/:id/sessions/:sid` and
+  `POST /users/:id/sign-out-all` (sessions + refresh tokens + a `tokenVersion` bump); a non-admin can not
+  touch an Admin's sign-ins. **A sign-in from a device this person has not used** (coarse
+  browser|system|kind fingerprint in `User.knownDevices`, never an address) **sends one email**
+  (`utils/signInAlert.js`; best-effort, never blocks the sign-in; the first sign-in after the release only
+  records). It is an email, not a bell: notifications are per business, and a security notice must reach
+  only that person. The mail door is `signInAlertDeps.send` — tests replace it.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
