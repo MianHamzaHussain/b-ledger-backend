@@ -112,7 +112,7 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *     parameters:
  *       - { in: query, name: business, required: true, schema: { type: string } }
  *     responses:
- *       200: { description: "{ createdToday, dispatchedToday, deliveredToday, pending, byStatus }" }
+ *       200: { description: "{ createdToday, dispatchedToday, deliveredToday, pending, byStatus, byPhase (dispatched parcels by courier stage), returning, onRoute }" }
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/summary', can('orders', 'read'), getOrderSummary);

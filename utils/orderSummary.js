@@ -24,7 +24,8 @@ export const orderSummary = async (business, now = new Date()) => {
     courierReady,
     needsAttention,
     citiesOpen,
-    grouped
+    grouped,
+    phases
   ] = await Promise.all([
     Order.countDocuments({ ...scope, createdAt: today }),
     Order.countDocuments({ ...scope, dispatchedAt: today }),
@@ -49,10 +50,16 @@ export const orderSummary = async (business, now = new Date()) => {
       status: { $in: BEFORE_DISPATCH },
       'awaitingCity.openedAt': { $exists: true }
     }),
-    Order.aggregate([{ $match: scope }, { $group: { _id: '$status', count: { $sum: 1 } } }])
+    Order.aggregate([{ $match: scope }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+    // Where the parcels that are out with a courier are, by stage — the tiles and the stage filter read this.
+    Order.aggregate([
+      { $match: { ...scope, status: 'dispatched', 'courierBooking.phase': { $exists: true } } },
+      { $group: { _id: '$courierBooking.phase', count: { $sum: 1 } } }
+    ])
   ]);
 
   const byStatus = Object.fromEntries(grouped.map(g => [g._id, g.count]));
+  const byPhase = Object.fromEntries(phases.map(g => [g._id, g.count]));
   return {
     createdToday,
     dispatchedToday,
@@ -61,6 +68,9 @@ export const orderSummary = async (business, now = new Date()) => {
     courierReady,
     needsAttention,
     citiesOpen,
+    byPhase,
+    returning: byPhase.returning ?? 0,
+    onRoute: byPhase['on-route'] ?? 0,
     pending: byStatus.pending ?? 0,
     byStatus
   };

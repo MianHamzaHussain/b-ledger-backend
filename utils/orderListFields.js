@@ -46,6 +46,9 @@ export const ORDER_LIST_FIELDS = [
   'courierBooking.billPrinted',
   'courierBooking.phase',
   'courierBooking.needsAttention',
+  // The newest courier step in its words, and when it happened — the line under the stage chip.
+  'courierBooking.lastStep',
+  'courierBooking.lastMoveAt',
   // Each reason only (not the notes) — the row says "Attempt 2 — customer not available".
   'deliveryAttempts.reason',
   'courierBooking.confirmable',

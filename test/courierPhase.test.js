@@ -401,3 +401,27 @@ test('a parcel that has not moved for 3 days is flagged and rings once; a new st
   assert.equal(moving.courierBooking.stuckAlertedAt, undefined);
   assert.equal(await rings('No courier update for 3 days'), 1, 'no second ring');
 });
+
+test('the summary counts parcels that are out by courier stage, per business', async () => {
+  const { order, tracking } = await booked(real.REFUSED_AND_RETURNING);
+  const other = await setupOrder();
+  await runCourierSync();
+
+  const a = await orderSummary(order.business);
+  assert.deepEqual(a.byPhase, { returning: 1 });
+  assert.equal(a.returning, 1);
+  assert.equal(a.onRoute, 0);
+
+  tracking['CX-1001'] = {
+    transactionStatus: 'Out For Delivery',
+    transactionStatusHistory: hist(['0004', 'Enroute for Delivery'])
+  };
+  await runCourierSync();
+  const b = await orderSummary(order.business);
+  assert.deepEqual(b.byPhase, { 'on-route': 1 });
+  assert.equal(b.returning, 0);
+  assert.equal(b.onRoute, 1);
+
+  const none = await orderSummary(other.order.business);
+  assert.deepEqual(none.byPhase, {}, 'another business’s parcels are never counted');
+});
