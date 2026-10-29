@@ -4,6 +4,7 @@ import User from '../models/User.js';
 import { getAllowedOrigins } from './cors.js';
 import { userCan } from './permissions.js';
 import { createPresence, stampLastActive } from './presence.js';
+import { sessionIsLive } from './sessions.js';
 
 let io;
 
@@ -25,6 +26,34 @@ export const presence = createPresence({
 /** Room name for one business's events. */
 export const businessRoom = businessId => `business:${businessId}`;
 
+/**
+ * The user a socket's token belongs to, or an Error saying why not. Applies the same revocation
+ * rule as `protect` (a token minted before the user's tokenVersion was bumped is dead) — without it a
+ * signed-out device kept receiving live events until its 15-minute token ran out.
+ */
+export const authenticateSocketToken = async token => {
+  if (!token) throw new Error('Authentication error: No token provided');
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
+    throw new Error('Authentication error: Invalid or expired token');
+  }
+
+  const user = await User.findById(decoded.id).select('+tokenVersion').populate('role');
+  if (!user || user.status === 'inactive') {
+    throw new Error('Authentication error: User not found or inactive');
+  }
+  if ((decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+    throw new Error('Authentication error: Invalid or expired token');
+  }
+  if (decoded.sid && !(await sessionIsLive(decoded.sid, user._id))) {
+    throw new Error('Authentication error: Invalid or expired token');
+  }
+  return user;
+};
+
 export const initSocket = server => {
   io = new Server(server, {
     cors: {
@@ -37,23 +66,10 @@ export const initSocket = server => {
   // Same JWT the REST API uses — an unauthenticated socket never connects.
   io.use(async (socket, next) => {
     try {
-      const token = socket.handshake.auth?.token;
-
-      if (!token) {
-        return next(new Error('Authentication error: No token provided'));
-      }
-
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findById(decoded.id).populate('role');
-
-      if (!user || user.status === 'inactive') {
-        return next(new Error('Authentication error: User not found or inactive'));
-      }
-
-      socket.user = user;
+      socket.user = await authenticateSocketToken(socket.handshake.auth?.token);
       next();
     } catch (error) {
-      next(new Error('Authentication error: Invalid or expired token'));
+      next(error);
     }
   });
 

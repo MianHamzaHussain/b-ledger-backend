@@ -7,6 +7,9 @@ import { createCrudHandlers } from '../utils/crudController.js';
 import { normalizePhone, phoneProblem, toWhatsApp } from '../utils/phone.js';
 import { CSV_BOM, csvRow } from '../utils/csv.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
+import Order from '../models/Order.js';
+import { customerStats, NO_ORDERS } from '../utils/customerStats.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 /**
  * Customers — they appear when an order is placed (upserted by phone), and can also be added by
@@ -128,7 +131,7 @@ export const exportCustomers = asyncHandler(async (req, res, next) => {
 
   const filter = { business };
   if (search) {
-    const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    const rx = new RegExp(escapeRegex(search), 'i');
     filter.$or = [{ name: rx }, { phone: rx }];
   }
 
@@ -146,4 +149,176 @@ export const exportCustomers = asyncHandler(async (req, res, next) => {
   }
   logger.info({ userId: req.user.id, business, rows: count }, 'customers exported');
   res.end();
+});
+
+/** The digits of what was typed, in the stored form (03XXXXXXXXX): "+92 302", "302" and "0302" all search the same. */
+const phoneSearch = text => {
+  const digits = String(text).replace(/\D/g, '');
+  if (digits.startsWith('92')) return `0${digits.slice(2)}`;
+  if (digits.startsWith('3')) return `0${digits}`;
+  return digits;
+};
+
+/** One business, from the query — in scope, or a 404 (outside your scope is indistinguishable from none). */
+const businessInScope = (req, next) => {
+  const { business } = req.query;
+  if (!business) {
+    next(new ErrorResponse('Select a business', 400));
+    return null;
+  }
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    next(new ErrorResponse('Business not found', 404));
+    return null;
+  }
+  return business;
+};
+
+/**
+ * @desc   Type-ahead for the order form: customers whose name or number matches, five at a time, each
+ *         with how many orders they have had — so the form can say "New" or "Repeat — 4 orders · 1
+ *         returned" and fill in the name, number, city and last address. Names and counts only: no money.
+ * @route  GET /api/v1/customers/suggest?business=&q=&page=&limit=  (orders:create — scoped)
+ */
+export const suggestCustomers = asyncHandler(async (req, res, next) => {
+  const business = businessInScope(req, next);
+  if (!business) return;
+
+  const text = String(req.query.q ?? '').trim();
+  const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 20);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  // Nothing is listed until the person has typed enough to mean something.
+  if (text.length < 3) {
+    return res.status(200).json({ success: true, count: 0, total: 0, pagination: {}, data: [] });
+  }
+
+  const digits = phoneSearch(text);
+  const or = [{ name: new RegExp(escapeRegex(text), 'i') }];
+  if (digits.length >= 3) or.push({ phone: new RegExp(`^${escapeRegex(digits)}`) });
+  const filter = { business, $or: or };
+
+  const [total, rows] = await Promise.all([
+    Customer.countDocuments(filter),
+    Customer.find(filter)
+      .select('name phone city isBlocked blockedReason')
+      .sort({ updatedAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean()
+  ]);
+
+  const stats = await customerStats(
+    business,
+    rows.map(r => r._id)
+  );
+  const data = rows.map(r => {
+    const { lastAddress, ...counts } = stats.get(String(r._id)) ?? NO_ORDERS;
+    return {
+      _id: r._id,
+      name: r.name,
+      phone: r.phone,
+      city: r.city,
+      lastAddress,
+      isBlocked: Boolean(r.isBlocked),
+      blockedReason: r.blockedReason,
+      orders: counts.orders,
+      delivered: counts.delivered,
+      returned: counts.returned
+    };
+  });
+
+  const more = page * limit < total;
+  res.status(200).json({
+    success: true,
+    count: data.length,
+    total,
+    pagination: more ? { next: { page: page + 1, limit } } : {},
+    data
+  });
+});
+
+/** The columns a customer's order rows carry: who/what/when, status and the courier's word — lean. */
+const HISTORY_ROW_FIELDS = [
+  'orderNumber',
+  'dailySerial',
+  'orderDay',
+  'status',
+  'total',
+  'itemCount',
+  'trackingId',
+  'paymentStatus',
+  'createdAt',
+  'dispatchedAt',
+  'deliveredAt',
+  'courierBooking.phase',
+  'courierBooking.courierStatus'
+].join(' ');
+
+/**
+ * @desc   A customer's history: the counts (orders, delivered, returned, cancelled, refused tries, first
+ *         and last order, bought) and their orders newest first, a page at a time. Each row opens the
+ *         normal order page.
+ * @route  GET /api/v1/customers/:id/history?page=&limit=  (customers:read — scoped)
+ */
+export const getCustomerHistory = asyncHandler(async (req, res) => {
+  const customer = req.resource;
+  const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+
+  const [stats, orders] = await Promise.all([
+    customerStats(customer.business, [customer._id]),
+    Order.find({ business: customer.business, customer: customer._id })
+      .select(HISTORY_ROW_FIELDS)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean()
+  ]);
+
+  const counts = { ...(stats.get(String(customer._id)) ?? NO_ORDERS) };
+  delete counts.lastAddress;
+  res.status(200).json({
+    success: true,
+    count: orders.length,
+    total: counts.orders,
+    pagination: page * limit < counts.orders ? { next: { page: page + 1, limit } } : {},
+    data: {
+      customer: {
+        _id: customer._id,
+        name: customer.name,
+        phone: customer.phone,
+        city: customer.city,
+        note: customer.note,
+        createdAt: customer.createdAt,
+        isBlocked: Boolean(customer.isBlocked),
+        blockedReason: customer.blockedReason,
+        blockedAt: customer.blockedAt
+      },
+      stats: counts,
+      orders
+    }
+  });
+});
+
+/**
+ * @desc   Block or unblock a customer. A person does this, with the reason; the system never blocks by
+ *         itself. `blockedBy` is the signed-in user, never the body.
+ * @route  PUT /api/v1/customers/:id/block  (customers:update — scoped)
+ */
+export const setCustomerBlocked = asyncHandler(async (req, res) => {
+  const customer = req.resource;
+  const { isBlocked, reason } = req.body;
+
+  customer.isBlocked = isBlocked ? true : undefined;
+  customer.blockedReason = isBlocked ? reason : undefined;
+  customer.blockedAt = isBlocked ? new Date() : undefined;
+  customer.blockedBy = isBlocked ? req.user.id : undefined;
+  customer.updatedBy = req.user.id;
+  await customer.save();
+
+  logger.info(
+    { userId: req.user.id, customer: String(customer._id), isBlocked: Boolean(isBlocked) },
+    'customer block changed'
+  );
+  res.status(200).json({ success: true, data: customer });
 });

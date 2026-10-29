@@ -20,6 +20,18 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
+import { refreshParcel } from '../utils/courierSync.js';
+import { assertNotBlocked } from '../utils/customerBlock.js';
+import { airwayBillsFor } from '../utils/airwayBills.js';
+import { partialReturn } from '../utils/partialReturn.js';
+import {
+  buildTimeline,
+  itemsSummary,
+  logActivity,
+  logFieldChanges,
+  logTextChange,
+  rupees
+} from '../utils/orderActivity.js';
 import {
   attachParcel,
   bookParcel,
@@ -131,7 +143,8 @@ export const getOrder = asyncHandler(async (req, res) => {
     { path: 'customerParty', select: 'name phone' },
     { path: 'customer', select: 'name phone' },
     // The timeline names who made each change.
-    { path: 'statusHistory.by', select: 'name' }
+    { path: 'statusHistory.by', select: 'name' },
+    { path: 'activity.by', select: 'name' }
   ]);
 
   const codPaisa = toPaisa(order.codAmount);
@@ -193,7 +206,14 @@ export const getOrder = asyncHandler(async (req, res) => {
   const returnCharge =
     order.returnChargePaisa != null ? fromPaisa(order.returnChargePaisa) : undefined;
 
-  res.status(200).json({ success: true, data: { ...order.toObject(), remittance, returnCharge } });
+  // The raw activity array stays out of the reply: the merged, cost-filtered `timeline` is the one
+  // place the page reads it from, so a cost event can not leak through a second copy.
+  const data = order.toObject();
+  delete data.activity;
+  res.status(200).json({
+    success: true,
+    data: { ...data, remittance, returnCharge, timeline: buildTimeline(order, req.user) }
+  });
 });
 
 /**
@@ -300,6 +320,14 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       ? await resolveMoney(business, { account: req.body.advanceAccount }, req.user)
       : null;
 
+  // A blocked customer needs an explicit "create anyway" — checked here, before stock is reserved.
+  const blockedOverride = await assertNotBlocked(
+    business,
+    contactNumber,
+    req.body.confirmBlocked,
+    req.user
+  );
+
   // Courier is chosen at dispatch, not here — a walk-in/counter sale has none.
   const lineItems = await buildLineItems(business, items);
 
@@ -362,6 +390,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       customerNote: customerNote || undefined,
       shopifyOrderNumber: shopifyOrderNumber || undefined,
       clientRef: clientRef || undefined,
+      blockedOverride,
       items: lineItems,
       customWork,
       // A counter sale takes its payment in the sale; any other order's advance
@@ -417,11 +446,29 @@ export const createOrder = asyncHandler(async (req, res, next) => {
   }
 });
 
+/** The plain-words fields an edit can change, each logged on its own. */
+const EDIT_LOGGED_FIELDS = [
+  { key: 'customerName', label: 'Customer name' },
+  { key: 'contactNumber', label: 'Contact number' },
+  { key: 'city', label: 'City' },
+  { key: 'deliveryAddress', label: 'Delivery address' },
+  { key: 'source', label: 'Source' },
+  { key: 'shopifyOrderNumber', label: 'Shopify order number' }
+];
+
+/** A comparable fingerprint of an order's lines (product, size, quantity, price; custom work). */
+const linesKey = (items = [], customWork = []) =>
+  JSON.stringify([
+    items.map(i => [String(i.product), String(i.variantId), i.quantity, i.unitPrice]),
+    customWork.map(w => [w.description, w.price])
+  ]);
+
 /**
  * @desc   Edit an order before it ships. Allowed only while it is still
  *         `pending`/`confirmed` — stock is held but nothing has posted to the
  *         ledger yet. Once dispatched, delivered or paid, history is fixed and
  *         the honest correction is cancel/return, never a silent edit.
+ *         Each changed field lands on the order's timeline, with who and from → to.
  * @route  PUT /api/v1/orders/:id  (orders:update — scoped)
  */
 export const updateOrder = asyncHandler(async (req, res, next) => {
@@ -489,6 +536,16 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   // Phone is the customer identity — a changed number re-points to (or creates)
   // the right contact, mirroring createOrder.
   const customerPhone = normalizePhone(contactNumber);
+  // Moving the order to a blocked customer's number needs the same "create anyway" as a new order.
+  if (customerPhone !== normalizePhone(order.contactNumber)) {
+    const override = await assertNotBlocked(
+      business,
+      contactNumber,
+      req.body.confirmBlocked,
+      req.user
+    );
+    if (override) order.blockedOverride = override;
+  }
   const customer = await Customer.findOneAndUpdate(
     { business, phone: customerPhone },
     {
@@ -498,16 +555,41 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
 
+  // What the order said before this edit, so the timeline can show "from → to" per field.
+  const before = {
+    customerName: order.customerName,
+    contactNumber: order.contactNumber,
+    city: order.city,
+    deliveryAddress: order.deliveryAddress,
+    source: order.source,
+    shopifyOrderNumber: order.shopifyOrderNumber
+  };
+  const linesBefore = linesKey(order.items, order.customWork);
+  const summaryBefore = itemsSummary(order);
+
   order.customer = customer._id;
   if (source) order.source = source;
   if (shopifyOrderNumber !== undefined) order.shopifyOrderNumber = shopifyOrderNumber || undefined;
   order.customerName = customerName;
   order.contactNumber = contactNumber;
+  // A different city is a different question for the courier — stop waiting on the old one.
+  if (order.city !== city) order.awaitingCity = undefined;
   order.city = city;
   order.deliveryAddress = deliveryAddress;
   order.items = newItems;
   order.customWork = customWork;
   order.updatedBy = req.user.id;
+
+  logFieldChanges(order, req.user, before, EDIT_LOGGED_FIELDS);
+  if (linesKey(newItems, customWork) !== linesBefore) {
+    const count = newItems.reduce((s, i) => s + i.quantity, 0) + customWork.length;
+    logActivity(order, req.user, {
+      kind: 'items',
+      text: 'Items changed',
+      from: summaryBefore,
+      to: `${count} item${count === 1 ? '' : 's'} · ${rupees(newTotal)}`
+    });
+  }
   await order.save();
 
   res.status(200).json({ success: true, data: order });
@@ -608,6 +690,19 @@ export const refundReturnOrder = asyncHandler(async (req, res) => {
   const order = req.resource;
   await refundReturn(order, req.body, req.user.id);
   order.$locals.statusNote = req.body.note;
+  await order.save();
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   The customer kept some pieces of a delivered order and sent the others back: only those pieces
+ *         go back to stock, their cost and sale are reversed, and what the customer paid for them becomes
+ *         the order's refund due (paid with "Refund paid"). The order stays Delivered.
+ * @route  POST /api/v1/orders/:id/partial-return  (orders:update — scoped)
+ */
+export const partialReturnOrder = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  await partialReturn(order, req.body, req.user.id);
   await order.save();
   res.status(200).json({ success: true, data: order });
 });
@@ -786,11 +881,35 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     let trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
     if (req.body.bookWithCourier) {
       // The courier makes the tracking number itself; if it refuses, the order stays as it was.
-      const booked = await bookParcel(order, courier, { remarks: req.body.courierRemarks });
+      let booked;
+      try {
+        booked = await bookParcel(order, courier, { remarks: req.body.courierRemarks });
+      } catch (err) {
+        // Refused only because the courier does not serve this city: keep the order waiting for it, so
+        // when the courier lists the city again somebody is told and can book it in one tap.
+        if (err.code === 'CITY_NOT_SERVED') {
+          await Order.updateOne(
+            { _id: order._id },
+            { $set: { awaitingCity: { courier, city: err.city, since: new Date() } } },
+            { timestamps: false }
+          );
+        }
+        throw err;
+      }
       trackingId = booked.trackingNumber;
+      logActivity(order, req.user, {
+        kind: 'booking',
+        text: 'Parcel booked with the courier’s service',
+        to: trackingId
+      });
     } else if (req.body.attachCourierParcel) {
       await attachParcel(order, courier, req.body.attachCourierParcel);
       trackingId = req.body.attachCourierParcel;
+      logActivity(order, req.user, {
+        kind: 'booking',
+        text: 'Existing courier parcel attached',
+        to: trackingId
+      });
     }
     if (!trackingId) return next(new ErrorResponse('Enter the courier tracking number', 400));
     order.trackingId = trackingId;
@@ -925,6 +1044,12 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
 export const updateOrderCustomerNote = asyncHandler(async (req, res) => {
   const order = req.resource;
 
+  logTextChange(order, req.user, {
+    kind: 'customer-note',
+    label: 'Customer’s request',
+    before: order.customerNote,
+    after: req.body.customerNote
+  });
   order.customerNote = req.body.customerNote || undefined;
   order.updatedBy = req.user.id;
   await order.save();
@@ -952,6 +1077,14 @@ export const updateOrderBookedFor = asyncHandler(async (req, res, next) => {
   }
   assertNotPast(req.body.bookedFor);
 
+  if (order.bookedFor !== req.body.bookedFor) {
+    logActivity(order, req.user, {
+      kind: 'booking',
+      text: 'Booked day moved',
+      from: order.bookedFor,
+      to: req.body.bookedFor
+    });
+  }
   order.bookedFor = req.body.bookedFor;
   order.bookingAlertedOn = undefined;
   order.updatedBy = req.user.id;
@@ -968,6 +1101,12 @@ export const updateOrderBookedFor = asyncHandler(async (req, res, next) => {
 export const updateOrderShopifyNumber = asyncHandler(async (req, res) => {
   const order = req.resource;
 
+  logTextChange(order, req.user, {
+    kind: 'details',
+    label: 'Shopify order number',
+    before: order.shopifyOrderNumber,
+    after: req.body.shopifyOrderNumber
+  });
   order.shopifyOrderNumber = req.body.shopifyOrderNumber || undefined;
   order.updatedBy = req.user.id;
   await order.save();
@@ -983,6 +1122,12 @@ export const updateOrderShopifyNumber = asyncHandler(async (req, res) => {
 export const updateOrderNote = asyncHandler(async (req, res) => {
   const order = req.resource;
 
+  logTextChange(order, req.user, {
+    kind: 'note',
+    label: 'Order note',
+    before: order.note,
+    after: req.body.note
+  });
   order.note = req.body.note || undefined;
   order.updatedBy = req.user.id;
   await order.save();
@@ -997,7 +1142,14 @@ export const updateOrderNote = asyncHandler(async (req, res) => {
 export const updateOrderTracking = asyncHandler(async (req, res, next) => {
   const order = req.resource;
 
-  order.trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+  const trackingId = typeof req.body.trackingId === 'string' ? req.body.trackingId.trim() : '';
+  logTextChange(order, req.user, {
+    kind: 'courier',
+    label: 'Tracking number',
+    before: order.trackingId,
+    after: trackingId
+  });
+  order.trackingId = trackingId;
   order.updatedBy = req.user.id;
   await order.save();
 
@@ -1097,6 +1249,14 @@ export const updateOrderPayment = asyncHandler(async (req, res, next) => {
     order.paymentEntry = undefined;
   }
 
+  if (order.paymentStatus !== paymentStatus) {
+    logActivity(order, req.user, {
+      kind: 'payment',
+      text: paymentStatus === PAYMENT_STATUS.PAID ? 'Marked paid' : 'Marked unpaid',
+      from: order.paymentStatus,
+      to: paymentStatus
+    });
+  }
   order.paymentStatus = paymentStatus;
   order.updatedBy = req.user.id;
   await order.save();
@@ -1131,6 +1291,42 @@ const changeStatusAsUser = (order, user, body) =>
   });
 
 /**
+ * @desc   Book, in one tap, the orders that were waiting for the courier to list their city and now can
+ *         be. Each goes through the NORMAL dispatch-and-book path (same checks, same books), one at a
+ *         time; an order that cannot be booked is reported and the rest carry on.
+ * @route  POST /api/v1/orders/book-waiting  (orders:update — business must be in scope)
+ */
+export const bookWaitingOrders = asyncHandler(async (req, res) => {
+  const { business, orderIds } = req.body;
+  const results = [];
+
+  for (const id of orderIds) {
+    const order = await Order.findOne({ _id: id, business });
+    const waiting = order?.awaitingCity;
+    if (!order || !waiting?.openedAt || !BEFORE_DISPATCH.includes(order.status)) {
+      results.push({ id, ok: false, reason: 'This order is not waiting for an open city' });
+      continue;
+    }
+    try {
+      await changeStatusAsUser(order, req.user, {
+        status: ORDER_STATUS.DISPATCHED,
+        courier: String(waiting.courier),
+        bookWithCourier: true,
+        note: `Booked once ${waiting.city} opened again`
+      });
+      results.push({ id, ok: true });
+    } catch (err) {
+      results.push({ id, ok: false, reason: err.message });
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    data: { booked: results.filter(r => r.ok).length, results }
+  });
+});
+
+/**
  * @desc   One tap for a batch: apply what the courier reports (delivered / returned) to every order
  *         that is marked ready to confirm. The courier's fee is filled in when it has reported one;
  *         left blank otherwise, so it is billed on the courier's invoice as before. An order that
@@ -1140,41 +1336,124 @@ const changeStatusAsUser = (order, user, body) =>
 export const confirmCourierStatus = asyncHandler(async (req, res) => {
   const { business, orderIds } = req.body;
   const results = [];
-
   for (const id of orderIds) {
-    const order = await Order.findOne({ _id: id, business });
-    const kind = order?.courierBooking?.confirmable;
-    if (!order || order.status !== ORDER_STATUS.DISPATCHED || !kind) {
-      results.push({
-        id,
-        ok: false,
-        reason: 'The courier has not reported this one as delivered or returned'
-      });
-      continue;
-    }
-    const fee =
-      Math.round(((order.courierBooking.fee ?? 0) + (order.courierBooking.tax ?? 0)) * 100) / 100;
-    try {
-      await changeStatusAsUser(order, req.user, {
-        status: kind,
-        ...(fee > 0 ? { deliveryCharge: fee } : {}),
-        note: 'Confirmed from the courier’s status'
-      });
-      await Order.updateOne(
-        { _id: id },
-        { $unset: { 'courierBooking.confirmable': 1 } },
-        { timestamps: false }
-      );
-      results.push({ id, ok: true, status: kind });
-    } catch (err) {
-      results.push({ id, ok: false, reason: err.message });
-    }
+    results.push(await confirmOneFromCourier({ id, business, user: req.user }));
   }
 
   res.status(200).json({
     success: true,
     data: { confirmed: results.filter(r => r.ok).length, results }
   });
+});
+
+/** A confirmation claimed longer ago than this is a crashed one, not one still running. */
+const CONFIRM_LOCK_MS = 60_000;
+
+/**
+ * Apply what the courier reports (delivered / returned) to ONE order, through the normal status path, so
+ * a person's tap and the automatic check can never drift apart. The order is claimed first in one
+ * conditional write, so a tap and an automatic confirm racing for the same parcel can not both post its
+ * sale. Never throws: the answer is `{ id, ok, status? | reason? }`. `auto` only changes the words on the
+ * timeline; `user` is whoever the books should name (the signed-in person, or the one who turned the
+ * automatic switch on).
+ */
+export const confirmOneFromCourier = async ({ id, business, user, auto = false }) => {
+  const order = await Order.findOne(business ? { _id: id, business } : { _id: id });
+  const kind = order?.courierBooking?.confirmable;
+  if (!order || order.status !== ORDER_STATUS.DISPATCHED || !kind) {
+    return {
+      id,
+      ok: false,
+      reason: 'The courier has not reported this one as delivered or returned'
+    };
+  }
+
+  const claim = await Order.updateOne(
+    {
+      _id: order._id,
+      status: ORDER_STATUS.DISPATCHED,
+      'courierBooking.confirmable': kind,
+      $or: [
+        { 'courierBooking.confirmClaimedAt': { $exists: false } },
+        { 'courierBooking.confirmClaimedAt': { $lt: new Date(Date.now() - CONFIRM_LOCK_MS) } }
+      ]
+    },
+    { $set: { 'courierBooking.confirmClaimedAt': new Date() } },
+    { timestamps: false }
+  );
+  if (claim.modifiedCount !== 1) {
+    return { id, ok: false, reason: 'This parcel is being confirmed right now' };
+  }
+
+  const fee =
+    Math.round(((order.courierBooking.fee ?? 0) + (order.courierBooking.tax ?? 0)) * 100) / 100;
+  try {
+    await changeStatusAsUser(order, user, {
+      status: kind,
+      ...(fee > 0 ? { deliveryCharge: fee } : {}),
+      note: auto
+        ? 'Marked automatically from the courier’s status'
+        : 'Confirmed from the courier’s status'
+    });
+    await Order.updateOne(
+      { _id: order._id },
+      { $unset: { 'courierBooking.confirmable': 1, 'courierBooking.confirmClaimedAt': 1 } },
+      { timestamps: false }
+    );
+    return { id, ok: true, status: kind };
+  } catch (err) {
+    await Order.updateOne(
+      { _id: order._id },
+      { $unset: { 'courierBooking.confirmClaimedAt': 1 } },
+      { timestamps: false }
+    );
+    return { id, ok: false, reason: err.message };
+  }
+};
+
+/**
+ * @desc   Ask the courier about this one parcel right now and apply what it says — the same thing
+ *         the 15-minute check does, on demand.
+ * @route  POST /api/v1/orders/:id/courier-refresh  (orders:update — scoped)
+ */
+export const refreshCourierStatus = asyncHandler(async (req, res) => {
+  const data = await refreshParcel(req.resource);
+  res.status(200).json({ success: true, data });
+});
+
+/** Stamp parcels as printed (who, when) — the list shows "Printed" and filters "Not printed yet". */
+const markBillsPrinted = (ids, userId) =>
+  Order.updateMany(
+    { _id: { $in: ids } },
+    {
+      $set: {
+        'courierBooking.billPrinted': true,
+        'courierBooking.billPrintedAt': new Date(),
+        'courierBooking.billPrintedBy': userId
+      }
+    },
+    { timestamps: false }
+  );
+
+/**
+ * @desc   The airway bills of up to 100 ticked orders as ONE PDF, in the order ticked. A parcel the
+ *         courier would not give a bill for is named in `X-Airway-Skipped`; the rest still print.
+ * @route  POST /api/v1/orders/airway-bills  (orders:read — business must be in scope)
+ */
+export const printAirwayBills = asyncHandler(async (req, res) => {
+  const { business, orderIds } = req.body;
+  const { pdf, printed, skipped } = await airwayBillsFor({ business, orderIds });
+  await markBillsPrinted(printed, req.user.id);
+
+  res
+    .status(200)
+    .set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="airway-bills-${pakistanDay()}.pdf"`,
+      'Access-Control-Expose-Headers': 'X-Airway-Skipped',
+      'X-Airway-Skipped': skipped.map(s => `#${s.orderNumber}`).join(', ')
+    })
+    .send(pdf);
 });
 
 /**
@@ -1190,6 +1469,7 @@ export const getAirwayBill = asyncHandler(async (req, res, next) => {
   }
   const { api } = await adapterFor(order.courier, { requireEnabled: false });
   const pdf = await api.airwayBill([tracking]);
+  await markBillsPrinted([order._id], req.user.id);
   res
     .status(200)
     .set({
@@ -1333,6 +1613,49 @@ export const getDeliverers = asyncHandler(async (req, res, next) => {
     { $limit: 20 }
   ]);
   res.status(200).json({ success: true, data: rows.map(r => r._id) });
+});
+
+/** A business's phrases, one of each (letter case ignored), in the order given. */
+const uniquePhrases = list => {
+  const seen = new Set();
+  return list.filter(p => {
+    const key = p.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+/**
+ * @desc   The business's own one-tap courier requests (the built-in ones live in the app).
+ * @route  GET /api/v1/orders/phrases?business=  (orders:read — scoped)
+ */
+export const getRequestPhrases = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  const found = mongoose.isValidObjectId(business)
+    ? await Business.findById(business).select('requestPhrases')
+    : null;
+  if (!found) return next(new ErrorResponse('Business not found', 404));
+  res.status(200).json({ success: true, data: found.requestPhrases ?? [] });
+});
+
+/**
+ * @desc   Replace the business's own one-tap courier requests (add, remove, reorder in one save).
+ * @route  PUT /api/v1/orders/phrases  (orders:update — business must be in scope)
+ */
+export const setRequestPhrases = asyncHandler(async (req, res, next) => {
+  const phrases = uniquePhrases(req.body.phrases);
+  const result = await Business.updateOne(
+    { _id: req.body.business },
+    { $set: { requestPhrases: phrases } }
+  );
+  if (!result.matchedCount) return next(new ErrorResponse('Business not found', 404));
+  res.status(200).json({ success: true, data: phrases });
 });
 
 /**
@@ -1485,7 +1808,13 @@ export const addCustomCost = asyncHandler(async (req, res, next) => {
     }
     const money = await resolveMoney(order.business, { account }, req.user);
     await recordCustomCost(order, description, toPaisa(amount), money, req.user.id, payee);
+    // A cost: the line carries the amount, so the timeline hides it from people who may not see costs.
+    logActivity(order, req.user, {
+      kind: 'cost',
+      text: `Custom cost added: ${description} — ${rupees(amount)}`
+    });
   }
+  if (material) logActivity(order, req.user, { kind: 'cost', text: 'Material cost added' });
   await order.save();
 
   res.status(200).json({ success: true, data: order });
@@ -1503,6 +1832,7 @@ export const deleteCustomCost = asyncHandler(async (req, res, next) => {
   }
 
   await removeCustomCost(order, req.params.costId, req.user.id);
+  logActivity(order, req.user, { kind: 'cost', text: 'Custom cost removed' });
   await order.save();
 
   res.status(200).json({ success: true, data: order });

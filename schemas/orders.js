@@ -52,6 +52,8 @@ export const orderCreateSchema = z
     bookedFor: day.optional(),
     /** Makes sending this order twice safe — see Order.clientRef. */
     clientRef: z.string().trim().min(1).max(64).optional(),
+    /** The customer is blocked and the person chose to create the order anyway. */
+    confirmBlocked: z.boolean().optional(),
     advanceAmount: z.coerce.number().min(0).optional(),
     /** Where the advance (or a counter sale's "paid now") went — a money account or partner:<id>. */
     advanceAccount: z.string().optional(),
@@ -75,6 +77,8 @@ export const orderUpdateSchema = z
     deliveryAddress: z.string().optional(),
     source: source.optional(),
     shopifyOrderNumber,
+    /** Moving the order to a blocked customer's number, and the person chose to go ahead. */
+    confirmBlocked: z.boolean().optional(),
     items: z.array(orderItem).default([]),
     customWork: z.array(customWork).max(20).default([])
   })
@@ -162,6 +166,50 @@ export const orderLoadSheetSchema = z.object({
   business: id,
   courier: id,
   orderIds: z.array(id).min(1, 'Choose at least one order').max(100)
+});
+
+/** The customer kept some pieces of a delivered order and sent the others back. */
+export const orderPartialReturnSchema = z.object({
+  lines: z
+    .array(
+      z.object({
+        line: id,
+        quantity: z.coerce.number().int('Whole pieces only').min(1, 'At least 1 piece')
+      })
+    )
+    .min(1, 'Choose which items came back'),
+  /** Kept back from the refund (rupees) — usually 0; the delivery charge is not deducted by default. */
+  keep: money.optional(),
+  returnBy: z.enum(['customer', 'us']).optional(),
+  returnCourierName: z.string().trim().max(60).optional(),
+  reversalTrackingId: z.string().trim().max(60).optional(),
+  note: z.string().trim().max(300).optional()
+});
+
+/** Print many airway bills at once — up to 100, in the order they were ticked. */
+export const orderAirwayBillsSchema = z.object({
+  business: id,
+  orderIds: z.array(id).min(1, 'Choose at least one order').max(100, 'Print at most 100 at a time')
+});
+
+/** Book the orders that were waiting for a courier city that has reopened. */
+export const orderBookWaitingSchema = z.object({
+  business: id,
+  orderIds: z.array(id).min(1, 'Choose at least one order').max(100)
+});
+
+/** The business's own one-tap courier requests. The server also drops duplicates (any letter case). */
+export const orderPhrasesSchema = z.object({
+  business: id,
+  phrases: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1, 'A request can not be empty')
+        .max(60, 'Keep each under 60 characters')
+    )
+    .max(12, 'Keep it to 12 requests')
 });
 
 /** Move a booked order's due day. */

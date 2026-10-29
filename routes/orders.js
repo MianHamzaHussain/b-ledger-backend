@@ -1,4 +1,5 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { protect } from '../middlewares/auth.js';
 import {
   can,
@@ -26,6 +27,10 @@ import {
   orderBookedForSchema,
   orderCourierConfirmSchema,
   orderLoadSheetSchema,
+  orderPhrasesSchema,
+  orderBookWaitingSchema,
+  orderAirwayBillsSchema,
+  orderPartialReturnSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -59,6 +64,12 @@ import {
   getCourierReady,
   getDeliverers,
   getAirwayBill,
+  refreshCourierStatus,
+  getRequestPhrases,
+  bookWaitingOrders,
+  partialReturnOrder,
+  printAirwayBills,
+  setRequestPhrases,
   getCourierParcels,
   getParcelPreview,
   getLoadSheet,
@@ -105,6 +116,117 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/summary', can('orders', 'read'), getOrderSummary);
+
+/**
+ * @swagger
+ * /orders/phrases:
+ *   get:
+ *     summary: The business's own one-tap courier requests
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "A list of short phrases (up to 12)" }
+ *       404: { description: Business outside your scope }
+ *   put:
+ *     summary: Replace the business's own one-tap courier requests
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business, phrases]
+ *             properties:
+ *               business: { type: string }
+ *               phrases: { type: array, maxItems: 12, items: { type: string, maxLength: 60 } }
+ *     responses:
+ *       200: { description: The saved list, duplicates removed }
+ */
+/**
+ * @swagger
+ * /orders/book-waiting:
+ *   post:
+ *     summary: Book the orders that were waiting for a courier city that has reopened
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business, orderIds]
+ *             properties:
+ *               business: { type: string }
+ *               orderIds: { type: array, maxItems: 100, items: { type: string } }
+ *     responses:
+ *       200: { description: "{ booked, results: [{ id, ok, reason? }] }" }
+ */
+/**
+ * Printing many bills asks the courier several times; a few batches a minute is plenty for a person, and
+ * a stuck button must not hammer the courier's service.
+ */
+const airwayBillLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  keyGenerator: req => String(req.user?.id ?? 'anonymous'),
+  message: { success: false, error: 'Too many bill batches. Wait a minute and try again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { keyGeneratorIpFallback: false }
+});
+
+/**
+ * @swagger
+ * /orders/airway-bills:
+ *   post:
+ *     summary: The airway bills of many orders as one PDF (up to 100, in the order ticked)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business, orderIds]
+ *             properties:
+ *               business: { type: string }
+ *               orderIds: { type: array, maxItems: 100, items: { type: string } }
+ *     responses:
+ *       200: { description: "A PDF. `X-Airway-Skipped` names any parcel the courier gave no bill for." }
+ *       400: { description: None of them was booked through a courier service }
+ *       429: { description: Too many batches }
+ */
+router.post(
+  '/airway-bills',
+  can('orders', 'read'),
+  airwayBillLimiter,
+  restrictBusinessToScope(),
+  validate(orderAirwayBillsSchema),
+  printAirwayBills
+);
+
+router.post(
+  '/book-waiting',
+  can('orders', 'update'),
+  restrictBusinessToScope(),
+  validate(orderBookWaitingSchema),
+  bookWaitingOrders
+);
+
+router.get('/phrases', can('orders', 'read'), getRequestPhrases);
+router.put(
+  '/phrases',
+  can('orders', 'update'),
+  restrictBusinessToScope(),
+  validate(orderPhrasesSchema),
+  setRequestPhrases
+);
 
 /**
  * @swagger
@@ -198,6 +320,26 @@ router.post(
  *       502: { description: The courier refused or could not be reached }
  */
 router.get('/:id/airway-bill', can('orders', 'read'), loadScoped(Order), getAirwayBill);
+
+/**
+ * @swagger
+ * /orders/{id}/courier-refresh:
+ *   post:
+ *     summary: Ask the courier about this parcel now and apply its answer
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: The order with its fresh courier status }
+ *       400: { description: Not a dispatched parcel booked through a courier }
+ */
+router.post(
+  '/:id/courier-refresh',
+  can('orders', 'update'),
+  loadScoped(Order),
+  refreshCourierStatus
+);
 
 /**
  * @swagger
@@ -426,6 +568,39 @@ router.post(
   loadScoped(Order),
   validate(orderRefundReturnSchema),
   refundReturnOrder
+);
+
+/**
+ * @swagger
+ * /orders/{id}/partial-return:
+ *   post:
+ *     summary: The customer kept some pieces and sent the others back — only those pieces are reversed
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [lines]
+ *             properties:
+ *               lines: { type: array, items: { type: object, properties: { line: { type: string }, quantity: { type: integer } } } }
+ *               keep: { type: number, description: "Rupees kept back from the refund (default 0)" }
+ *               returnBy: { type: string, enum: [customer, us] }
+ *               note: { type: string }
+ *     responses:
+ *       200: { description: "The order, still Delivered, with `returnedItems` and a refund due to pay with Refund paid" }
+ *       400: { description: Not delivered, already exchanged, more than is left, or every piece (use the whole-order flows) }
+ */
+router.post(
+  '/:id/partial-return',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderPartialReturnSchema),
+  partialReturnOrder
 );
 
 router.post(

@@ -8,7 +8,10 @@ import {
   resetPassword,
   updateDetails,
   updatePassword,
-  refreshAccessToken
+  refreshAccessToken,
+  getSessions,
+  deleteSession,
+  signOutOtherSessions
 } from '../controllers/authController.js';
 import { protect } from '../middlewares/auth.js';
 import { validate } from '../middlewares/validate.js';
@@ -212,5 +215,45 @@ router.put(
   validate(resetPasswordSchema),
   resetPassword
 );
+
+/**
+ * @swagger
+ * /auth/sessions:
+ *   get:
+ *     summary: The devices this account is signed in on
+ *     tags: [Auth]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: "Own sessions — browser, system, address, signed-in and last-active times; `isCurrent` marks this device" }
+ */
+router.get('/sessions', protect, getSessions);
+
+/**
+ * @swagger
+ * /auth/sessions/sign-out-others:
+ *   post:
+ *     summary: Sign out every other device, keep this one
+ *     tags: [Auth]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: "{ signedOut: n }" }
+ */
+// Literal path before /:id so it is not read as a session id.
+router.post('/sessions/sign-out-others', protect, signOutOtherSessions);
+
+/**
+ * @swagger
+ * /auth/sessions/{id}:
+ *   delete:
+ *     summary: Sign one device out (404 for anyone else's)
+ *     tags: [Auth]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: Signed out }
+ *       404: { description: Not one of your devices }
+ */
+router.delete('/sessions/:id', protect, deleteSession);
 
 export default router;

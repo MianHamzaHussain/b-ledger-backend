@@ -114,3 +114,39 @@ export const normalizeCity = raw => {
 /** True when a stored city is already a listed one (the backfill skips those). */
 export const isListedCity = city =>
   typeof city === 'string' && CANONICAL_BY_KEY.get(keyOf(city)) === city;
+
+/**
+ * The identity of a place for matching a courier's list: letters and digits only, lower case — so
+ * "Islam Kot", "islamkot" and "Islam-Kot" are the same place. Not used to store anything.
+ */
+export const cityMatchKey = text =>
+  String(text ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
+/** Edit distance between two short keys (insert, delete, change), for "did you mean". */
+const distance = (a, b) => {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const tmp = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = tmp;
+    }
+  }
+  return row[b.length];
+};
+
+/** Up to three of `names` that look like what was typed: contains it, or is within two edits. */
+export const nearCities = (names, typed) => {
+  const key = cityMatchKey(typed);
+  if (key.length < 3) return [];
+  return names
+    .map(name => ({ name, k: cityMatchKey(name) }))
+    .filter(({ k }) => k.includes(key) || key.includes(k) || distance(k, key) <= 2)
+    .sort((x, y) => distance(x.k, key) - distance(y.k, key))
+    .slice(0, 3)
+    .map(({ name }) => name);
+};

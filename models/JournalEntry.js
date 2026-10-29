@@ -53,6 +53,11 @@ const JournalEntrySchema = new mongoose.Schema(
       kind: { type: String, enum: Object.values(JOURNAL_SOURCES), default: JOURNAL_SOURCES.MANUAL },
       ref: { type: String }
     },
+    /**
+     * Why an owner took money out — `home` or `personal` (R9-12). Entries made before this existed have
+     * none; the report reads their memo ("Home expense…") instead.
+     */
+    purpose: { type: String, enum: ['home', 'personal'] },
     lines: { type: [LineSchema], default: [] },
     reversalOf: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User', required: true },

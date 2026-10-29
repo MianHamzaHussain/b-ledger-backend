@@ -28,7 +28,7 @@ const assertNotLocked = async (business, when) => {
  * batch?, debitPaisa?, creditPaisa? }`; the model's pre-validate hook enforces
  * that they balance.
  */
-export const postEntry = async ({ business, date, memo, source, lines, userId }) => {
+export const postEntry = async ({ business, date, memo, source, lines, userId, purpose }) => {
   const when = date || new Date();
   await assertNotLocked(business, when);
 
@@ -38,6 +38,7 @@ export const postEntry = async ({ business, date, memo, source, lines, userId })
     memo,
     source: source || { kind: 'manual' },
     lines,
+    purpose,
     createdBy: userId
   });
 };

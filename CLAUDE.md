@@ -882,6 +882,158 @@ booked` (`renameOnOpenOrders`), and booking a parcel reads the **live** name for
   server starting in production; tests refuse a database whose name lacks "test"; `npm run find:testdata`
   is a read-only scan of a real database for records that look like test data.
 
+### 10.11 Round 9 rules (2026-10-29)
+
+- **The order's activity log** (`Order.activity`, `utils/orderActivity.js`). `statusHistory` is only status
+  steps; every other change after the order was taken — notes, the customer's request, a changed field
+  (`updateOrder` logs one event per **changed** field with from → to), items, tracking, Shopify number,
+  payment, advances/refunds, custom costs, booking — is one append-only event `{ kind, text, from, to, at,
+by, system }`. `by` is the token's user, never the body; a system event (the courier check) has no `by`.
+  A controller adds **one `logActivity` / `logTextChange` line before the `save()` it already does**, so the
+  log and the change commit together; an unchanged value logs nothing; the log keeps the newest 300.
+  `GET /orders/:id` returns a merged, newest-first **`timeline`** (status steps + activity) and **not** the
+  raw array; `toJSON` strips `activity` from every other reply, and **cost events are dropped for a reader
+  without `costs:read`** (their sentence holds the amount, which the route's field stripper cannot reach).
+  Orders from before this release start empty — past edits were never recorded.
+
+- **Sessions — "where you are signed in"** (`models/Session.js`, `utils/sessions.js`, `utils/userAgent.js`).
+  One `Session` per device, created at sign-in; the refresh-token rows and the access token's `sid` claim
+  point at it, and the refresh rotation keeps it. `protect` and the socket handshake check the session is
+  still there (one indexed read), so deleting it signs that device out on its **next request**. Own
+  endpoints (token user only; someone else's id is a 404): `GET /auth/sessions`, `DELETE
+/auth/sessions/:id`, `POST /auth/sessions/sign-out-others`. **Logout is this device only**; a password
+  change/reset removes every session and refresh token and starts a fresh one for the current device. A
+  rotated refresh token coming back (`detectReuse`, via `Session.previousHashes`) is a copied cookie: that
+  device's session is revoked. Cookies from before sessions adopt one (`isLegacy`) on their first refresh;
+  access tokens with no `sid` simply expire within 15 minutes. Needs `TRUST_PROXY_HOPS` for the address.
+  **Admins** (`users:update`) have `GET /users/:id/sessions`, `DELETE /users/:id/sessions/:sid` and
+  `POST /users/:id/sign-out-all` (sessions + refresh tokens + a `tokenVersion` bump); a non-admin can not
+  touch an Admin's sign-ins. **A sign-in from a device this person has not used** (coarse
+  browser|system|kind fingerprint in `User.knownDevices`, never an address) **sends one email**
+  (`utils/signInAlert.js`; best-effort, never blocks the sign-in; the first sign-in after the release only
+  records). It is an email, not a bell: notifications are per business, and a security notice must reach
+  only that person. The mail door is `signInAlertDeps.send` — tests replace it.
+
+- **The courier's journey in plain phases** (`utils/couriers/statusWords.js`, R9-1). Each status check
+  saves `courierBooking.phase` (`booked · at-warehouse · on-route · attempt-failed · under-review ·
+delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobody has mapped is `unknown`,
+  and the screen shows PostEx's own words** — never a guess. A cancel wording beats the returned code
+  (0002 is also "Booking Cancelled by Merchant"). `needsAttention` is set only for a **failed try or a
+  review hold**; routine steps stay quiet. Each history step carries `seenAt` — when WE first noticed it
+  (PostEx sends no time), kept stable across later checks. A **new failed try** and **the start of a review
+  hold** ring the bell once (`courier-issue`; the attempts-count filter on the write means two runs cannot
+  both add the same try). `rescheduled` is an attempt reason (a delay, counted apart from a refusal).
+  `POST /orders/:id/courier-refresh` (`orders:update`) asks PostEx about one parcel now and applies the
+  same `apply()` the 15-minute pass does (10 s cool-down). `GET /orders/summary` carries `needsAttention`;
+  the list rows carry `courierBooking.phase`, `needsAttention` and `deliveryAttempts.reason` (reasons only).
+
+- **Own one-tap courier requests** (`Business.requestPhrases`, ≤ 12 phrases of ≤ 60 characters, R9-1b): the
+  built-in chips live in the app; a business adds its own through `GET/PUT /orders/phrases` — `orders:read` /
+  `orders:update`, scoped (`restrictBusinessToScope`), **not** the Businesses permission, since it is a line
+  of text. The server trims and drops a duplicate in any letter case; PUT replaces the whole list so add,
+  remove and reorder are one save.
+
+- **Customers on the order form, their history, and blocking** (R9-3). `GET /customers/suggest?business=&q=`
+  (gated by **`orders:create`**, so people who take orders need no Customers access; scoped; 404 outside scope)
+  matches a name or a number typed any way (`+92 302`, `302`, `0302`), needs 3+ characters, five at a time, and
+  returns **names, counts and the last order's address — never money**. `GET /customers/:id/history` returns
+  the counts (orders, delivered — exchanged/refunded included —, returned, cancelled, refused tries, first/last
+  order, bought) plus the orders newest first, lean rows, paged. Counts are **computed on demand**
+  (`utils/customerStats.js`, one aggregation on the new `{ business, customer, createdAt }` index) and never
+  stored, because a stored counter drifts. **Block** (`PUT /customers/:id/block`, `customers:update`): a
+  person blocks with a reason (required) — the system never blocks by itself. `createOrder` (and `updateOrder`
+  when it moves the order to another number) **refuses a blocked number unless `confirmBlocked: true`**, before
+  any stock is reserved; the override is saved as `Order.blockedOverride { by, at, reason }`. Per business.
+
+- **Goods received, by supplier** (R9-2). `GET /goods-receipts/suppliers?business=&search=&page=&limit=5`
+  (`goodsReceipts:read`, scoped, 404 outside scope) returns **one row per supplier** delivered from — newest
+  delivery first — with `deliveries`, `pieces`, `sentBackPieces`, `lastDeliveryAt` and (only with "See
+  costs", through the router's `hideCosts`) `totalCostPaisa`. A reversed delivery is not counted. It does
+  **not** carry what we owe: that is the supplier's Khata. A supplier's deliveries are the existing
+  `GET /goods-receipts?party=`; a delivery's items and per-line send-back are the existing detail and
+  `POST /goods-receipts/:id/send-back` (per-line quantities already worked — the screen was hiding them).
+  `utils/escapeRegex.js` is the shared literal-text matcher (typed text is never a pattern).
+
+- **Cities and the courier** (R9-7). `GET /cities?business=&search=&page=&limit=5` (any signed-in user)
+  merges our standard list with each **connected** courier's own list — the courier's spelling wins, matching
+  ignores case, spaces and hyphens (`cityMatchKey`: "Islam Kot" = "Islamkot") — and marks each city
+  `served: { postex: true|false }`. A courier that cannot be asked shows no mark and never blocks the list; a
+  user outside the business gets the plain list, never the couriers' lists. **PostEx hides a city where delivery
+  is not available**, and the adapter also honours the guide's `isDeliveryCity` / `isPickupCity` flags. A
+  booking carries **the courier's own spelling** and a refused city names what was probably meant
+  (`nearCities`). The city cache is **an hour** (`POST /cities/refresh`, 1 min cool-down). An order refused
+  **only for its city** gets `awaitingCity`; the hourly check (`utils/cityWatch.js`, inside the courier tick)
+  reads the list **fresh**, marks the held orders open (`openedAt`, once) and rings the bell **once per
+  business and city** (`courier-city-open`); `POST /orders/book-waiting` then books them through the normal
+  dispatch path — one tap, because a booking creates a real parcel. A changed city, or a successful booking,
+  clears the hold.
+
+- **Many airway bills as one PDF** (R9-10). `POST /orders/airway-bills { business, orderIds ≤ 100 }`
+  (`orders:read`, business in scope, 20 batches a minute per user) asks the courier **10 bills a call, three
+  calls at a time** (PostEx's limit is 10 and one PDF per call), retries a rejected call **parcel by parcel**
+  so one bad parcel never blocks the rest, and stitches the PDFs with `pdf-lib` (pure JavaScript, pinned) in
+  **the order ticked**. Another business's order is never named or fetched; an order with no courier parcel
+  is listed in the `X-Airway-Skipped` header (exposed to the browser) and the rest print. A bill that
+  printed stamps `courierBooking.billPrinted / billPrintedAt / billPrintedBy` (the single bill does too);
+  a new booking starts `billPrinted: false`, which is what the "Not printed yet" filter reads — bookings made
+  before this release have no flag and do not appear under it.
+
+- **What owners took, month by month** (R9-12). An owner withdrawal (partner `withdraw`, or the shared owner
+  account) now keeps `purpose` (`home` / `personal`) on its journal entry; older entries are read from their memo
+  ("Home expense…"), anything else is `other`. `GET /finance/reports/owner-draws?business=&from=&to=`
+  (`reports:read`) returns one row per **Pakistan month**, newest first, empty months included: what was taken
+  (by purpose and by person) beside that month's net profit and **left in the business** (profit − taken; below
+  zero means the shop is using up its own capital). It is the owner's own money, so it **never lowers
+  profit**. People without `partners:read` see one "Owner" row, never the names. **A drawing that was reversed
+  (and its reversal) is no longer counted** — before this, a mistaken withdrawal that was reversed still showed
+  in "Owner took" on the P&L. `Partner.monthlyAllowancePaisa` (set as `monthlyAllowance` in rupees, 0 clears)
+  is a **guide, never a lock**; `GET /partners/:id` returns `thisMonth { tookPaisa, allowancePaisa }`. No bell
+  at the limit: notifications are per business and would show one partner's drawings to staff.
+
+- **The customer keeps some pieces after delivery** (R9-13, `utils/partialReturn.js`). At the door a parcel is
+  all-or-nothing (the standard Delivered / Returned already handle it); the partial case is only **after
+  delivery**: one article exchanged or returned, the rest kept. `POST /orders/:id/partial-return { lines:
+[{ line, quantity }], keep?, returnBy?, note? }` reverses **only those pieces**, with the same entries the
+  whole-order flows post on a subset of lines: Dr Sales / Cr Advances from customers (their price), Dr
+  Inventory / Cr COGS (their cost), stock back for exactly those pieces, and — if `keep` — Dr Advances / Cr
+  Charges kept. The order stays **Delivered**; the courier's COD and delivery charge stand. What the customer
+  paid for the pieces becomes the order's ordinary refund due, paid with the ordinary **Refund paid** (from the
+  shop's own bank or cash — never the PostEx wallet). `Order.returnedItems` records each go; the same line can
+  come back in several goes, never more than was delivered; **every piece is refused** here (the whole-order
+  flows do that). **The standard flows were not rewritten**: `exchange.js` and `refundReturn.js` gained only a
+  guard that a partly returned order can no longer be exchanged or refunded as a whole. v1 has refund as
+  the outcome; a credit carried into a replacement is not built (exchange of one article = this + a normal new
+  order). A return pickup booked on our own courier is not billed on the courier invoice automatically —
+  record that cost as a shop expense.
+
+- **Delivered / returned by themselves** (R9-6). A courier connection has `integration.autoConfirm`: **on for a
+  connection made from now on, never switched on silently for an older one** (an admin turns it on with
+  `PUT /parties/:id/connection { autoConfirm }`). When on, the courier check marks a parcel delivered /
+  returned only after **two checks in a row** say the same (`courierBooking.seenKind/seenCount`; "Refresh
+  now" does not count; a change of mind resets it; a parcel **we** cancelled at the courier is never a
+  return) — because delivered cannot be taken back once sales, cost and stock are posted. It calls
+  **`confirmOneFromCourier`, the same function a person's tap uses**, which first **claims** the order in one
+  conditional write (`confirmClaimedAt`), so a tap and an automatic confirm racing cannot both post its sale.
+  The books name `integration.autoConfirmBy` — the person who turned it on; the order's timeline says "Marked
+  automatically from the courier's status". The function is **injected** (`startCourierSync({ confirm })`
+  from `server.js`), not imported, to keep the courier code free of the order controller. If a confirm
+  fails the parcel simply stays ready for a person.
+
+- **The courier's wallet** (R9-6, `utils/courierWallet.js`). Money the courier holds for the shop — a wallet-kind
+  money account flagged `Account.heldByCourier` (+ `courier`), made the first time it is needed, one per courier.
+  **Off unless an admin turns on `integration.recordPayments`** (after comparing the first batch with the
+  courier's statement: the courier's call says only paid / not paid, so the amount is **calculated**, not read).
+  When on, about hourly: a delivered, unpaid, COD parcel **whose fee is known** that the courier says it paid is
+  recorded in one entry, **Dr wallet / Cr COD receivable [courier]** for the receivable **as booked at
+  delivery** (read from the sale entry, so it clears to exactly zero even if the COD-tax settings changed), the
+  parcel is marked paid (`courierSettlement`, so **undoing the entry from the journal reopens it**), and the
+  bell rings once per batch (`courier-paid`). A returned parcel's charge, already booked against the courier by the
+  standard Returned posting, is moved onto the wallet (**Dr COD receivable / Cr wallet**), so the wallet shows a
+  **minus** until a payout nets it. Parcels are claimed in a conditional write first, so two runs cannot pay one
+  twice. **The wallet cannot be spent**: `resolveMoney` refuses a `heldByCourier` account for refunds, expenses,
+  salaries and payments (a server rule, not only the screen); `Move money` may take it as the **source** only
+  (`allowCourierHeld`), never as the destination.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from
@@ -1005,9 +1157,14 @@ cost more the longer it waits.
   ~15m, carries `tokenVersion`) traded via `POST /auth/refresh` for a rotating
   **refresh** token — a random secret stored only as a SHA-256 hash
   (`models/RefreshToken.js`, TTL-swept) and delivered as an **httpOnly** cookie
-  (`utils/refreshTokens.js`). Rotation consumes each token so a replay 401s
+  (`utils/refreshTokens.js`). Rotation consumes each token **atomically**
+  (`findOneAndDelete`), so a replay — or two requests racing with one cookie — 401s
   (reuse defence). Logout revokes the token, clears the cookie, and bumps
-  `tokenVersion`. Cross-origin deploys set `COOKIE_SAMESITE=none` (HTTPS).
+  `tokenVersion`. A **password change or reset also deletes every refresh token**
+  (`revokeAllForUser`; the reply gives the current device a fresh one) — bumping
+  `tokenVersion` alone only killed 15-minute access tokens while other devices' cookies
+  kept minting new ones. The live socket applies the same `tokenVersion` check as
+  `protect` (`authenticateSocketToken`). Cross-origin deploys set `COOKIE_SAMESITE=none` (HTTPS).
 - **File uploads.** Removed. If added back, note that writing to `public/` does
   **not** work on Vercel serverless — use S3, Cloudinary or Vercel Blob.
 

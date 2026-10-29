@@ -71,6 +71,38 @@ export const heldPaisaOf = order =>
     0
   );
 
+/**
+ * One thing that changed on an order that is NOT a status step — a note, an address, a payment, a
+ * tracking number. Append-only; `by` is stamped from the token, never the request body, and a
+ * system event (the courier check) has no `by`. See utils/orderActivity.js.
+ */
+export const ACTIVITY_KINDS = [
+  'note',
+  'customer-note',
+  'details',
+  'items',
+  'payment',
+  'money',
+  'courier',
+  'cost',
+  'booking'
+];
+/** The log keeps the newest events only, so an order document can not grow without bound. */
+export const ACTIVITY_CAP = 300;
+
+const ActivityEventSchema = new mongoose.Schema(
+  {
+    kind: { type: String, enum: ACTIVITY_KINDS, required: true },
+    text: { type: String, required: true, trim: true, maxlength: 200 },
+    from: { type: String, trim: true, maxlength: 200 },
+    to: { type: String, trim: true, maxlength: 200 },
+    at: { type: Date, default: Date.now },
+    by: { type: mongoose.Schema.ObjectId, ref: 'User' },
+    system: { type: Boolean, default: undefined }
+  },
+  { _id: false }
+);
+
 /** One failed try at the door — kept apart from `statusHistory` because the status did not change. */
 const DeliveryAttemptSchema = new mongoose.Schema(
   {
@@ -131,6 +163,27 @@ const OrderItemSchema = new mongoose.Schema(
     oversold: { type: Number, default: 0, min: 0 },
     /** Delivered with no cost known yet (nothing had arrived) — profit on it is overstated. */
     costUnknown: { type: Boolean, default: false }
+  },
+  { _id: true }
+);
+
+/** Some pieces of a DELIVERED order that came back while the customer kept the rest (R9-13). */
+const ReturnedItemSchema = new mongoose.Schema(
+  {
+    /** The order item (line) these pieces belong to. */
+    line: { type: mongoose.Schema.ObjectId, required: true },
+    productName: { type: String, required: true },
+    variantLabel: { type: String },
+    quantity: { type: Number, required: true, min: 1 },
+    unitPrice: { type: Number, required: true, min: 0 },
+    amountPaisa: { type: Number, required: true, min: 0 },
+    date: { type: Date, default: Date.now },
+    by: { type: mongoose.Schema.ObjectId, ref: 'User' },
+    /** Who sent them back: the customer on their own courier (the usual), or we collected them. */
+    returnBy: { type: String, enum: ['customer', 'us'], default: 'customer' },
+    returnCourierName: { type: String, trim: true, maxlength: 60 },
+    reversalTrackingId: { type: String, trim: true },
+    note: { type: String, trim: true, maxlength: 300 }
   },
   { _id: true }
 );
@@ -274,6 +327,23 @@ const OrderSchema = new mongoose.Schema(
     },
     /** Every status change with its optional reason — the order's timeline. */
     statusHistory: { type: [StatusEventSchema], default: [] },
+    /** Set when the order was entered for a blocked customer with "create anyway" — who, when, why they were blocked. */
+    blockedOverride: {
+      type: new mongoose.Schema(
+        {
+          by: { type: mongoose.Schema.ObjectId, ref: 'User' },
+          at: { type: Date },
+          reason: { type: String }
+        },
+        { _id: false }
+      )
+    },
+    /** Pieces the customer sent back after delivery while keeping the rest — see utils/partialReturn.js. */
+    returnedItems: { type: [ReturnedItemSchema], default: [] },
+    /** How many pieces in all (denormalised for the list row: "Returned 1 of 2"). */
+    returnedPieces: { type: Number, min: 0 },
+    /** Every other change after the order was taken (R9-4) — who, when, from → to. */
+    activity: { type: [ActivityEventSchema], default: [] },
     /**
      * Failed tries while the parcel was out. `attemptsTracked` is set at dispatch,
      * so an order sent before staff could log attempts is not mistaken for one
@@ -329,16 +399,59 @@ const OrderSchema = new mongoose.Schema(
           /** The courier's own words for where it is: "Booked", "Out For Delivery"… */
           courierStatus: { type: String },
           courierStatusAt: { type: Date },
-          history: { type: [{ code: String, message: String, _id: false }], default: undefined },
+          /** Each step of the journey; `seenAt` is when WE noticed it (PostEx sends no time of its own). */
+          history: {
+            type: [{ code: String, message: String, seenAt: Date, _id: false }],
+            default: undefined
+          },
+          /** The courier's state in a few plain phases (utils/couriers/statusWords.js), and since when. */
+          phase: { type: String },
+          phaseAt: { type: Date },
+          /** A failed try or a review hold — what the "Needs attention" count and filter read. */
+          needsAttention: { type: Boolean, default: undefined },
+          /** The airway bill was printed — lets the list show "Printed" and filter "Not printed yet". */
+          /** When the courier was last asked whether it had paid this parcel, and when it said it had. */
+          paymentCheckedAt: { type: Date },
+          codSettledAt: { type: Date },
+          /** Held while a payment / charge batch is being posted, so two runs cannot post one parcel twice. */
+          settleClaim: { type: String },
+          settleClaimedAt: { type: Date },
+          chargeClaim: { type: String },
+          chargeClaimedAt: { type: Date },
+          /** A returned parcel's charge moved onto the courier's wallet — set once. */
+          walletChargeEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
+          billPrinted: { type: Boolean },
+          billPrintedAt: { type: Date },
+          billPrintedBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
           lastSyncAt: { type: Date },
           /** What the courier says it charged — rupees. Filled in when it reports delivered/returned. */
           fee: { type: Number },
           tax: { type: Number },
           /** Waiting for a person's tap: the courier says it was delivered / returned. */
           confirmable: { type: String, enum: ['delivered', 'returned'] },
+          /** What the courier said on the last checks and how many times in a row (auto-confirm waits for two). */
+          seenKind: { type: String, enum: ['delivered', 'returned'] },
+          seenCount: { type: Number },
+          /** Held while one confirmation is running, so a tap and an automatic one can not both post. */
+          confirmClaimedAt: { type: Date },
           /** What the courier was given to print: the Remarks box and the article line. */
           remarks: { type: String },
           sentContents: { type: String }
+        },
+        { _id: false }
+      )
+    },
+    /**
+     * Refused at booking only because the courier does not serve this city (yet). `openedAt` is set once,
+     * by the hourly check, when the courier lists the city again — the order is then ready to book.
+     */
+    awaitingCity: {
+      type: new mongoose.Schema(
+        {
+          courier: { type: mongoose.Schema.ObjectId, ref: 'Party' },
+          city: { type: String },
+          since: { type: Date },
+          openedAt: { type: Date }
         },
         { _id: false }
       )
@@ -435,11 +548,24 @@ const OrderSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User', required: true },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // The activity log is read through the order's merged `timeline` (cost events filtered by who is
+    // asking). Every other reply that returns the order must not carry the raw array, or a cost event
+    // would reach someone who may not see costs.
+    toJSON: {
+      transform: (_doc, ret) => {
+        delete ret.activity;
+        return ret;
+      }
+    }
+  }
 );
 
 OrderSchema.index({ business: 1, status: 1 });
 OrderSchema.index({ business: 1, createdAt: -1 });
+// A customer's history and the order form's "repeat customer" counts: one customer's orders, newest first.
+OrderSchema.index({ business: 1, customer: 1, createdAt: -1 });
 OrderSchema.index({ business: 1, dispatchedAt: -1 });
 OrderSchema.index({ business: 1, deliveredAt: -1 });
 OrderSchema.index({ business: 1, refundDuePaisa: 1 });
@@ -490,6 +616,8 @@ OrderSchema.pre('save', async function () {
     if (dateField) this[dateField] = at;
     this.$locals.statusNote = undefined;
   }
+
+  if (this.activity.length > ACTIVITY_CAP) this.activity = this.activity.slice(-ACTIVITY_CAP);
 
   this.subtotal =
     this.items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0) +

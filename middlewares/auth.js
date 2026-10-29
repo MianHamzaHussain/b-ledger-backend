@@ -3,6 +3,7 @@ import asyncHandler from './asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import User from '../models/User.js';
 import { touchActive } from '../utils/presence.js';
+import { sessionIsLive, touchSession } from '../utils/sessions.js';
 
 /**
  * Verifies the Bearer token and loads the user WITH their role populated —
@@ -41,6 +42,17 @@ const protect = asyncHandler(async (req, res, next) => {
 
   if (req.user.status === 'inactive') {
     return next(new ErrorResponse('Your account is inactive. Please contact administrator.', 401));
+  }
+
+  // The device this token was issued to must still be signed in: signing one device out (or an
+  // admin removing it) deletes its Session, and that kills its token on the very next request.
+  // A token issued before sessions existed has no `sid` and simply runs out within 15 minutes.
+  if (decoded.sid) {
+    if (!(await sessionIsLive(decoded.sid, req.user._id))) {
+      return next(new ErrorResponse('Not authorized to access this route', 401));
+    }
+    req.sid = decoded.sid;
+    touchSession(decoded.sid, req);
   }
 
   touchActive(req.user.id);

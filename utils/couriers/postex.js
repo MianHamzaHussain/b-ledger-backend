@@ -79,7 +79,12 @@ export const createPostex = ({
       const json = await get(`${base}/order/v2/get-operational-city`, {
         query: { operationalCityType: type }
       });
-      return (json.dist ?? []).map(c => c.operationalCityName);
+      // The guide returns `isDeliveryCity` / `isPickupCity` per city: a city that PostEx lists but does not
+      // deliver to must not count as served. A flag that is missing means "listed", as before.
+      const flag = type === 'pickup' ? 'isPickupCity' : 'isDeliveryCity';
+      return (json.dist ?? [])
+        .filter(c => c[flag] === undefined || String(c[flag]).toLowerCase() !== 'false')
+        .map(c => c.operationalCityName);
     },
 
     /** The merchant's registered pickup addresses. */

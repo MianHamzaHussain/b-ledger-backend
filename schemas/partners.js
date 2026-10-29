@@ -18,7 +18,9 @@ export const partnerUpdateSchema = z.object({
   sharePercent: z.coerce.number().min(0).max(100).optional(),
   phone: z.string().optional(),
   note: z.string().max(200).optional(),
-  isActive: z.boolean().optional()
+  isActive: z.boolean().optional(),
+  /** A monthly amount for home and personal use, in rupees; 0 clears it. */
+  monthlyAllowance: z.coerce.number().min(0, 'Can not be negative').optional()
 });
 
 export const distributeSchema = z.object({ business: id, amount });
@@ -29,5 +31,7 @@ export const capitalMoveSchema = z.object({
   method,
   account: z.string().min(1).optional(),
   date: z.union([z.string(), z.date()]).optional(),
-  memo: z.string().trim().max(200).optional()
+  memo: z.string().trim().max(200).optional(),
+  /** Why money was taken out (a withdrawal only) — totalled by purpose in the owner report. */
+  purpose: z.enum(['home', 'personal']).optional()
 });

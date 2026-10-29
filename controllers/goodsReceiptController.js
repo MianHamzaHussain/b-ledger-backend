@@ -1,5 +1,7 @@
+import mongoose from 'mongoose';
 import Product from '../models/Product.js';
 import GoodsReceipt from '../models/GoodsReceipt.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 import Party from '../models/Party.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
@@ -42,6 +44,73 @@ const withStock = async receipt => {
  */
 export const getGoodsReceipts = asyncHandler(async (req, res) => {
   res.status(200).json(res.advancedResults);
+});
+
+/**
+ * @desc   One row per supplier we have received goods from — newest delivery first — so the screen
+ *         shows suppliers, not a wall of near-identical deliveries. Name search is a literal,
+ *         case-insensitive match. Cost fields ride the router's `hideCosts`, so the total delivered
+ *         is only visible with "See costs". What we OWE is not here: that is the supplier's Khata.
+ * @route  GET /api/v1/goods-receipts/suppliers?business=&search=&page=&limit=  (goodsReceipts:read — scoped)
+ */
+export const getReceiptSuppliers = asyncHandler(async (req, res, next) => {
+  const { business, search } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  if (!mongoose.isValidObjectId(business))
+    return next(new ErrorResponse('Business not found', 404));
+
+  const limit = Math.min(Math.max(Number(req.query.limit) || 5, 1), 50);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const needle = String(search ?? '').trim();
+
+  const [result] = await GoodsReceipt.aggregate([
+    { $match: { business: new mongoose.Types.ObjectId(String(business)), status: 'received' } },
+    {
+      $group: {
+        _id: '$party',
+        lastDeliveryAt: { $max: '$date' },
+        deliveries: { $sum: 1 },
+        pieces: { $sum: { $sum: '$lines.quantity' } },
+        sentBackPieces: { $sum: { $sum: '$lines.quantityReturned' } },
+        totalCostPaisa: { $sum: '$totalCostPaisa' }
+      }
+    },
+    { $lookup: { from: 'parties', localField: '_id', foreignField: '_id', as: 'party' } },
+    { $unwind: '$party' },
+    ...(needle
+      ? [{ $match: { 'party.name': { $regex: escapeRegex(needle), $options: 'i' } } }]
+      : []),
+    { $sort: { lastDeliveryAt: -1, _id: 1 } },
+    {
+      $facet: {
+        rows: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+        total: [{ $count: 'n' }]
+      }
+    }
+  ]);
+
+  const total = result.total[0]?.n ?? 0;
+  const data = result.rows.map(r => ({
+    party: r._id,
+    name: r.party.name,
+    lastDeliveryAt: r.lastDeliveryAt,
+    deliveries: r.deliveries,
+    pieces: r.pieces,
+    sentBackPieces: r.sentBackPieces,
+    totalCostPaisa: r.totalCostPaisa
+  }));
+
+  res.status(200).json({
+    success: true,
+    count: data.length,
+    total,
+    pagination: page * limit < total ? { next: { page: page + 1, limit } } : {},
+    data
+  });
 });
 
 /**

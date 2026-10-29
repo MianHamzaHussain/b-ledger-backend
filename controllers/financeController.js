@@ -21,6 +21,7 @@ import { undoCourierInvoice } from '../utils/courierInvoice.js';
 import { courierPerformance } from '../utils/courierPerformance.js';
 import {
   profitAndLoss,
+  ownerDrawsByMonth,
   balanceSheet,
   productProfitability,
   partyLedgerReport,
@@ -29,6 +30,7 @@ import {
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { ACCOUNT_TYPES, JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
 import { parseBusinessDate } from '../utils/pakistanDay.js';
+import { userCan } from '../utils/permissions.js';
 
 /** A validated, positive paisa amount, or an ErrorResponse-throwing reject. */
 const amountPaisa = raw => {
@@ -106,6 +108,7 @@ export const recordCapital = asyncHandler(async (req, res, next) => {
     memo: memo || (direction === 'drawings' ? DRAWINGS_MEMO[purpose] : 'Owner put money in'),
     source: { kind: JOURNAL_SOURCES.CAPITAL },
     lines,
+    purpose: direction === 'drawings' ? purpose : undefined,
     userId: req.user.id
   });
 });
@@ -479,6 +482,23 @@ export const getProfitAndLoss = asyncHandler(async (req, res, next) => {
   const business = requireBusiness(req, next);
   if (!business) return;
   res.status(200).json({ success: true, data: await profitAndLoss(business, req.query) });
+});
+
+/**
+ * @desc   What the owners took for home and personal use, month by month — beside each month's profit and
+ *         what was left in the business. Not a business cost, so it never lowers profit. Partner names
+ *         show only to people who may read partners; everyone else sees one "Owner" row.
+ * @route  GET /api/v1/finance/reports/owner-draws?business=&from=&to=  (reports:read)
+ */
+export const getOwnerDraws = asyncHandler(async (req, res, next) => {
+  const business = requireBusiness(req, next);
+  if (!business) return;
+  const data = await ownerDrawsByMonth(business, {
+    from: req.query.from,
+    to: req.query.to,
+    showPartners: userCan(req.user, 'partners', 'read')
+  });
+  res.status(200).json({ success: true, count: data.length, data });
 });
 
 /**

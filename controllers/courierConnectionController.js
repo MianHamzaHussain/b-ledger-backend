@@ -25,7 +25,9 @@ const view = party => {
     pickupAddressCode: link.pickupAddressCode ?? null,
     pickupAddressLabel: link.pickupAddressLabel ?? null,
     lastCheckedAt: link.lastCheckedAt ?? null,
-    lastError: link.lastError ?? null
+    lastError: link.lastError ?? null,
+    autoConfirm: Boolean(link.autoConfirm),
+    recordPayments: Boolean(link.recordPayments)
   };
 };
 
@@ -44,12 +46,30 @@ export const saveConnection = asyncHandler(async (req, res) => {
   const party = req.resource;
   ensureCourier(party);
   const { provider, token, pickupAddressCode, pickupAddressLabel, isEnabled } = req.body;
+  let { autoConfirm } = req.body;
+  const { recordPayments } = req.body;
 
   // Field by field, never the whole `integration` object: the saved key is hidden from this read
   // (select:false), so rewriting the object would silently delete it.
   const set = { updatedBy: req.user.id };
   const unset = {};
   if (provider) set['integration.provider'] = provider;
+  // A connection made from now on starts with automatic delivered / returned ON (two matching checks);
+  // an existing one is not changed silently — an admin turns it on with one click.
+  if (provider && !party.integration?.provider && autoConfirm === undefined) autoConfirm = true;
+  if (autoConfirm !== undefined) {
+    set['integration.autoConfirm'] = autoConfirm;
+    if (autoConfirm) set['integration.autoConfirmBy'] = req.user.id;
+    else unset['integration.autoConfirmBy'] = 1;
+  }
+  if (recordPayments !== undefined) {
+    if (recordPayments && !token && !party.integration?.hasToken) {
+      throw new ErrorResponse('Save the key before recording its payments', 400);
+    }
+    set['integration.recordPayments'] = recordPayments;
+    if (recordPayments) set['integration.recordPaymentsBy'] = req.user.id;
+    else unset['integration.recordPaymentsBy'] = 1;
+  }
   if (token) {
     set['integration.tokenEnc'] = encryptSecret(token);
     set['integration.hasToken'] = true;

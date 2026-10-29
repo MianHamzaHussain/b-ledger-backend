@@ -6,12 +6,13 @@ import User from '../models/User.js';
 import Role from '../models/Role.js';
 import RefreshToken from '../models/RefreshToken.js';
 import { protect } from '../middlewares/auth.js';
-import { login } from '../controllers/authController.js';
+import { login, updatePassword, resetPassword } from '../controllers/authController.js';
 import {
   issueRefreshToken,
   rotateRefreshToken,
   revokeRefreshToken
 } from '../utils/refreshTokens.js';
+import { authenticateSocketToken } from '../utils/socket.js';
 
 // getSignedJwtToken signs with this; the test run doesn't load an .env.
 // (JWT_ACCESS_EXPIRE defaults to 15m in the method, so no need to set it here.)
@@ -104,6 +105,80 @@ test('revoke deletes a specific refresh token (logout)', async () => {
   await revokeRefreshToken(token);
   assert.equal(await RefreshToken.countDocuments({ user: user._id }), 0);
   assert.equal(await rotateRefreshToken(token), null); // can't refresh after logout
+});
+
+/** Run a controller to its JSON reply; resolves { body, cookies } or rejects with its next(err). */
+const runController = (handler, req) =>
+  new Promise((resolve, reject) => {
+    const cookies = [];
+    const res = {
+      cookie: (name, value) => cookies.push({ name, value }),
+      status() {
+        return this;
+      },
+      json: body => resolve({ body, cookies })
+    };
+    handler(req, res, reject);
+  });
+
+test('two requests presenting the same refresh token: exactly one wins', async () => {
+  const user = await makeUser();
+  const { token } = await issueRefreshToken(user._id);
+  const results = await Promise.all([rotateRefreshToken(token), rotateRefreshToken(token)]);
+  assert.equal(
+    results.filter(Boolean).length,
+    1,
+    'a stolen copy must not rotate alongside the real one'
+  );
+});
+
+test('changing the password signs out every OTHER device, not just their access tokens', async () => {
+  const user = await makeUser();
+  const laptop = await issueRefreshToken(user._id);
+  const phone = await issueRefreshToken(user._id);
+
+  const { cookies } = await runController(updatePassword, {
+    user: { id: user._id },
+    body: { currentPassword: 'password1', newPassword: 'a-new-password-2' }
+  });
+
+  assert.equal(await rotateRefreshToken(laptop.token), null, 'the old laptop cookie must be dead');
+  assert.equal(await rotateRefreshToken(phone.token), null, 'the old phone cookie must be dead');
+  // The device that changed it stays signed in on the cookie the reply set.
+  const fresh = cookies.find(c => c.name === 'refreshToken');
+  assert.ok(fresh, 'the reply sets a new refresh cookie for this device');
+  assert.ok(await rotateRefreshToken(fresh.value), 'and that cookie works');
+});
+
+test('a password reset also signs out every device', async () => {
+  const user = await makeUser();
+  const stolen = await issueRefreshToken(user._id);
+  const resetToken = user.getResetPasswordToken();
+  await user.save({ validateBeforeSave: false });
+
+  await runController(resetPassword, {
+    params: { resettoken: resetToken },
+    body: { password: 'brand-new-pass-3' }
+  });
+
+  assert.equal(await rotateRefreshToken(stolen.token), null);
+});
+
+test('a signed-out device can not open the live socket with its old access token', async () => {
+  const user = await makeUser();
+  const token = user.getSignedJwtToken();
+  assert.equal(String((await authenticateSocketToken(token))._id), String(user._id));
+
+  await User.updateOne({ _id: user._id }, { $inc: { tokenVersion: 1 } });
+  await assert.rejects(authenticateSocketToken(token), /Invalid or expired token/);
+});
+
+test('the socket refuses a missing or inactive user', async () => {
+  await assert.rejects(authenticateSocketToken(undefined), /No token provided/);
+  const user = await makeUser();
+  const token = user.getSignedJwtToken();
+  await User.updateOne({ _id: user._id }, { $set: { status: 'inactive' } });
+  await assert.rejects(authenticateSocketToken(token), /not found or inactive/);
 });
 
 test('a fresh sign-in token works for a user whose sessions were revoked before', async () => {

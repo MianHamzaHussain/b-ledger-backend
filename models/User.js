@@ -123,6 +123,12 @@ const UserSchema = new mongoose.Schema(
      * of API responses; `protect` re-requests it explicitly.
      */
     tokenVersion: { type: Number, default: 0, select: false },
+    /**
+     * Coarse fingerprints (browser|system|kind, never an address) of devices this person has signed in
+     * from, newest last. Only used to tell a new device from a familiar one for the sign-in email.
+     * Left undefined until the first sign-in after the feature, so nobody is alerted about every old device.
+     */
+    knownDevices: { type: [String], default: undefined, select: false },
     /** Web Push endpoints for PWA background notifications. */
     pushSubscriptions: [
       {
@@ -150,11 +156,14 @@ UserSchema.pre('save', async function () {
   this.password = await bcrypt.hash(this.password, salt);
 });
 
-UserSchema.methods.getSignedJwtToken = function () {
+UserSchema.methods.getSignedJwtToken = function (sessionId) {
   // Short-lived ACCESS token — the client refreshes it from the httpOnly refresh
   // cookie (POST /auth/refresh). tokenVersion travels in it so `protect` can
-  // reject a stale one after a logout / password change / forced sign-out.
-  return jwt.sign({ id: this._id, tokenVersion: this.tokenVersion ?? 0 }, process.env.JWT_SECRET, {
+  // reject a stale one after a forced sign-out; `sid` names the device (Session) it was
+  // issued to, so signing out ONE device kills that device's token on its next request.
+  const claims = { id: this._id, tokenVersion: this.tokenVersion ?? 0 };
+  if (sessionId) claims.sid = String(sessionId);
+  return jwt.sign(claims, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_ACCESS_EXPIRE || '15m'
   });
 };

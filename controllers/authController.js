@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import ErrorResponse from '../utils/errorResponse.js';
 import sendEmail from '../utils/sendEmail.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
@@ -9,23 +10,36 @@ import {
   REFRESH_COOKIE,
   issueRefreshToken,
   rotateRefreshToken,
+  detectReuse,
+  attachSession,
   revokeRefreshToken,
   refreshCookieOptions,
   clearCookieOptions
 } from '../utils/refreshTokens.js';
+import { noteSignIn } from '../utils/signInAlert.js';
+import {
+  createSession,
+  listSessions,
+  revokeSession,
+  revokeOtherSessions
+} from '../utils/sessions.js';
 
 /**
  * Issues the short-lived access token in the body AND a long-lived refresh token
  * as an httpOnly cookie. The access token lives in memory on the client; the
  * refresh cookie — which JS can't read — is what survives a reload and is traded
  * for a new access token at /auth/refresh. Async because it persists the token.
+ *
+ * Starts a Session for this device: both tokens carry it, so this device can be listed and
+ * signed out on its own ("Where you are signed in").
  */
-const sendTokenResponse = async (user, statusCode, res) => {
-  const { token, expiresAt } = await issueRefreshToken(user._id);
+const sendTokenResponse = async (user, statusCode, res, req) => {
+  const session = await createSession(user._id, req);
+  const { token, expiresAt } = await issueRefreshToken(user._id, session._id);
   res.cookie(REFRESH_COOKIE, token, refreshCookieOptions(expiresAt));
   res.status(statusCode).json({
     success: true,
-    token: user.getSignedJwtToken(),
+    token: user.getSignedJwtToken(session._id),
     mustChangePassword: Boolean(user.mustChangePassword)
   });
 };
@@ -48,7 +62,7 @@ export const login = asyncHandler(async (req, res, next) => {
   // set or changed) — every sign-in would then need a silent refresh to work.
   const user = await User.findOne({
     $or: [{ email: identifier.toLowerCase() }, { phone: identifier }]
-  }).select('+password +mustChangePassword +tokenVersion');
+  }).select('+password +mustChangePassword +tokenVersion +knownDevices');
 
   // Same message and same code path for "no such user" and "wrong password",
   // so the response cannot be used to enumerate accounts.
@@ -60,11 +74,16 @@ export const login = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Your account is inactive. Please contact administrator.', 401));
   }
 
+  // A device this person has not used before gets an email — checked BEFORE lastLogin moves, because
+  // a first-ever sign-in must record the device silently.
+  const outcome = await noteSignIn(user, req);
+  logger.info({ userId: String(user._id), outcome, ip: req.ip }, 'sign-in');
+
   // Stamp the sign-in (drives "last login" and the verified badge). updateOne
   // rather than save() to skip the password-hash hook on an unchanged password.
   await User.updateOne({ _id: user._id }, { $set: { lastLogin: new Date() } });
 
-  await sendTokenResponse(user, 200, res);
+  await sendTokenResponse(user, 200, res, req);
 });
 
 /**
@@ -143,8 +162,11 @@ export const updatePassword = asyncHandler(async (req, res, next) => {
   // just below carries the new version, so the current device stays signed in.
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
+  // The version bump only kills access tokens; every device's session and refresh cookie must go
+  // too, or they sign straight back in. The response below starts a fresh session for THIS device.
+  await revokeOtherSessions(user._id);
 
-  await sendTokenResponse(user, 200, res);
+  await sendTokenResponse(user, 200, res, req);
 });
 
 /**
@@ -223,8 +245,9 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
   // as a login and marks the account verified.
   user.lastLogin = new Date();
   await user.save();
+  await revokeOtherSessions(user._id);
 
-  await sendTokenResponse(user, 200, res);
+  await sendTokenResponse(user, 200, res, req);
 });
 
 /**
@@ -238,9 +261,14 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
  * inactive user can't refresh their way back in.
  */
 export const refreshAccessToken = asyncHandler(async (req, res, next) => {
-  const rotated = await rotateRefreshToken(req.cookies?.[REFRESH_COOKIE]);
+  const presented = req.cookies?.[REFRESH_COOKIE];
+  const rotated = await rotateRefreshToken(presented);
 
   if (!rotated) {
+    // A token this device already rotated, presented again, is a copied cookie: cut that device
+    // off entirely, so the thief (who may rotate first next time) and the owner both have to sign in.
+    const copied = await detectReuse(presented);
+    if (copied) await revokeSession(copied.user, copied._id);
     res.clearCookie(REFRESH_COOKIE, clearCookieOptions());
     return next(new ErrorResponse('Not authorized to access this route', 401));
   }
@@ -252,23 +280,75 @@ export const refreshAccessToken = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Not authorized to access this route', 401));
   }
 
+  // A cookie issued before sessions existed adopts one now, so it shows up on the device list
+  // and can be signed out like any other.
+  let sessionId = rotated.sessionId;
+  if (!sessionId) {
+    const session = await createSession(user._id, req, { isLegacy: true });
+    sessionId = session._id;
+    await attachSession(rotated.token, sessionId);
+  }
+
   res.cookie(REFRESH_COOKIE, rotated.token, refreshCookieOptions(rotated.expiresAt));
-  res.status(200).json({ success: true, token: user.getSignedJwtToken() });
+  res.status(200).json({ success: true, token: user.getSignedJwtToken(sessionId) });
 });
 
 /**
- * @desc      Logout
+ * @desc      Logout — this device only
  * @route     GET /api/v1/auth/logout
  * @access    Private
  *
- * Revokes this device's refresh token, clears the cookie, and bumps
- * `tokenVersion` (which `protect` re-checks) so the short access token is dead
- * server-side immediately too. One counter per user means this signs out every
- * device — the honest behaviour without per-session tracking.
+ * Deletes this device's session (so its access token dies on the next request) and its refresh
+ * token, and clears the cookie. Other devices stay signed in. A token issued before sessions existed
+ * has no session to delete; for those alone the old behaviour remains (a `tokenVersion` bump), and
+ * they run out within 15 minutes of the release.
  */
 export const logout = asyncHandler(async (req, res, next) => {
   await revokeRefreshToken(req.cookies?.[REFRESH_COOKIE]);
   res.clearCookie(REFRESH_COOKIE, clearCookieOptions());
-  await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } });
+  if (req.sid) {
+    await revokeSession(req.user.id, req.sid);
+  } else {
+    await User.updateOne({ _id: req.user.id }, { $inc: { tokenVersion: 1 } });
+  }
   res.status(200).json({ success: true, data: {} });
+});
+
+/**
+ * @desc      The devices this account is signed in on (the current one marked)
+ * @route     GET /api/v1/auth/sessions
+ * @access    Private (own sessions only — the user comes from the token)
+ */
+export const getSessions = asyncHandler(async (req, res) => {
+  const data = await listSessions(req.user.id, req.sid);
+  res.status(200).json({ success: true, count: data.length, data });
+});
+
+/**
+ * @desc      Sign one device out
+ * @route     DELETE /api/v1/auth/sessions/:id
+ * @access    Private (own sessions only; another person's id is a 404, never a 403)
+ *
+ * Signing out the device you are using is a normal logout and also clears its cookie.
+ */
+export const deleteSession = asyncHandler(async (req, res, next) => {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return next(new ErrorResponse('That device is not signed in', 404));
+  }
+  const removed = await revokeSession(req.user.id, req.params.id);
+  if (!removed) return next(new ErrorResponse('That device is not signed in', 404));
+  if (String(req.params.id) === String(req.sid)) {
+    res.clearCookie(REFRESH_COOKIE, clearCookieOptions());
+  }
+  res.status(200).json({ success: true, data: {} });
+});
+
+/**
+ * @desc      Sign out every other device, keep this one
+ * @route     POST /api/v1/auth/sessions/sign-out-others
+ * @access    Private
+ */
+export const signOutOtherSessions = asyncHandler(async (req, res) => {
+  const count = await revokeOtherSessions(req.user.id, req.sid);
+  res.status(200).json({ success: true, data: { signedOut: count } });
 });

@@ -35,7 +35,9 @@ export const fakePostex = ({
   tracking = {},
   failBulk,
   failCancel,
-  unbooked = []
+  unbooked = [],
+  // Tracking numbers the courier says it has paid out (its payment-status answer).
+  paid = []
 } = {}) => {
   const creates = [];
   const calls = [];
@@ -43,7 +45,15 @@ export const fakePostex = ({
     const u = String(url);
     calls.push(u);
     if (u.includes('get-operational-city')) {
-      return reply({ statusCode: '200', dist: cities.map(c => ({ operationalCityName: c })) });
+      // A city is a name, or `{ name, isDeliveryCity }` to model PostEx listing one it does not deliver to.
+      return reply({
+        statusCode: '200',
+        dist: cities.map(c =>
+          typeof c === 'string'
+            ? { operationalCityName: c }
+            : { operationalCityName: c.name, isDeliveryCity: c.isDeliveryCity }
+        )
+      });
     }
     if (u.includes('create-order')) {
       creates.push(JSON.parse(init.body));
@@ -51,6 +61,13 @@ export const fakePostex = ({
       return reply({
         statusCode: '200',
         dist: { trackingNumber: `CX-${1000 + creates.length}`, orderStatus: 'UnBooked' }
+      });
+    }
+    if (u.includes('payment-status/')) {
+      const n = decodeURIComponent(u.split('payment-status/')[1]);
+      return reply({
+        statusCode: '200',
+        dist: paid.includes(n) ? { settle: true, settlementDate: '2026-10-28' } : { settle: false }
       });
     }
     if (u.includes('get-unbooked-orders')) return reply({ statusCode: '200', dist: unbooked });

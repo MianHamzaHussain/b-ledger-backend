@@ -22,7 +22,7 @@ export const capitalSchema = z.object({
   business: id,
   amount,
   direction: z.enum(['invest', 'drawings']),
-  /** What an owner withdrawal was for — only words on the cash book; the books are the same. */
+  /** What an owner withdrawal was for — kept on the entry so the owner report can total it. */
   purpose: z.enum(['home', 'personal']).optional(),
   method,
   account,

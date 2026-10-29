@@ -9,6 +9,8 @@ import mongoose from 'mongoose';
 const RefreshTokenSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.ObjectId, ref: 'User', required: true, index: true },
+    /** The device this token belongs to — carried unchanged through every rotation. */
+    session: { type: mongoose.Schema.ObjectId, ref: 'Session', index: true },
     tokenHash: { type: String, required: true, unique: true, select: false },
     expiresAt: { type: Date, required: true }
   },

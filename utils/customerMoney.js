@@ -6,6 +6,8 @@ import { toPaisa } from './money.js';
 import { BEFORE_DISPATCH, JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 import { isCounterSale, heldPaisaOf } from '../models/Order.js';
 import { upsertCustomerParty } from './customerParty.js';
+import { logActivity } from './orderActivity.js';
+
 /**
  * Money that passes directly between the customer and us on an order — an
  * advance (the payment screenshot) or a refund. Each posts on the day it
@@ -76,6 +78,14 @@ export const recordAdvance = async (order, { amount, money, date, note, userId }
   });
 
   order.customerMoney.push(rowOf('advance', amountPaisa, money, { date, note, entry, userId }));
+  logActivity(
+    order,
+    { id: userId },
+    {
+      kind: 'money',
+      text: `Advance ${formatRupees(amount)} received${money.name ? ` in ${money.name}` : ''}`
+    }
+  );
   order.updatedBy = userId;
   await order.save();
   return order;
@@ -114,6 +124,14 @@ export const recordRefund = async (order, { amount, money, date, note, userId })
   });
 
   order.customerMoney.push(rowOf('refund', amountPaisa, money, { date, note, entry, userId }));
+  logActivity(
+    order,
+    { id: userId },
+    {
+      kind: 'money',
+      text: `Refund ${formatRupees(amount)} paid${money.name ? ` from ${money.name}` : ''}`
+    }
+  );
   order.updatedBy = userId;
   await order.save();
   return order;
@@ -149,6 +167,14 @@ export const removeCustomerMoney = async (order, rowId, userId) => {
     userId,
     memo: `Removed ${row.kind} — ${orderLabel(order)}`
   });
+  logActivity(
+    order,
+    { id: userId },
+    {
+      kind: 'money',
+      text: `Removed ${row.kind} of ${formatRupees(row.amountPaisa / 100)} (entered by mistake)`
+    }
+  );
   row.deleteOne();
   order.updatedBy = userId;
   await order.save();
@@ -205,6 +231,14 @@ export const keepAsCredit = async (order, { amount, userId }) => {
     entry: entry._id,
     by: userId
   });
+  logActivity(
+    order,
+    { id: userId },
+    {
+      kind: 'money',
+      text: `Kept ${formatRupees(amount)} as credit on the customer’s khata`
+    }
+  );
   order.updatedBy = userId;
   await order.save();
   return order;
