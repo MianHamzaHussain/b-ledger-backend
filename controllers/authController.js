@@ -10,6 +10,7 @@ import {
   issueRefreshToken,
   rotateRefreshToken,
   revokeRefreshToken,
+  revokeAllForUser,
   refreshCookieOptions,
   clearCookieOptions
 } from '../utils/refreshTokens.js';
@@ -143,6 +144,9 @@ export const updatePassword = asyncHandler(async (req, res, next) => {
   // just below carries the new version, so the current device stays signed in.
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
+  // The version bump only kills access tokens; the other devices' refresh cookies must go too,
+  // or they sign straight back in. The response below gives this device a fresh one.
+  await revokeAllForUser(user._id);
 
   await sendTokenResponse(user, 200, res);
 });
@@ -223,6 +227,7 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
   // as a login and marks the account verified.
   user.lastLogin = new Date();
   await user.save();
+  await revokeAllForUser(user._id);
 
   await sendTokenResponse(user, 200, res);
 });

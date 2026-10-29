@@ -25,10 +25,14 @@ export const issueRefreshToken = async userId => {
  */
 export const rotateRefreshToken = async presented => {
   if (!presented) return null;
-  const existing = await RefreshToken.findOne({ tokenHash: sha256(presented) });
-  if (!existing || existing.expiresAt < new Date()) return null;
+  // Consumed in ONE operation: find-then-delete let two requests carrying the same cookie both
+  // win, which defeats the replay defence (backend §5.3.2 — mutate contended state atomically).
+  const existing = await RefreshToken.findOneAndDelete({
+    tokenHash: sha256(presented),
+    expiresAt: { $gt: new Date() }
+  });
+  if (!existing) return null;
   const userId = existing.user;
-  await existing.deleteOne();
   const next = await issueRefreshToken(userId);
   return { userId, ...next };
 };
@@ -38,7 +42,11 @@ export const revokeRefreshToken = async presented => {
   if (presented) await RefreshToken.deleteOne({ tokenHash: sha256(presented) });
 };
 
-/** Drop every refresh token for a user (e.g. forced sign-out). */
+/**
+ * Drop every refresh token for a user (a password change or reset, a forced sign-out). Bumping
+ * `tokenVersion` only kills access tokens (15 min); without this the other devices' cookies kept
+ * minting new ones for up to 30 days, so a changed password did not actually sign them out.
+ */
 export const revokeAllForUser = userId => RefreshToken.deleteMany({ user: userId });
 
 /**

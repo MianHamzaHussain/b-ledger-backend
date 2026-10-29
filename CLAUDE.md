@@ -1005,9 +1005,14 @@ cost more the longer it waits.
   ~15m, carries `tokenVersion`) traded via `POST /auth/refresh` for a rotating
   **refresh** token — a random secret stored only as a SHA-256 hash
   (`models/RefreshToken.js`, TTL-swept) and delivered as an **httpOnly** cookie
-  (`utils/refreshTokens.js`). Rotation consumes each token so a replay 401s
+  (`utils/refreshTokens.js`). Rotation consumes each token **atomically**
+  (`findOneAndDelete`), so a replay — or two requests racing with one cookie — 401s
   (reuse defence). Logout revokes the token, clears the cookie, and bumps
-  `tokenVersion`. Cross-origin deploys set `COOKIE_SAMESITE=none` (HTTPS).
+  `tokenVersion`. A **password change or reset also deletes every refresh token**
+  (`revokeAllForUser`; the reply gives the current device a fresh one) — bumping
+  `tokenVersion` alone only killed 15-minute access tokens while other devices' cookies
+  kept minting new ones. The live socket applies the same `tokenVersion` check as
+  `protect` (`authenticateSocketToken`). Cross-origin deploys set `COOKIE_SAMESITE=none` (HTTPS).
 - **File uploads.** Removed. If added back, note that writing to `public/` does
   **not** work on Vercel serverless — use S3, Cloudinary or Vercel Blob.
 
