@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Order from '../models/Order.js';
+import { BEFORE_DISPATCH } from './constants.js';
 import { pakistanDay, startOfPakistanDay, endOfPakistanDay } from './pakistanDay.js';
 
 /**
@@ -22,6 +23,7 @@ export const orderSummary = async (business, now = new Date()) => {
     dueNow,
     courierReady,
     needsAttention,
+    citiesOpen,
     grouped
   ] = await Promise.all([
     Order.countDocuments({ ...scope, createdAt: today }),
@@ -41,6 +43,12 @@ export const orderSummary = async (business, now = new Date()) => {
       status: 'dispatched',
       'courierBooking.needsAttention': true
     }),
+    // Orders the courier refused only for their city, which it now serves: ready to book in one tap.
+    Order.countDocuments({
+      ...scope,
+      status: { $in: BEFORE_DISPATCH },
+      'awaitingCity.openedAt': { $exists: true }
+    }),
     Order.aggregate([{ $match: scope }, { $group: { _id: '$status', count: { $sum: 1 } } }])
   ]);
 
@@ -52,6 +60,7 @@ export const orderSummary = async (business, now = new Date()) => {
     dueNow,
     courierReady,
     needsAttention,
+    citiesOpen,
     pending: byStatus.pending ?? 0,
     byStatus
   };

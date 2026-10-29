@@ -6,6 +6,7 @@ import Notification from '../models/Notification.js';
 import { clearCityCache } from '../utils/couriers/booking.js';
 import { cityMatchKey, nearCities } from '../utils/cities.js';
 import { checkHeldCities } from '../utils/cityWatch.js';
+import { orderSummary } from '../utils/orderSummary.js';
 import { previewParcel } from '../utils/couriers/booking.js';
 import { updateOrder, bookWaitingOrders } from '../controllers/orderController.js';
 import { searchCities } from '../controllers/cityController.js';
@@ -237,4 +238,16 @@ test('a courier that can not be asked shows no tick and never blocks the list', 
   const { data } = await searchAs(user, { business: String(biz._id), search: 'lahore' });
   assert.equal(data[0].name, 'Lahore');
   assert.deepEqual(data[0].served, {});
+});
+
+test('the summary counts held orders whose city has opened, ready for one tap', async () => {
+  fakePostex({ cities: ['Lahore'] });
+  const { order, courier, biz } = await setupOrder({ city: 'Sehwan' });
+  await assert.rejects(dispatchBooked(order, courier));
+  assert.equal((await orderSummary(biz._id)).citiesOpen, 0, 'still closed');
+
+  fakePostex({ cities: ['Lahore', 'Sehwan'] });
+  clearCityCache();
+  await checkHeldCities();
+  assert.equal((await orderSummary(biz._id)).citiesOpen, 1);
 });
