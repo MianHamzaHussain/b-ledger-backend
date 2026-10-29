@@ -46,7 +46,12 @@ export const readStatus = ({ status: text = '', history = [] }) => {
 };
 
 /** "Attempt Made: Customer not available" → our reason list, with the courier's words kept as the note. */
+// PostEx writes the reason as a short code first: "RFD(REFUSED TO RECEIVE)", "CNA(CNA)", "HCR(HOLD ON CONSIGNEE REQUEST)".
+const ATTEMPT_CODES = { RFD: 'refused', CNA: 'not-available', HCR: 'rescheduled' };
+
 export const attemptReason = message => {
+  const code = /^([A-Z]{2,4})(?![A-Za-z])/.exec(message.trim())?.[1];
+  if (code && ATTEMPT_CODES[code]) return ATTEMPT_CODES[code];
   const m = message.toLowerCase();
   if (/reschedul|later|another day|postpone|delay|tomorrow/.test(m)) return 'rescheduled';
   if (/refus|not interested|cancel/.test(m)) return 'refused';

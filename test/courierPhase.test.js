@@ -33,7 +33,8 @@ const booked = async record => {
   fakePostex({});
   const made = await setupOrder();
   await dispatchBooked(made.order, made.courier);
-  const tracking = { 'CX-1001': record };
+  // A real fixture carries its own (anonymised) tracking number; the parcel booked here is CX-1001.
+  const tracking = { 'CX-1001': { ...record, trackingNumber: 'CX-1001' } };
   fakePostex({ tracking });
   return { ...made, tracking };
 };
@@ -279,4 +280,23 @@ test('PostEx’s own time is kept on every step, whichever field it arrives in',
     'modifiedDatetime is used when updatedAt is absent'
   );
   assert.equal(phaseOf(other), 'returning');
+});
+
+test('PostEx’s reason codes are read, so "not available" and "hold" are not filed as other', () => {
+  assert.equal(attemptReason('RFD(REFUSED TO RECEIVE)'), 'refused');
+  assert.equal(attemptReason('CNA(CNA)'), 'not-available');
+  assert.equal(attemptReason('HCR(HOLD ON CONSIGNEE REQUEST)'), 'rescheduled');
+  // Plain words still work, and a capitalised word that is not a code does not trip the reader.
+  assert.equal(attemptReason('Customer not available'), 'not-available');
+  assert.equal(attemptReason('NOT AT HOME'), 'not-available');
+  assert.equal(attemptReason('XYZ(something odd)'), 'other');
+});
+
+test('a real CNA attempt is logged as not-available, with PostEx’s own words kept', async () => {
+  const { order } = await booked(real.ATTEMPT_CNA);
+  await runCourierSync();
+  const fresh = await Order.findById(order._id);
+  assert.equal(fresh.deliveryAttempts.length, 1);
+  assert.equal(fresh.deliveryAttempts[0].reason, 'not-available');
+  assert.equal(fresh.deliveryAttempts[0].note, 'PostEx: CNA(CNA)');
 });
