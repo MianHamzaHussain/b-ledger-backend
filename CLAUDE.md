@@ -853,7 +853,7 @@ courier is a business's own party, so nothing is combined across businesses.
 A courier Party can be connected to its own service (`Party.integration`; PostEx today, TCS later behind the same adapter in `utils/couriers/`). **One key per courier, so one per business**, stored AES-256-GCM encrypted (`utils/secretBox.js`, master key `COURIER_SECRET_KEY` in env, never in the DB). The key is write-only: `select:false`, stripped from `toJSON`, redacted in logs, admin-only routes (`/parties/:id/connection`).
 
 - **Dispatch** with `bookWithCourier` calls `bookParcel` (`utils/couriers/booking.js`): an atomic claim, the PostEx call, then the tracking number is saved on `order.courierBooking` before anything else can fail. A double tap makes one parcel; a refusal leaves the order where it was.
-- **Status check** (`utils/courierSync.js`, every 15 min, in-process like the booking reminders, shown in `/health`) only **marks** `courierBooking.confirmable`. It never changes `order.status` — delivered posts revenue, COGS and stock and is terminal, so a person confirms.
+- **Status check** (`utils/courierSync.js`, every 10 min, in-process like the booking reminders, shown in `/health`) only **marks** `courierBooking.confirmable`. It never changes `order.status` — delivered posts revenue, COGS and stock and is terminal, so a person confirms.
 - **Confirm** (`POST /orders/confirm-courier`, ≤ 50) runs the ordinary `updateOrderStatus` per order, filling the delivery/return charge with the courier's `fee + tax` when it reported one (otherwise blank → the courier invoice, §10.2). One order failing never stops the rest.
 - The courier's fee/tax is **its delivery charge**, not the FBR COD withholding — check one settled parcel against the statement before trusting the prefill.
 - Tests inject `courierDeps.fetchImpl`; no test can reach a real courier. `npm run postex:check` is a read-only local check of a key.
@@ -914,18 +914,51 @@ by, system }`. `by` is the token's user, never the body; a system event (the cou
   records). It is an email, not a bell: notifications are per business, and a security notice must reach
   only that person. The mail door is `signInAlertDeps.send` — tests replace it.
 
-- **The courier's journey in plain phases** (`utils/couriers/statusWords.js`, R9-1). Each status check
-  saves `courierBooking.phase` (`booked · at-warehouse · on-route · attempt-failed · under-review ·
-delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobody has mapped is `unknown`,
-  and the screen shows PostEx's own words** — never a guess. A cancel wording beats the returned code
-  (0002 is also "Booking Cancelled by Merchant"). `needsAttention` is set only for a **failed try or a
-  review hold**; routine steps stay quiet. Each history step carries `seenAt` — when WE first noticed it
-  (PostEx sends no time), kept stable across later checks. A **new failed try** and **the start of a review
-  hold** ring the bell once (`courier-issue`; the attempts-count filter on the write means two runs cannot
-  both add the same try). `rescheduled` is an attempt reason (a delay, counted apart from a refusal).
-  `POST /orders/:id/courier-refresh` (`orders:update`) asks PostEx about one parcel now and applies the
-  same `apply()` the 15-minute pass does (10 s cool-down). `GET /orders/summary` carries `needsAttention`;
-  the list rows carry `courierBooking.phase`, `needsAttention` and `deliveryAttempts.reason` (reasons only).
+- **The courier's stage — where the parcel really is** (`utils/couriers/statusWords.js`, R9-1 → R10).
+  Each status check saves `courierBooking.phase` and `phaseAt`: `unbooked · booked · picked-up ·
+in-transit · at-warehouse · on-route · attempt-failed · under-review · expired · returning · returned ·
+delivered · cancelled · unknown`. **PostEx is read code first, words second**, because the current word
+  can hide the truth: a refused parcel on its way back can say "En-Route to Islamabad warehouse", while its
+  journey carries 0039 / 0040 / 0037 after the refusal — that is **`returning`**. The rule (`phaseOf`, in this
+  order): cancelled (`/cancel|un-assigned by me/` or code 0002) → delivered (word or 0005) → returned (word or
+  0006/0007) → **returning** (word "out for return", or a return code after the last 0004/0005) → the newest
+  code (0001 booked/unbooked, 0031 picked-up, 0003/0038 at-warehouse, 0033/0035 in-transit, 0004 on-route,
+  0013 attempt-failed, 0008 under-review) → the word → `unknown`. **An unmapped word is `unknown`: the screen
+  shows PostEx's own words, never a guess, and the word is logged once** (`unmapped courier status`) so it
+  gets mapped. Only `postex` has a verified table; `tcs` keeps its word rules until its codes are read from
+  TCS's own status list.
+  - **"Returning" never moves stock or money.** Only Delivered and Returned (the courier's own word) become
+    `confirmable`, still after two matching checks; `readStatus()` is separate from `phaseOf()` and a returning
+    parcel reads `moving`. The order stays **Dispatched** until then.
+  - **What the real PostEx API does** (checked 2026-10-29 on a live account; the guide is wrong in places):
+    `track-order` / `track-bulk-order` return `transactionStatus` in the dashboard's words ("PostEx
+    WareHouse", "Delivery Under Review", "Un-Assigned By Me") and the journey **oldest first**, each step with
+    `updatedAt` (another PostEx channel sends newest first with `modifiedDatetime` — `orderedSteps` sorts by
+    time when every step has one, else trusts the order). The **list API** takes `orderStatusId`, `startDate`,
+    `endDate` (not the guide's names), returns no journey and uses other words ("In Stock", "Under
+    Verification", "Transferred", "Cancelled") — it is not used for the status pass. Real codes: 0001 At
+    <shop> Warehouse · 0002 Booking Cancelled by Merchant · 0003 Received at <city> Warehouse · 0004 Enroute
+    for Delivery · 0005 Delivered to Customer · 0008 Delivery Under Review · 0013 Attempt Made · 0031 Departed
+    to PostEx Warehouse · 0033 Departed to <city> · 0035 Arrived at Transit Hub <city> · 0037 Return to
+    <city> · 0038 Waiting for Delivery · 0039 Waiting for Return · 0040 Return Process Initiated.
+    **Attempt reasons carry a code** — RFD refused, CNA not available, HCR held at the customer's request.
+  - Each journey step keeps PostEx's own time (`at`) and when we first saw it (`seenAt`, matched by what the
+    step says and when, so a reordered list does not reset it). `courierBooking.lastStep { message, at }` and
+    `lastMoveAt` are what the Orders list shows under the stage chip.
+  - **Two alerts, once each** (bell `courier-issue`): **"Coming back"** when a parcel enters `returning`
+    (`returningAlertedAt`, cleared when it goes out for delivery again) and **"No courier update for 3 days"**
+    when a parcel not in a final stage has not moved for 3 days (`stuckAlertedAt`; it also sets
+    `needsAttention`; a new step clears both). A failed try and the start of a review hold ring as before.
+  - **The pass runs every 10 minutes** (`COURIER_SYNC_SECONDS` still overrides, never below 10 s).
+    `POST /orders/courier-refresh-all` `{ business }` (`orders:update`, scoped) checks that business's
+    dispatched parcels now: once a minute per business (429 with the seconds to wait; the cool-down is in
+    this process, and the API is one process), and it **never counts towards an automatic confirm**.
+    `POST /orders/:id/courier-refresh` is the one-parcel version (10 s cool-down).
+  - `GET /orders/summary` carries `needsAttention`, `byPhase` (dispatched parcels by stage), `returning` and
+    `onRoute`; list rows carry `courierBooking.phase`, `lastStep`, `lastMoveAt`, `needsAttention` and
+    `deliveryAttempts.reason` (reasons only).
+  - `npm run postex:stages` is a read-only check: it lists the key's parcels and prints the stage the app
+    gives each one. Run it after any change to the stage rule, and once on the VPS after a deploy.
 
 - **Own one-tap courier requests** (`Business.requestPhrases`, ≤ 12 phrases of ≤ 60 characters, R9-1b): the
   built-in chips live in the app; a business adds its own through `GET/PUT /orders/phrases` — `orders:read` /

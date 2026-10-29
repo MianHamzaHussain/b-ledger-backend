@@ -164,7 +164,7 @@ server.listen(PORT, () =>
 // Alerts for booked orders whose day has come: catches up now, then every ten minutes.
 const stopReminders = startBookingReminders();
 
-// Where each parcel booked through a courier's service is, checked every 15 minutes.
+// Where each parcel booked through a courier's service is, checked every 10 minutes.
 // The automatic delivered / returned goes through the same function a person's tap does.
 const stopCourierSync = startCourierSync({ confirm: confirmOneFromCourier });
 

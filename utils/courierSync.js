@@ -263,7 +263,7 @@ const apply = async (order, fresh, { auto = null, confirm = null, keepSeen = fal
 
 /**
  * Ask the courier about ONE parcel right now — for the "Refresh now" button, so nobody waits for the
- * next 15-minute pass while a customer is on the phone. Applies exactly what the pass would. A second
+ * next 10-minute pass while a customer is on the phone. Applies exactly what the pass would. A second
  * tap within a few seconds reuses the first answer instead of asking again.
  */
 const REFRESH_COOLDOWN_MS = 10_000;
@@ -383,7 +383,7 @@ export const runCourierSync = async ({
   return tally;
 };
 
-/** Run now and then every 15 minutes; never overlaps itself, never takes the server down. */
+/** Run now and then every 10 minutes; never overlaps itself, never takes the server down. */
 export const startCourierSync = ({ everyMs = EVERY_MS, confirm = null } = {}) => {
   let running = false;
   let lastCityCheck = 0;
