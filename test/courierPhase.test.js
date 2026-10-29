@@ -8,6 +8,7 @@ import { attemptReason, runCourierSync, refreshParcel } from '../utils/courierSy
 import { phaseOf, NEEDS_ATTENTION } from '../utils/couriers/statusWords.js';
 import { orderSummary } from '../utils/orderSummary.js';
 import { fakePostex, restoreFetch, setupOrder, dispatchBooked } from './helpers/courier.js';
+import * as real from './fixtures/postexTracks.js';
 
 /**
  * The courier's journey in plain phases (R9-1): every parcel carries one, a failed try or a review hold
@@ -39,11 +40,13 @@ const booked = async record => {
 test('every wording PostEx documents lands in the right phase', () => {
   const cases = [
     [{ status: 'Booked' }, 'booked'],
-    [{ status: 'Unbooked' }, 'booked'],
+    [{ status: 'Unbooked' }, 'unbooked'],
     [{ status: 'PostEx WareHouse' }, 'at-warehouse'],
-    [{ status: 'Picked By PostEx' }, 'at-warehouse'],
+    [{ status: 'Picked By PostEx' }, 'picked-up'],
+    [{ status: 'En-Route to Islamabad warehouse' }, 'in-transit'],
+    [{ status: 'Expired' }, 'expired'],
     [{ status: 'Out For Delivery' }, 'on-route'],
-    [{ status: 'Out For Return' }, 'on-route'],
+    [{ status: 'Out For Return' }, 'returning'],
     [{ status: 'Attempted' }, 'attempt-failed'],
     [{ status: 'Delivery Under Review' }, 'under-review'],
     [{ status: 'Delivered' }, 'delivered'],
@@ -77,8 +80,8 @@ test('a word nobody has seen is unknown, shown as PostEx wrote it and never gues
   assert.equal(phaseOf(undefined), 'unknown');
 });
 
-test('only a failed try and a review hold need attention', () => {
-  assert.deepEqual([...NEEDS_ATTENTION].sort(), ['attempt-failed', 'under-review']);
+test('only a failed try, a review hold and an expired parcel need attention', () => {
+  assert.deepEqual([...NEEDS_ATTENTION].sort(), ['attempt-failed', 'expired', 'under-review']);
 });
 
 test('a delay is counted apart from a refusal', () => {
@@ -211,4 +214,53 @@ test('Refresh now is refused for an order that is not a dispatched courier parce
   fakePostex({});
   const { order } = await setupOrder();
   await assert.rejects(refreshParcel(await Order.findById(order._id)), /dispatched parcel/);
+});
+
+/** What the app reads from a real PostEx answer: the word, and the journey with its times. */
+const fresh = record => ({
+  status: record.transactionStatus ?? '',
+  history: record.transactionStatusHistory.map(h => ({
+    code: h.transactionStatusMessageCode,
+    message: h.transactionStatusMessage,
+    at: h.updatedAt ?? h.modifiedDatetime
+  }))
+});
+
+test('real PostEx parcels land in the stage a person would give them', () => {
+  const expected = [
+    ['REFUSED_AND_RETURNING', 'returning'],
+    ['NEWEST_FIRST', 'returning'],
+    ['DELIVERED', 'delivered'],
+    ['WAITING_FOR_DELIVERY', 'at-warehouse'],
+    ['PICKED', 'picked-up'],
+    ['UNDER_REVIEW', 'under-review'],
+    ['CANCELLED', 'cancelled'],
+    ['UNBOOKED', 'unbooked'],
+    ['ATTEMPT_CNA', 'attempt-failed']
+  ];
+  for (const [name, phase] of expected) assert.equal(phaseOf(fresh(real[name])), phase, name);
+});
+
+test('a refused parcel on its way back is returning even though its word says it is at a warehouse', () => {
+  assert.equal(real.REFUSED_AND_RETURNING.transactionStatus, 'En-Route to Islamabad warehouse');
+  assert.equal(phaseOf(fresh(real.REFUSED_AND_RETURNING)), 'returning');
+});
+
+test('the journey is read in time order whichever way the courier lists it', () => {
+  // Newest first, with no status word at all: the newest step is still the one that decides.
+  assert.equal(phaseOf(fresh(real.NEWEST_FIRST)), 'returning');
+  // A second delivery try after a return step puts it back out for delivery.
+  const again = fresh(real.REFUSED_AND_RETURNING);
+  again.history.push({
+    code: '0004',
+    message: 'Enroute for Delivery',
+    at: '2026-10-30T09:00:00.000+0500'
+  });
+  again.status = 'Out For Delivery';
+  assert.equal(phaseOf(again), 'on-route');
+});
+
+test('TCS keeps its own word rules until its codes are known', () => {
+  assert.equal(phaseOf({ status: 'Arrived at TCS Facility' }, 'tcs'), 'at-warehouse');
+  assert.equal(phaseOf({ status: 'Delivered' }, 'tcs'), 'delivered');
 });
