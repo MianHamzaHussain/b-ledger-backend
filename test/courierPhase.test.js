@@ -4,7 +4,7 @@ import { connect, clear, disconnect } from './helpers/db.js';
 import Order from '../models/Order.js';
 import Notification from '../models/Notification.js';
 import { clearCityCache } from '../utils/couriers/booking.js';
-import { attemptReason, runCourierSync, refreshParcel } from '../utils/courierSync.js';
+import { attemptReason, readStatus, runCourierSync, refreshParcel } from '../utils/courierSync.js';
 import { phaseOf, NEEDS_ATTENTION } from '../utils/couriers/statusWords.js';
 import { orderSummary } from '../utils/orderSummary.js';
 import { fakePostex, restoreFetch, setupOrder, dispatchBooked } from './helpers/courier.js';
@@ -299,4 +299,105 @@ test('a real CNA attempt is logged as not-available, with PostEx’s own words k
   assert.equal(fresh.deliveryAttempts.length, 1);
   assert.equal(fresh.deliveryAttempts[0].reason, 'not-available');
   assert.equal(fresh.deliveryAttempts[0].note, 'PostEx: CNA(CNA)');
+});
+
+const rings = title =>
+  Notification.countDocuments({ type: 'courier-issue', title: new RegExp(title) });
+
+test('a parcel coming back shows as returning, with its latest step, and rings the bell once', async () => {
+  const { order } = await booked(real.REFUSED_AND_RETURNING);
+  await runCourierSync();
+  await runCourierSync();
+
+  const fresh = await Order.findById(order._id);
+  assert.equal(fresh.courierBooking.phase, 'returning');
+  assert.equal(fresh.courierBooking.lastStep.message, 'Arrived at Transit Hub FSD');
+  assert.equal(fresh.courierBooking.lastMoveAt.toISOString(), '2026-10-29T09:57:55.000Z');
+  assert.equal(fresh.courierBooking.history.length, 17);
+  assert.equal(fresh.courierBooking.history[0].at.toISOString(), '2026-10-26T14:05:28.000Z');
+  assert.equal(await rings('Coming back'), 1, 'once, not on every check');
+  // The refusal on the way is logged as a failed try, with the courier's own words.
+  assert.equal(fresh.deliveryAttempts.length, 1);
+  assert.equal(fresh.deliveryAttempts[0].reason, 'refused');
+});
+
+test('"returning" is never a reason to restock: it is not delivered or returned, so nothing is confirmable', async () => {
+  const { order } = await booked(real.REFUSED_AND_RETURNING);
+  assert.equal(readStatus(normalizeTracking(real.REFUSED_AND_RETURNING)), 'moving');
+  await runCourierSync();
+  await runCourierSync();
+
+  const fresh = await Order.findById(order._id);
+  assert.equal(fresh.status, 'dispatched');
+  assert.equal(fresh.courierBooking.confirmable, undefined);
+  assert.equal(fresh.courierBooking.seenKind, undefined);
+});
+
+test('going out for delivery again after a return step clears the coming-back alert, so a later return rings again', async () => {
+  const { order, tracking } = await booked(real.REFUSED_AND_RETURNING);
+  await runCourierSync();
+  assert.ok((await Order.findById(order._id)).courierBooking.returningAlertedAt);
+
+  tracking['CX-1001'] = {
+    ...real.REFUSED_AND_RETURNING,
+    trackingNumber: 'CX-1001',
+    transactionStatus: 'Out For Delivery',
+    transactionStatusHistory: [
+      ...real.REFUSED_AND_RETURNING.transactionStatusHistory,
+      {
+        transactionStatusMessageCode: '0004',
+        transactionStatusMessage: 'Enroute for Delivery',
+        updatedAt: '2026-10-30T09:00:00.000+0500'
+      }
+    ]
+  };
+  await runCourierSync();
+  const out = await Order.findById(order._id);
+  assert.equal(out.courierBooking.phase, 'on-route');
+  assert.equal(out.courierBooking.returningAlertedAt, undefined);
+});
+
+const oldWaiting = {
+  transactionStatus: 'PostEx WareHouse',
+  transactionStatusHistory: [
+    {
+      transactionStatusMessageCode: '0001',
+      transactionStatusMessage: 'At <SHOP> Warehouse',
+      updatedAt: '2026-01-01T10:00:00.000+0500'
+    },
+    {
+      transactionStatusMessageCode: '0038',
+      transactionStatusMessage: 'Waiting for Delivery',
+      updatedAt: '2026-01-02T10:00:00.000+0500'
+    }
+  ]
+};
+
+test('a parcel that has not moved for 3 days is flagged and rings once; a new step clears it', async () => {
+  const { order, tracking } = await booked(oldWaiting);
+  await runCourierSync();
+  await runCourierSync();
+
+  const stuck = await Order.findById(order._id);
+  assert.equal(stuck.courierBooking.needsAttention, true);
+  assert.ok(stuck.courierBooking.stuckAlertedAt);
+  assert.equal(await rings('No courier update for 3 days'), 1);
+
+  tracking['CX-1001'] = {
+    ...oldWaiting,
+    trackingNumber: 'CX-1001',
+    transactionStatusHistory: [
+      ...oldWaiting.transactionStatusHistory,
+      {
+        transactionStatusMessageCode: '0004',
+        transactionStatusMessage: 'Enroute for Delivery',
+        updatedAt: new Date().toISOString()
+      }
+    ]
+  };
+  await runCourierSync();
+  const moving = await Order.findById(order._id);
+  assert.equal(moving.courierBooking.needsAttention, undefined);
+  assert.equal(moving.courierBooking.stuckAlertedAt, undefined);
+  assert.equal(await rings('No courier update for 3 days'), 1, 'no second ring');
 });

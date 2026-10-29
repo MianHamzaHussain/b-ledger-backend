@@ -4,7 +4,13 @@ import ErrorResponse from './errorResponse.js';
 import { adapterFor, providerName } from './couriers/index.js';
 import { NOTIFICATION_TYPES, ORDER_STATUS } from './constants.js';
 import logger from './logger.js';
-import { NEEDS_ATTENTION, PHASES, phaseOf } from './couriers/statusWords.js';
+import {
+  FINAL_PHASES,
+  NEEDS_ATTENTION,
+  PHASES,
+  orderedSteps,
+  phaseOf
+} from './couriers/statusWords.js';
 import { checkHeldCities } from './cityWatch.js';
 import { recordCourierWallets } from './courierWallet.js';
 
@@ -26,6 +32,8 @@ const BATCH = 20;
 const CITY_CHECK_MS = 60 * 60 * 1000;
 const WALLET_CHECK_MS = 60 * 60 * 1000;
 const PER_RUN = 300;
+// A parcel that has not moved for this long raises an alert, once.
+const STUCK_MS = 3 * 24 * 60 * 60 * 1000;
 
 const status = { lastRunAt: null, lastChecked: 0, lastUpdated: 0, lastReady: 0, lastErrors: 0 };
 export const courierSyncStatus = () => ({ ...status });
@@ -68,7 +76,8 @@ const attemptsIn = history =>
 
 /** Apply one parcel's fresh state to its order. Returns what changed, for the run's tally. */
 const apply = async (order, fresh, { auto = null, confirm = null, keepSeen = false } = {}) => {
-  const phase = phaseOf(fresh);
+  const provider = order.courierBooking.provider;
+  const phase = phaseOf(fresh, provider);
   // A parcel WE cancelled at the courier arrives under a "returned" code: that is not a return to confirm.
   const kind = phase === PHASES.CANCELLED ? 'moving' : readStatus(fresh);
   const set = { 'courierBooking.lastSyncAt': new Date() };
@@ -80,14 +89,31 @@ const apply = async (order, fresh, { auto = null, confirm = null, keepSeen = fal
     set['courierBooking.courierStatusAt'] = new Date();
     out.updated = true;
   }
-  // The journey, each step stamped with when WE first noticed it (PostEx sends no time of its own):
-  // a step already stored keeps its stamp, so "seen 3:15 pm" never slides forward on a later check.
-  const stored = order.courierBooking.history ?? [];
+  // The journey in time order, each step with the courier's own time (when it sends one) and with when WE first
+  // noticed it. A step already stored keeps its stamp, so "seen 3:15 pm" never slides forward on a later check;
+  // steps are matched by what they say and when, not by position, so a reordered list does not reset them.
   const noticed = new Date();
-  set['courierBooking.history'] = fresh.history.map((h, i) => ({
-    ...h,
-    seenAt: stored[i]?.code === h.code && stored[i]?.seenAt ? stored[i].seenAt : noticed
+  const stamp = h => `${h.code}|${h.message}|${h.at ? new Date(h.at).getTime() : ''}`;
+  const seenBefore = new Map();
+  for (const h of order.courierBooking.history ?? []) {
+    if (h.seenAt) {
+      seenBefore.set(stamp(h), h.seenAt);
+      seenBefore.set(`${h.code}|${h.message}|`, h.seenAt);
+    }
+  }
+  const journey = orderedSteps(fresh.history).map(h => ({
+    code: h.code,
+    message: h.message,
+    at: h.at ? new Date(h.at) : undefined,
+    seenAt: seenBefore.get(stamp(h)) ?? seenBefore.get(`${h.code}|${h.message}|`) ?? noticed
   }));
+  set['courierBooking.history'] = journey;
+  const newest = journey.at(-1);
+  const movedAt = newest ? (newest.at ?? newest.seenAt) : undefined;
+  if (newest) {
+    set['courierBooking.lastStep'] = { message: newest.message, at: movedAt };
+    set['courierBooking.lastMoveAt'] = movedAt;
+  }
 
   // The courier's state in plain phases, and whether it needs a person's eye.
   const phaseChanged = phase !== order.courierBooking.phase;
@@ -96,8 +122,21 @@ const apply = async (order, fresh, { auto = null, confirm = null, keepSeen = fal
     set['courierBooking.phaseAt'] = noticed;
     out.updated = true;
   }
-  if (NEEDS_ATTENTION.has(phase)) set['courierBooking.needsAttention'] = true;
+  // A parcel silent for 3 days needs a person too — whatever stage it is stuck in (a final stage is never stuck).
+  const stuck = Boolean(movedAt) && !FINAL_PHASES.has(phase) && noticed - movedAt > STUCK_MS;
+  if (NEEDS_ATTENTION.has(phase) || stuck) set['courierBooking.needsAttention'] = true;
   else if (order.courierBooking.needsAttention) unset['courierBooking.needsAttention'] = 1;
+
+  // The two alerts below ring once: the flag is set with the change and cleared when the cause goes away.
+  const startedReturning = phase === PHASES.RETURNING && !order.courierBooking.returningAlertedAt;
+  if (startedReturning) set['courierBooking.returningAlertedAt'] = noticed;
+  else if (phase !== PHASES.RETURNING && order.courierBooking.returningAlertedAt) {
+    unset['courierBooking.returningAlertedAt'] = 1; // it went out for delivery again
+  }
+  const startedStuck = stuck && !order.courierBooking.stuckAlertedAt;
+  if (startedStuck) set['courierBooking.stuckAlertedAt'] = noticed;
+  else if (!stuck && order.courierBooking.stuckAlertedAt)
+    unset['courierBooking.stuckAlertedAt'] = 1;
 
   // Both fees, in rupees, as the courier reports them (only meaningful once it has settled the parcel).
   if (kind === 'delivered') {
@@ -134,11 +173,13 @@ const apply = async (order, fresh, { auto = null, confirm = null, keepSeen = fal
   }
 
   // Failed tries the courier reports that we have not logged yet.
-  const reported = attemptsIn(fresh.history);
-  const logged = (order.deliveryAttempts ?? []).filter(a => a.note?.startsWith('PostEx:')).length;
+  // Each attempt's note carries the courier's name, which is also how earlier ones are counted.
+  const prefix = `${providerName(provider)}:`;
+  const reported = attemptsIn(orderedSteps(fresh.history));
+  const logged = (order.deliveryAttempts ?? []).filter(a => a.note?.startsWith(prefix)).length;
   const added = reported.slice(logged).map(reason => ({
     reason: attemptReason(reason),
-    note: `PostEx: ${reason}`.slice(0, 200),
+    note: `${prefix} ${reason}`.slice(0, 200),
     at: new Date()
   }));
 
@@ -165,7 +206,26 @@ const apply = async (order, fresh, { auto = null, confirm = null, keepSeen = fal
       business: order.business,
       type: NOTIFICATION_TYPES.COURIER_ISSUE,
       title: `Delivery try failed — ${who}`,
-      body: added.at(-1).note.replace(/^PostEx:\s*/, ''),
+      body: added.at(-1).note.slice(prefix.length).trim(),
+      link: `/orders/${order._id}`
+    });
+  }
+  // On its way back: rings once when the return starts, so nobody has to ask where it is.
+  if (startedReturning) {
+    await notify({
+      business: order.business,
+      type: NOTIFICATION_TYPES.COURIER_ISSUE,
+      title: `Coming back — ${who}`,
+      body: newest?.message ?? 'The courier is returning this parcel.',
+      link: `/orders/${order._id}`
+    });
+  }
+  if (startedStuck) {
+    await notify({
+      business: order.business,
+      type: NOTIFICATION_TYPES.COURIER_ISSUE,
+      title: `No courier update for 3 days — ${who}`,
+      body: newest?.message ? `Last step: ${newest.message}` : 'Ask the courier where it is.',
       link: `/orders/${order._id}`
     });
   }
