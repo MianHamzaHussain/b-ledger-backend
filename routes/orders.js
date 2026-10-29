@@ -30,6 +30,7 @@ import {
   orderPhrasesSchema,
   orderBookWaitingSchema,
   orderAirwayBillsSchema,
+  orderPartialReturnSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -66,6 +67,7 @@ import {
   refreshCourierStatus,
   getRequestPhrases,
   bookWaitingOrders,
+  partialReturnOrder,
   printAirwayBills,
   setRequestPhrases,
   getCourierParcels,
@@ -566,6 +568,39 @@ router.post(
   loadScoped(Order),
   validate(orderRefundReturnSchema),
   refundReturnOrder
+);
+
+/**
+ * @swagger
+ * /orders/{id}/partial-return:
+ *   post:
+ *     summary: The customer kept some pieces and sent the others back — only those pieces are reversed
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [lines]
+ *             properties:
+ *               lines: { type: array, items: { type: object, properties: { line: { type: string }, quantity: { type: integer } } } }
+ *               keep: { type: number, description: "Rupees kept back from the refund (default 0)" }
+ *               returnBy: { type: string, enum: [customer, us] }
+ *               note: { type: string }
+ *     responses:
+ *       200: { description: "The order, still Delivered, with `returnedItems` and a refund due to pay with Refund paid" }
+ *       400: { description: Not delivered, already exchanged, more than is left, or every piece (use the whole-order flows) }
+ */
+router.post(
+  '/:id/partial-return',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderPartialReturnSchema),
+  partialReturnOrder
 );
 
 router.post(

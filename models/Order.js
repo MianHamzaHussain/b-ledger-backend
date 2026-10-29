@@ -167,6 +167,27 @@ const OrderItemSchema = new mongoose.Schema(
   { _id: true }
 );
 
+/** Some pieces of a DELIVERED order that came back while the customer kept the rest (R9-13). */
+const ReturnedItemSchema = new mongoose.Schema(
+  {
+    /** The order item (line) these pieces belong to. */
+    line: { type: mongoose.Schema.ObjectId, required: true },
+    productName: { type: String, required: true },
+    variantLabel: { type: String },
+    quantity: { type: Number, required: true, min: 1 },
+    unitPrice: { type: Number, required: true, min: 0 },
+    amountPaisa: { type: Number, required: true, min: 0 },
+    date: { type: Date, default: Date.now },
+    by: { type: mongoose.Schema.ObjectId, ref: 'User' },
+    /** Who sent them back: the customer on their own courier (the usual), or we collected them. */
+    returnBy: { type: String, enum: ['customer', 'us'], default: 'customer' },
+    returnCourierName: { type: String, trim: true, maxlength: 60 },
+    reversalTrackingId: { type: String, trim: true },
+    note: { type: String, trim: true, maxlength: 300 }
+  },
+  { _id: true }
+);
+
 /** Work done for this customer on top of (or instead of) stock items. */
 const CustomWorkSchema = new mongoose.Schema(
   {
@@ -317,6 +338,10 @@ const OrderSchema = new mongoose.Schema(
         { _id: false }
       )
     },
+    /** Pieces the customer sent back after delivery while keeping the rest — see utils/partialReturn.js. */
+    returnedItems: { type: [ReturnedItemSchema], default: [] },
+    /** How many pieces in all (denormalised for the list row: "Returned 1 of 2"). */
+    returnedPieces: { type: Number, min: 0 },
     /** Every other change after the order was taken (R9-4) — who, when, from → to. */
     activity: { type: [ActivityEventSchema], default: [] },
     /**

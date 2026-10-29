@@ -168,6 +168,24 @@ export const orderLoadSheetSchema = z.object({
   orderIds: z.array(id).min(1, 'Choose at least one order').max(100)
 });
 
+/** The customer kept some pieces of a delivered order and sent the others back. */
+export const orderPartialReturnSchema = z.object({
+  lines: z
+    .array(
+      z.object({
+        line: id,
+        quantity: z.coerce.number().int('Whole pieces only').min(1, 'At least 1 piece')
+      })
+    )
+    .min(1, 'Choose which items came back'),
+  /** Kept back from the refund (rupees) — usually 0; the delivery charge is not deducted by default. */
+  keep: money.optional(),
+  returnBy: z.enum(['customer', 'us']).optional(),
+  returnCourierName: z.string().trim().max(60).optional(),
+  reversalTrackingId: z.string().trim().max(60).optional(),
+  note: z.string().trim().max(300).optional()
+});
+
 /** Print many airway bills at once — up to 100, in the order they were ticked. */
 export const orderAirwayBillsSchema = z.object({
   business: id,

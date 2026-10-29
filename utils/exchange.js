@@ -31,6 +31,12 @@ export const assertExchangeable = order => {
     throw new ErrorResponse('Only a delivered order can be exchanged', 400);
   }
   if (order.exchangedFor) throw new ErrorResponse('This order has already been exchanged', 400);
+  if (order.returnedItems?.length) {
+    throw new ErrorResponse(
+      'Part of this order was already sent back — the rest can only go back piece by piece',
+      400
+    );
+  }
   if (isCounterSale(order)) {
     throw new ErrorResponse('A counter sale is exchanged at the counter, not here', 400);
   }

@@ -36,6 +36,7 @@ export const ORDER_LIST_FIELDS = [
   'codAmount',
   'reversalTrackingId',
   'awaitingReturn',
+  'returnedPieces',
   // What the list shows about a courier-booked parcel — never its history or the raw key fields.
   'awaitingCity.city',
   'awaitingCity.openedAt',

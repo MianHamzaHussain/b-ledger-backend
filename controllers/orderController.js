@@ -23,6 +23,7 @@ import { orderSummary } from '../utils/orderSummary.js';
 import { refreshParcel } from '../utils/courierSync.js';
 import { assertNotBlocked } from '../utils/customerBlock.js';
 import { airwayBillsFor } from '../utils/airwayBills.js';
+import { partialReturn } from '../utils/partialReturn.js';
 import {
   buildTimeline,
   itemsSummary,
@@ -689,6 +690,19 @@ export const refundReturnOrder = asyncHandler(async (req, res) => {
   const order = req.resource;
   await refundReturn(order, req.body, req.user.id);
   order.$locals.statusNote = req.body.note;
+  await order.save();
+  res.status(200).json({ success: true, data: order });
+});
+
+/**
+ * @desc   The customer kept some pieces of a delivered order and sent the others back: only those pieces
+ *         go back to stock, their cost and sale are reversed, and what the customer paid for them becomes
+ *         the order's refund due (paid with "Refund paid"). The order stays Delivered.
+ * @route  POST /api/v1/orders/:id/partial-return  (orders:update — scoped)
+ */
+export const partialReturnOrder = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  await partialReturn(order, req.body, req.user.id);
   await order.save();
   res.status(200).json({ success: true, data: order });
 });

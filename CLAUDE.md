@@ -990,6 +990,22 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   is a **guide, never a lock**; `GET /partners/:id` returns `thisMonth { tookPaisa, allowancePaisa }`. No bell
   at the limit: notifications are per business and would show one partner's drawings to staff.
 
+- **The customer keeps some pieces after delivery** (R9-13, `utils/partialReturn.js`). At the door a parcel is
+  all-or-nothing (the standard Delivered / Returned already handle it); the partial case is only **after
+  delivery**: one article exchanged or returned, the rest kept. `POST /orders/:id/partial-return { lines:
+[{ line, quantity }], keep?, returnBy?, note? }` reverses **only those pieces**, with the same entries the
+  whole-order flows post on a subset of lines: Dr Sales / Cr Advances from customers (their price), Dr
+  Inventory / Cr COGS (their cost), stock back for exactly those pieces, and — if `keep` — Dr Advances / Cr
+  Charges kept. The order stays **Delivered**; the courier's COD and delivery charge stand. What the customer
+  paid for the pieces becomes the order's ordinary refund due, paid with the ordinary **Refund paid** (from the
+  shop's own bank or cash — never the PostEx wallet). `Order.returnedItems` records each go; the same line can
+  come back in several goes, never more than was delivered; **every piece is refused** here (the whole-order
+  flows do that). **The standard flows were not rewritten**: `exchange.js` and `refundReturn.js` gained only a
+  guard that a partly returned order can no longer be exchanged or refunded as a whole. v1 has refund as
+  the outcome; a credit carried into a replacement is not built (exchange of one article = this + a normal new
+  order). A return pickup booked on our own courier is not billed on the courier invoice automatically —
+  record that cost as a shop expense.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from
