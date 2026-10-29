@@ -1,6 +1,6 @@
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { connect, clear, disconnect } from './helpers/db.js';
+import { connect, clear, disconnect, userId } from './helpers/db.js';
 import Order from '../models/Order.js';
 import { getAirwayBill } from '../controllers/orderController.js';
 import { courierDeps } from '../utils/couriers/index.js';
@@ -151,7 +151,8 @@ test('the airway bill is fetched by the server with the saved key, as a PDF', as
   };
   const sent = {};
   await getAirwayBill(
-    { resource: await Order.findById(order._id) },
+    // The signed-in person: printing a bill stamps who printed it.
+    { resource: await Order.findById(order._id), user: { id: userId } },
     {
       status() {
         return this;
