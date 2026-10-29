@@ -15,7 +15,7 @@ import { checkHeldCities } from './cityWatch.js';
 import { recordCourierWallets } from './courierWallet.js';
 
 /**
- * Keep dispatched parcels in step with the courier. PostEx has no webhook, so this ASKS: every few
+ * Keep dispatched parcels in step with the courier. PostEx has no webhook, so this ASKS: every 10
  * minutes it reads the status of each parcel booked through the courier's service.
  *
  * What it does is deliberately small and safe:
@@ -26,8 +26,8 @@ import { recordCourierWallets } from './courierWallet.js';
  *    normal status path, because those two steps post sales, cost and stock.
  * If the courier later takes it back ("delivered" → "attempted"), the mark is removed again.
  */
-// 15 minutes; COURIER_SYNC_SECONDS shortens it for demos (never below 10 s).
-const EVERY_MS = Math.max(Number(process.env.COURIER_SYNC_SECONDS) || 15 * 60, 10) * 1000;
+// 10 minutes; COURIER_SYNC_SECONDS shortens it for demos (never below 10 s).
+const EVERY_MS = Math.max(Number(process.env.COURIER_SYNC_SECONDS) || 10 * 60, 10) * 1000;
 const BATCH = 20;
 const CITY_CHECK_MS = 60 * 60 * 1000;
 const WALLET_CHECK_MS = 60 * 60 * 1000;
@@ -284,13 +284,40 @@ export const refreshParcel = async order => {
   return Order.findById(order._id);
 };
 
+/**
+ * "Refresh all" for ONE business: the same check the 10-minute pass makes, now, for that business's parcels
+ * that are out. It never counts as one of the two matching checks an automatic confirm waits for (two quick
+ * taps are not two checks apart in time), and a business can ask once a minute. The cool-down lives in this
+ * process — the API runs as one systemd process, so that is the whole server.
+ */
+const REFRESH_ALL_COOLDOWN_MS = 60_000;
+const refreshedAllAt = new Map();
+export const clearRefreshAllCooldown = () => refreshedAllAt.clear();
+
+export const refreshBusinessParcels = async business => {
+  const key = String(business);
+  const last = refreshedAllAt.get(key);
+  if (last && Date.now() - last < REFRESH_ALL_COOLDOWN_MS) {
+    const wait = Math.ceil((REFRESH_ALL_COOLDOWN_MS - (Date.now() - last)) / 1000);
+    throw new ErrorResponse(`Checked a moment ago — try again in ${wait} seconds`, 429);
+  }
+  refreshedAllAt.set(key, Date.now());
+  const { checked, updated, errors } = await runCourierSync({ business, keepSeen: true });
+  return { checked, updated, errors };
+};
+
 /** One pass: ask each connected courier about its parcels that are still out. */
-export const runCourierSync = async ({ confirm = null } = {}) => {
+export const runCourierSync = async ({
+  confirm = null,
+  business = null,
+  keepSeen = false
+} = {}) => {
   const tally = { checked: 0, updated: 0, ready: 0, autoConfirmed: 0, errors: 0 };
   const orders = await Order.find({
     status: ORDER_STATUS.DISPATCHED,
     'courierBooking.trackingNumber': { $exists: true },
-    courier: { $exists: true }
+    courier: { $exists: true },
+    ...(business ? { business } : {})
   })
     .sort({ 'courierBooking.lastSyncAt': 1 })
     .limit(PER_RUN);
@@ -342,7 +369,7 @@ export const runCourierSync = async ({ confirm = null } = {}) => {
         const fresh = byNumber.get(o.courierBooking.trackingNumber);
         if (!fresh) continue;
         try {
-          const out = await apply(o, fresh, { auto, confirm });
+          const out = await apply(o, fresh, { auto, confirm, keepSeen });
           if (out.updated) tally.updated += 1;
           if (out.ready) tally.ready += 1;
           if (out.autoConfirmed) tally.autoConfirmed += 1;

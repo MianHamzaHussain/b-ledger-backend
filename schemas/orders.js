@@ -192,6 +192,9 @@ export const orderAirwayBillsSchema = z.object({
   orderIds: z.array(id).min(1, 'Choose at least one order').max(100, 'Print at most 100 at a time')
 });
 
+/** Ask every courier about this business's parcels that are out, now. */
+export const orderRefreshAllSchema = z.object({ business: id });
+
 /** Book the orders that were waiting for a courier city that has reopened. */
 export const orderBookWaitingSchema = z.object({
   business: id,
