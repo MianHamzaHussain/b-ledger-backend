@@ -1006,6 +1006,19 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   order). A return pickup booked on our own courier is not billed on the courier invoice automatically —
   record that cost as a shop expense.
 
+- **Delivered / returned by themselves** (R9-6). A courier connection has `integration.autoConfirm`: **on for a
+  connection made from now on, never switched on silently for an older one** (an admin turns it on with
+  `PUT /parties/:id/connection { autoConfirm }`). When on, the courier check marks a parcel delivered /
+  returned only after **two checks in a row** say the same (`courierBooking.seenKind/seenCount`; "Refresh
+  now" does not count; a change of mind resets it; a parcel **we** cancelled at the courier is never a
+  return) — because delivered cannot be taken back once sales, cost and stock are posted. It calls
+  **`confirmOneFromCourier`, the same function a person's tap uses**, which first **claims** the order in one
+  conditional write (`confirmClaimedAt`), so a tap and an automatic confirm racing cannot both post its sale.
+  The books name `integration.autoConfirmBy` — the person who turned it on; the order's timeline says "Marked
+  automatically from the courier's status". The function is **injected** (`startCourierSync({ confirm })`
+  from `server.js`), not imported, to keep the courier code free of the order controller. If a confirm
+  fails the parcel simply stays ready for a person.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

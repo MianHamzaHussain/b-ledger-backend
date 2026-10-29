@@ -419,6 +419,11 @@ const OrderSchema = new mongoose.Schema(
           tax: { type: Number },
           /** Waiting for a person's tap: the courier says it was delivered / returned. */
           confirmable: { type: String, enum: ['delivered', 'returned'] },
+          /** What the courier said on the last checks and how many times in a row (auto-confirm waits for two). */
+          seenKind: { type: String, enum: ['delivered', 'returned'] },
+          seenCount: { type: Number },
+          /** Held while one confirmation is running, so a tap and an automatic one can not both post. */
+          confirmClaimedAt: { type: Date },
           /** What the courier was given to print: the Remarks box and the article line. */
           remarks: { type: String },
           sentContents: { type: String }

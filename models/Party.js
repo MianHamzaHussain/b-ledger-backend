@@ -61,7 +61,21 @@ const PartySchema = new mongoose.Schema(
       pickupAddressCode: { type: String, trim: true },
       pickupAddressLabel: { type: String, trim: true },
       lastCheckedAt: { type: Date },
-      lastError: { type: String }
+      lastError: { type: String },
+      /**
+       * Mark a parcel delivered / returned by itself once the courier has said so on two checks in a row
+       * (it posts sales, cost and stock, and can not be taken back). On for a connection made from now on;
+       * an older connection stays off until an admin turns it on. `autoConfirmBy` is the person who turned
+       * it on — the books name them as the one who posted, the order's timeline says it was automatic.
+       */
+      autoConfirm: { type: Boolean },
+      autoConfirmBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
+      /**
+       * Record the courier's payments into its own wallet account when it says a parcel is paid. Off until
+       * an admin has checked the first batch against the courier's statement (the amount is calculated).
+       */
+      recordPayments: { type: Boolean },
+      recordPaymentsBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
     },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }

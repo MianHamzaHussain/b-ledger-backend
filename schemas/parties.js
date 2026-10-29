@@ -22,7 +22,11 @@ export const courierConnectionSchema = z.object({
   token: z.string().trim().min(8, 'That key looks too short').max(300).optional(),
   pickupAddressCode: z.string().trim().max(60).optional(),
   pickupAddressLabel: z.string().trim().max(200).optional(),
-  isEnabled: z.boolean().optional()
+  isEnabled: z.boolean().optional(),
+  /** Mark delivered / returned automatically from the courier (two matching checks). */
+  autoConfirm: z.boolean().optional(),
+  /** Record the courier's payments into its wallet account (off until the first batch is checked). */
+  recordPayments: z.boolean().optional()
 });
 
 /** A person's balance from before the business started on B Ledger. */

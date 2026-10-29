@@ -26,6 +26,7 @@ import mongoose from 'mongoose';
 import { createShutdown } from './utils/shutdown.js';
 import { reminderStatus, startBookingReminders } from './utils/bookingReminders.js';
 import { courierSyncStatus, startCourierSync } from './utils/courierSync.js';
+import { confirmOneFromCourier } from './controllers/orderController.js';
 
 const dirName = path.dirname(fileURLToPath(import.meta.url));
 
@@ -164,7 +165,8 @@ server.listen(PORT, () =>
 const stopReminders = startBookingReminders();
 
 // Where each parcel booked through a courier's service is, checked every 15 minutes.
-const stopCourierSync = startCourierSync();
+// The automatic delivered / returned goes through the same function a person's tap does.
+const stopCourierSync = startCourierSync({ confirm: confirmOneFromCourier });
 
 // One shutdown for SIGTERM (systemd restarts and deploys) and Ctrl+C. See utils/shutdown.js for why a
 // bare `process.on('SIGTERM', stopTimer)` is not enough: it stops the process from exiting at all.

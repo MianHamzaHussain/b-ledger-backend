@@ -60,8 +60,10 @@ const attemptsIn = history =>
     .map(h => h.message.replace(/^attempt made:?\s*/i, '').trim() || 'No reason given');
 
 /** Apply one parcel's fresh state to its order. Returns what changed, for the run's tally. */
-const apply = async (order, fresh) => {
-  const kind = readStatus(fresh);
+const apply = async (order, fresh, { auto = null, confirm = null, keepSeen = false } = {}) => {
+  const phase = phaseOf(fresh);
+  // A parcel WE cancelled at the courier arrives under a "returned" code: that is not a return to confirm.
+  const kind = phase === PHASES.CANCELLED ? 'moving' : readStatus(fresh);
   const set = { 'courierBooking.lastSyncAt': new Date() };
   const unset = {};
   const out = { updated: false, ready: false };
@@ -81,7 +83,6 @@ const apply = async (order, fresh) => {
   }));
 
   // The courier's state in plain phases, and whether it needs a person's eye.
-  const phase = phaseOf(fresh);
   const phaseChanged = phase !== order.courierBooking.phase;
   if (phaseChanged) {
     set['courierBooking.phase'] = phase;
@@ -98,6 +99,23 @@ const apply = async (order, fresh) => {
   } else if (kind === 'returned') {
     set['courierBooking.fee'] = fresh.reversalFee;
     set['courierBooking.tax'] = fresh.reversalTax;
+  }
+
+  // How many checks in a row have said the same final thing: an automatic confirm waits for two, because
+  // delivered can not be taken back once sales, cost and stock are posted.
+  const settled = kind === 'delivered' || kind === 'returned';
+  const seenCount = settled
+    ? (order.courierBooking.seenKind === kind ? (order.courierBooking.seenCount ?? 0) : 0) + 1
+    : 0;
+  // "Refresh now" (keepSeen) must not count: two quick taps are not two checks apart in time.
+  if (keepSeen) {
+    // leave the count as it was
+  } else if (settled) {
+    set['courierBooking.seenKind'] = kind;
+    set['courierBooking.seenCount'] = seenCount;
+  } else if (order.courierBooking.seenKind) {
+    unset['courierBooking.seenKind'] = 1;
+    unset['courierBooking.seenCount'] = 1;
   }
 
   if ((kind === 'delivered' || kind === 'returned') && order.courierBooking.confirmable !== kind) {
@@ -160,9 +178,18 @@ const apply = async (order, fresh) => {
       business: order.business,
       type: NOTIFICATION_TYPES.COURIER_READY,
       title: `${kind === 'delivered' ? 'Delivered' : 'Returned'}, says ${order.courierBooking.provider === 'postex' ? 'PostEx' : 'the courier'} — #${order.orderNumber} ${order.customerName}`,
-      body: 'Open the order to confirm it.',
+      body: auto
+        ? 'It will be marked automatically at the next check.'
+        : 'Open the order to confirm it.',
       link: `/orders/${order._id}`
     });
+  }
+  // Two matching checks and the courier's switch is on: mark it exactly as a person's tap would.
+  if (auto && confirm && settled && seenCount >= 2) {
+    const done = await confirm({ id: order._id, user: { id: auto }, auto: true });
+    if (done.ok) out.autoConfirmed = true;
+    else
+      logger.warn({ order: String(order._id), reason: done.reason }, 'automatic confirm skipped');
   }
   return out;
 };
@@ -186,13 +213,13 @@ export const refreshParcel = async order => {
 
   const { api } = await adapterFor(order.courier);
   const fresh = await api.track(tracking);
-  await apply(order, fresh);
+  await apply(order, fresh, { keepSeen: true });
   return Order.findById(order._id);
 };
 
 /** One pass: ask each connected courier about its parcels that are still out. */
-export const runCourierSync = async () => {
-  const tally = { checked: 0, updated: 0, ready: 0, errors: 0 };
+export const runCourierSync = async ({ confirm = null } = {}) => {
+  const tally = { checked: 0, updated: 0, ready: 0, autoConfirmed: 0, errors: 0 };
   const orders = await Order.find({
     status: ORDER_STATUS.DISPATCHED,
     'courierBooking.trackingNumber': { $exists: true },
@@ -210,8 +237,12 @@ export const runCourierSync = async () => {
 
   for (const [courierId, list] of byCourier) {
     let api;
+    let auto = null;
     try {
-      ({ api } = await adapterFor(courierId));
+      let party;
+      ({ api, party } = await adapterFor(courierId));
+      // The person the books name when this courier's parcels are marked automatically (switch off = none).
+      if (party.integration?.autoConfirm) auto = party.integration.autoConfirmBy ?? null;
     } catch (err) {
       tally.errors += list.length; // not connected any more, or no key: nothing to ask
       logger.warn({ courier: courierId, err: err.message }, 'courier sync skipped');
@@ -244,9 +275,10 @@ export const runCourierSync = async () => {
         const fresh = byNumber.get(o.courierBooking.trackingNumber);
         if (!fresh) continue;
         try {
-          const out = await apply(o, fresh);
+          const out = await apply(o, fresh, { auto, confirm });
           if (out.updated) tally.updated += 1;
           if (out.ready) tally.ready += 1;
+          if (out.autoConfirmed) tally.autoConfirmed += 1;
         } catch (err) {
           tally.errors += 1;
           logger.error({ order: String(o._id), err }, 'courier sync could not apply a parcel');
@@ -258,7 +290,7 @@ export const runCourierSync = async () => {
 };
 
 /** Run now and then every 15 minutes; never overlaps itself, never takes the server down. */
-export const startCourierSync = ({ everyMs = EVERY_MS } = {}) => {
+export const startCourierSync = ({ everyMs = EVERY_MS, confirm = null } = {}) => {
   let running = false;
   let lastCityCheck = 0;
   const tick = async () => {
@@ -270,7 +302,7 @@ export const startCourierSync = ({ everyMs = EVERY_MS } = {}) => {
         lastCityCheck = Date.now();
         await checkHeldCities().catch(err => logger.error({ err }, 'held city check failed'));
       }
-      const t = await runCourierSync();
+      const t = await runCourierSync({ confirm });
       Object.assign(status, {
         lastRunAt: new Date().toISOString(),
         lastChecked: t.checked,

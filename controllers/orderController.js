@@ -1336,35 +1336,8 @@ export const bookWaitingOrders = asyncHandler(async (req, res) => {
 export const confirmCourierStatus = asyncHandler(async (req, res) => {
   const { business, orderIds } = req.body;
   const results = [];
-
   for (const id of orderIds) {
-    const order = await Order.findOne({ _id: id, business });
-    const kind = order?.courierBooking?.confirmable;
-    if (!order || order.status !== ORDER_STATUS.DISPATCHED || !kind) {
-      results.push({
-        id,
-        ok: false,
-        reason: 'The courier has not reported this one as delivered or returned'
-      });
-      continue;
-    }
-    const fee =
-      Math.round(((order.courierBooking.fee ?? 0) + (order.courierBooking.tax ?? 0)) * 100) / 100;
-    try {
-      await changeStatusAsUser(order, req.user, {
-        status: kind,
-        ...(fee > 0 ? { deliveryCharge: fee } : {}),
-        note: 'Confirmed from the courier’s status'
-      });
-      await Order.updateOne(
-        { _id: id },
-        { $unset: { 'courierBooking.confirmable': 1 } },
-        { timestamps: false }
-      );
-      results.push({ id, ok: true, status: kind });
-    } catch (err) {
-      results.push({ id, ok: false, reason: err.message });
-    }
+    results.push(await confirmOneFromCourier({ id, business, user: req.user }));
   }
 
   res.status(200).json({
@@ -1372,6 +1345,71 @@ export const confirmCourierStatus = asyncHandler(async (req, res) => {
     data: { confirmed: results.filter(r => r.ok).length, results }
   });
 });
+
+/** A confirmation claimed longer ago than this is a crashed one, not one still running. */
+const CONFIRM_LOCK_MS = 60_000;
+
+/**
+ * Apply what the courier reports (delivered / returned) to ONE order, through the normal status path, so
+ * a person's tap and the automatic check can never drift apart. The order is claimed first in one
+ * conditional write, so a tap and an automatic confirm racing for the same parcel can not both post its
+ * sale. Never throws: the answer is `{ id, ok, status? | reason? }`. `auto` only changes the words on the
+ * timeline; `user` is whoever the books should name (the signed-in person, or the one who turned the
+ * automatic switch on).
+ */
+export const confirmOneFromCourier = async ({ id, business, user, auto = false }) => {
+  const order = await Order.findOne(business ? { _id: id, business } : { _id: id });
+  const kind = order?.courierBooking?.confirmable;
+  if (!order || order.status !== ORDER_STATUS.DISPATCHED || !kind) {
+    return {
+      id,
+      ok: false,
+      reason: 'The courier has not reported this one as delivered or returned'
+    };
+  }
+
+  const claim = await Order.updateOne(
+    {
+      _id: order._id,
+      status: ORDER_STATUS.DISPATCHED,
+      'courierBooking.confirmable': kind,
+      $or: [
+        { 'courierBooking.confirmClaimedAt': { $exists: false } },
+        { 'courierBooking.confirmClaimedAt': { $lt: new Date(Date.now() - CONFIRM_LOCK_MS) } }
+      ]
+    },
+    { $set: { 'courierBooking.confirmClaimedAt': new Date() } },
+    { timestamps: false }
+  );
+  if (claim.modifiedCount !== 1) {
+    return { id, ok: false, reason: 'This parcel is being confirmed right now' };
+  }
+
+  const fee =
+    Math.round(((order.courierBooking.fee ?? 0) + (order.courierBooking.tax ?? 0)) * 100) / 100;
+  try {
+    await changeStatusAsUser(order, user, {
+      status: kind,
+      ...(fee > 0 ? { deliveryCharge: fee } : {}),
+      note: auto
+        ? 'Marked automatically from the courier’s status'
+        : 'Confirmed from the courier’s status'
+    });
+    await Order.updateOne(
+      { _id: order._id },
+      { $unset: { 'courierBooking.confirmable': 1, 'courierBooking.confirmClaimedAt': 1 } },
+      { timestamps: false }
+    );
+    return { id, ok: true, status: kind };
+  } catch (err) {
+    await Order.updateOne(
+      { _id: order._id },
+      { $unset: { 'courierBooking.confirmClaimedAt': 1 } },
+      { timestamps: false }
+    );
+    return { id, ok: false, reason: err.message };
+  }
+};
 
 /**
  * @desc   Ask the courier about this one parcel right now and apply what it says — the same thing
