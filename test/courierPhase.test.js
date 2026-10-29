@@ -9,6 +9,7 @@ import { phaseOf, NEEDS_ATTENTION } from '../utils/couriers/statusWords.js';
 import { orderSummary } from '../utils/orderSummary.js';
 import { fakePostex, restoreFetch, setupOrder, dispatchBooked } from './helpers/courier.js';
 import * as real from './fixtures/postexTracks.js';
+import { normalizeTracking } from '../utils/couriers/postex.js';
 
 /**
  * The courier's journey in plain phases (R9-1): every parcel carries one, a failed try or a review hold
@@ -263,4 +264,19 @@ test('the journey is read in time order whichever way the courier lists it', () 
 test('TCS keeps its own word rules until its codes are known', () => {
   assert.equal(phaseOf({ status: 'Arrived at TCS Facility' }, 'tcs'), 'at-warehouse');
   assert.equal(phaseOf({ status: 'Delivered' }, 'tcs'), 'delivered');
+});
+
+test('PostEx’s own time is kept on every step, whichever field it arrives in', () => {
+  const real1 = normalizeTracking(real.DELIVERED);
+  assert.equal(real1.history.length, 8);
+  assert.equal(real1.history.at(-1).at, '2026-10-29T13:20:00.000+0500');
+  assert.equal(real1.fee, 231.25);
+
+  const other = normalizeTracking(real.NEWEST_FIRST);
+  assert.equal(
+    other.history[0].at,
+    '2026-10-29T14:57:55.000+0500',
+    'modifiedDatetime is used when updatedAt is absent'
+  );
+  assert.equal(phaseOf(other), 'returning');
 });
