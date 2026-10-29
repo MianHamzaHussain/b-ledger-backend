@@ -1,6 +1,6 @@
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { connect, clear, disconnect, makeBusiness, runHandler } from './helpers/db.js';
+import { connect, clear, disconnect, makeBusiness, runHandler, oid } from './helpers/db.js';
 import Business from '../models/Business.js';
 import { getRequestPhrases, setRequestPhrases } from '../controllers/orderController.js';
 import { orderPhrasesSchema } from '../schemas/orders.js';
@@ -61,7 +61,7 @@ test('a business that does not exist is a 404', async () => {
   );
   await assert.rejects(
     runHandler(setRequestPhrases, {
-      body: { business: String(biz._id).replace(/.$/, '0'), phrases: ['x'] }
+      body: { business: String(oid()), phrases: ['x'] }
     }),
     err => err.statusCode === 404
   );
