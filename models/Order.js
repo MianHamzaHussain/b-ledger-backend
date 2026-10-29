@@ -399,11 +399,23 @@ const OrderSchema = new mongoose.Schema(
           /** The courier's own words for where it is: "Booked", "Out For Delivery"… */
           courierStatus: { type: String },
           courierStatusAt: { type: Date },
-          /** Each step of the journey; `seenAt` is when WE noticed it (PostEx sends no time of its own). */
+          /** Each step of the journey: the courier's own time (`at`, when it sends one) and when WE first noticed it. */
           history: {
-            type: [{ code: String, message: String, seenAt: Date, _id: false }],
+            type: [{ code: String, message: String, at: Date, seenAt: Date, _id: false }],
             default: undefined
           },
+          /** The newest step in the courier's words, and when it happened — what the Orders list shows under the stage. */
+          lastStep: {
+            type: new mongoose.Schema(
+              { message: { type: String }, at: { type: Date } },
+              { _id: false }
+            )
+          },
+          /** When the parcel last moved (the newest step's time); a parcel silent for 3 days raises an alert once. */
+          lastMoveAt: { type: Date },
+          stuckAlertedAt: { type: Date },
+          /** The bell already rang for "coming back" — once per return, cleared when the parcel goes out again. */
+          returningAlertedAt: { type: Date },
           /** The courier's state in a few plain phases (utils/couriers/statusWords.js), and since when. */
           phase: { type: String },
           phaseAt: { type: Date },

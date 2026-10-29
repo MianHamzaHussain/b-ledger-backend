@@ -20,7 +20,7 @@ import {
 import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
-import { refreshParcel } from '../utils/courierSync.js';
+import { refreshBusinessParcels, refreshParcel } from '../utils/courierSync.js';
 import { assertNotBlocked } from '../utils/customerBlock.js';
 import { airwayBillsFor } from '../utils/airwayBills.js';
 import { partialReturn } from '../utils/partialReturn.js';
@@ -1418,6 +1418,16 @@ export const confirmOneFromCourier = async ({ id, business, user, auto = false }
  */
 export const refreshCourierStatus = asyncHandler(async (req, res) => {
   const data = await refreshParcel(req.resource);
+  res.status(200).json({ success: true, data });
+});
+
+/**
+ * @desc   Check every dispatched courier parcel of the business now, instead of waiting for the next
+ *         10-minute pass. Once a minute per business; never counts towards an automatic confirm.
+ * @route  POST /api/v1/orders/courier-refresh-all  (orders:update — business must be in scope)
+ */
+export const refreshAllCouriers = asyncHandler(async (req, res) => {
+  const data = await refreshBusinessParcels(req.body.business);
   res.status(200).json({ success: true, data });
 });
 

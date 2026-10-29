@@ -332,7 +332,7 @@ test('tracking: OK is delivered, RO is returned, anything else keeps TCS’s own
     ['Arrived at TCS Facility', 'Out For Delivery'],
     'oldest first'
   );
-  assert.equal(phaseOf(delivered), PHASES.DELIVERED);
+  assert.equal(phaseOf(delivered, 'tcs'), PHASES.DELIVERED);
   assert.equal(
     phaseOf({
       status: 'Awaiting Receiver Collection',
@@ -340,7 +340,7 @@ test('tracking: OK is delivered, RO is returned, anything else keeps TCS’s own
     }),
     PHASES.UNKNOWN
   );
-  assert.equal(phaseOf({ status: 'Arrived at TCS Facility' }), PHASES.AT_WAREHOUSE);
+  assert.equal(phaseOf({ status: 'Arrived at TCS Facility' }, 'tcs'), PHASES.AT_WAREHOUSE);
 });
 
 test('an unknown consignment is "not found", one parcel never hides the rest in a bulk check', async () => {

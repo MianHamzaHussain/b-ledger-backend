@@ -4,10 +4,12 @@ import { connect, clear, disconnect } from './helpers/db.js';
 import Order from '../models/Order.js';
 import Notification from '../models/Notification.js';
 import { clearCityCache } from '../utils/couriers/booking.js';
-import { attemptReason, runCourierSync, refreshParcel } from '../utils/courierSync.js';
+import { attemptReason, readStatus, runCourierSync, refreshParcel } from '../utils/courierSync.js';
 import { phaseOf, NEEDS_ATTENTION } from '../utils/couriers/statusWords.js';
 import { orderSummary } from '../utils/orderSummary.js';
 import { fakePostex, restoreFetch, setupOrder, dispatchBooked } from './helpers/courier.js';
+import * as real from './fixtures/postexTracks.js';
+import { normalizeTracking } from '../utils/couriers/postex.js';
 
 /**
  * The courier's journey in plain phases (R9-1): every parcel carries one, a failed try or a review hold
@@ -31,7 +33,8 @@ const booked = async record => {
   fakePostex({});
   const made = await setupOrder();
   await dispatchBooked(made.order, made.courier);
-  const tracking = { 'CX-1001': record };
+  // A real fixture carries its own (anonymised) tracking number; the parcel booked here is CX-1001.
+  const tracking = { 'CX-1001': { ...record, trackingNumber: 'CX-1001' } };
   fakePostex({ tracking });
   return { ...made, tracking };
 };
@@ -39,11 +42,13 @@ const booked = async record => {
 test('every wording PostEx documents lands in the right phase', () => {
   const cases = [
     [{ status: 'Booked' }, 'booked'],
-    [{ status: 'Unbooked' }, 'booked'],
+    [{ status: 'Unbooked' }, 'unbooked'],
     [{ status: 'PostEx WareHouse' }, 'at-warehouse'],
-    [{ status: 'Picked By PostEx' }, 'at-warehouse'],
+    [{ status: 'Picked By PostEx' }, 'picked-up'],
+    [{ status: 'En-Route to Islamabad warehouse' }, 'in-transit'],
+    [{ status: 'Expired' }, 'expired'],
     [{ status: 'Out For Delivery' }, 'on-route'],
-    [{ status: 'Out For Return' }, 'on-route'],
+    [{ status: 'Out For Return' }, 'returning'],
     [{ status: 'Attempted' }, 'attempt-failed'],
     [{ status: 'Delivery Under Review' }, 'under-review'],
     [{ status: 'Delivered' }, 'delivered'],
@@ -77,8 +82,8 @@ test('a word nobody has seen is unknown, shown as PostEx wrote it and never gues
   assert.equal(phaseOf(undefined), 'unknown');
 });
 
-test('only a failed try and a review hold need attention', () => {
-  assert.deepEqual([...NEEDS_ATTENTION].sort(), ['attempt-failed', 'under-review']);
+test('only a failed try, a review hold and an expired parcel need attention', () => {
+  assert.deepEqual([...NEEDS_ATTENTION].sort(), ['attempt-failed', 'expired', 'under-review']);
 });
 
 test('a delay is counted apart from a refusal', () => {
@@ -211,4 +216,212 @@ test('Refresh now is refused for an order that is not a dispatched courier parce
   fakePostex({});
   const { order } = await setupOrder();
   await assert.rejects(refreshParcel(await Order.findById(order._id)), /dispatched parcel/);
+});
+
+/** What the app reads from a real PostEx answer: the word, and the journey with its times. */
+const fresh = record => ({
+  status: record.transactionStatus ?? '',
+  history: record.transactionStatusHistory.map(h => ({
+    code: h.transactionStatusMessageCode,
+    message: h.transactionStatusMessage,
+    at: h.updatedAt ?? h.modifiedDatetime
+  }))
+});
+
+test('real PostEx parcels land in the stage a person would give them', () => {
+  const expected = [
+    ['REFUSED_AND_RETURNING', 'returning'],
+    ['NEWEST_FIRST', 'returning'],
+    ['DELIVERED', 'delivered'],
+    ['WAITING_FOR_DELIVERY', 'at-warehouse'],
+    ['PICKED', 'picked-up'],
+    ['UNDER_REVIEW', 'under-review'],
+    ['CANCELLED', 'cancelled'],
+    ['UNBOOKED', 'unbooked'],
+    ['ATTEMPT_CNA', 'attempt-failed']
+  ];
+  for (const [name, phase] of expected) assert.equal(phaseOf(fresh(real[name])), phase, name);
+});
+
+test('a refused parcel on its way back is returning even though its word says it is at a warehouse', () => {
+  assert.equal(real.REFUSED_AND_RETURNING.transactionStatus, 'En-Route to Islamabad warehouse');
+  assert.equal(phaseOf(fresh(real.REFUSED_AND_RETURNING)), 'returning');
+});
+
+test('the journey is read in time order whichever way the courier lists it', () => {
+  // Newest first, with no status word at all: the newest step is still the one that decides.
+  assert.equal(phaseOf(fresh(real.NEWEST_FIRST)), 'returning');
+  // A second delivery try after a return step puts it back out for delivery.
+  const again = fresh(real.REFUSED_AND_RETURNING);
+  again.history.push({
+    code: '0004',
+    message: 'Enroute for Delivery',
+    at: '2026-10-30T09:00:00.000+0500'
+  });
+  again.status = 'Out For Delivery';
+  assert.equal(phaseOf(again), 'on-route');
+});
+
+test('TCS keeps its own word rules until its codes are known', () => {
+  assert.equal(phaseOf({ status: 'Arrived at TCS Facility' }, 'tcs'), 'at-warehouse');
+  assert.equal(phaseOf({ status: 'Delivered' }, 'tcs'), 'delivered');
+});
+
+test('PostEx’s own time is kept on every step, whichever field it arrives in', () => {
+  const real1 = normalizeTracking(real.DELIVERED);
+  assert.equal(real1.history.length, 8);
+  assert.equal(real1.history.at(-1).at, '2026-10-29T13:20:00.000+0500');
+  assert.equal(real1.fee, 231.25);
+
+  const other = normalizeTracking(real.NEWEST_FIRST);
+  assert.equal(
+    other.history[0].at,
+    '2026-10-29T14:57:55.000+0500',
+    'modifiedDatetime is used when updatedAt is absent'
+  );
+  assert.equal(phaseOf(other), 'returning');
+});
+
+test('PostEx’s reason codes are read, so "not available" and "hold" are not filed as other', () => {
+  assert.equal(attemptReason('RFD(REFUSED TO RECEIVE)'), 'refused');
+  assert.equal(attemptReason('CNA(CNA)'), 'not-available');
+  assert.equal(attemptReason('HCR(HOLD ON CONSIGNEE REQUEST)'), 'rescheduled');
+  // Plain words still work, and a capitalised word that is not a code does not trip the reader.
+  assert.equal(attemptReason('Customer not available'), 'not-available');
+  assert.equal(attemptReason('NOT AT HOME'), 'not-available');
+  assert.equal(attemptReason('XYZ(something odd)'), 'other');
+});
+
+test('a real CNA attempt is logged as not-available, with PostEx’s own words kept', async () => {
+  const { order } = await booked(real.ATTEMPT_CNA);
+  await runCourierSync();
+  const fresh = await Order.findById(order._id);
+  assert.equal(fresh.deliveryAttempts.length, 1);
+  assert.equal(fresh.deliveryAttempts[0].reason, 'not-available');
+  assert.equal(fresh.deliveryAttempts[0].note, 'PostEx: CNA(CNA)');
+});
+
+const rings = title =>
+  Notification.countDocuments({ type: 'courier-issue', title: new RegExp(title) });
+
+test('a parcel coming back shows as returning, with its latest step, and rings the bell once', async () => {
+  const { order } = await booked(real.REFUSED_AND_RETURNING);
+  await runCourierSync();
+  await runCourierSync();
+
+  const fresh = await Order.findById(order._id);
+  assert.equal(fresh.courierBooking.phase, 'returning');
+  assert.equal(fresh.courierBooking.lastStep.message, 'Arrived at Transit Hub FSD');
+  assert.equal(fresh.courierBooking.lastMoveAt.toISOString(), '2026-10-29T09:57:55.000Z');
+  assert.equal(fresh.courierBooking.history.length, 17);
+  assert.equal(fresh.courierBooking.history[0].at.toISOString(), '2026-10-26T14:05:28.000Z');
+  assert.equal(await rings('Coming back'), 1, 'once, not on every check');
+  // The refusal on the way is logged as a failed try, with the courier's own words.
+  assert.equal(fresh.deliveryAttempts.length, 1);
+  assert.equal(fresh.deliveryAttempts[0].reason, 'refused');
+});
+
+test('"returning" is never a reason to restock: it is not delivered or returned, so nothing is confirmable', async () => {
+  const { order } = await booked(real.REFUSED_AND_RETURNING);
+  assert.equal(readStatus(normalizeTracking(real.REFUSED_AND_RETURNING)), 'moving');
+  await runCourierSync();
+  await runCourierSync();
+
+  const fresh = await Order.findById(order._id);
+  assert.equal(fresh.status, 'dispatched');
+  assert.equal(fresh.courierBooking.confirmable, undefined);
+  assert.equal(fresh.courierBooking.seenKind, undefined);
+});
+
+test('going out for delivery again after a return step clears the coming-back alert, so a later return rings again', async () => {
+  const { order, tracking } = await booked(real.REFUSED_AND_RETURNING);
+  await runCourierSync();
+  assert.ok((await Order.findById(order._id)).courierBooking.returningAlertedAt);
+
+  tracking['CX-1001'] = {
+    ...real.REFUSED_AND_RETURNING,
+    trackingNumber: 'CX-1001',
+    transactionStatus: 'Out For Delivery',
+    transactionStatusHistory: [
+      ...real.REFUSED_AND_RETURNING.transactionStatusHistory,
+      {
+        transactionStatusMessageCode: '0004',
+        transactionStatusMessage: 'Enroute for Delivery',
+        updatedAt: '2026-10-30T09:00:00.000+0500'
+      }
+    ]
+  };
+  await runCourierSync();
+  const out = await Order.findById(order._id);
+  assert.equal(out.courierBooking.phase, 'on-route');
+  assert.equal(out.courierBooking.returningAlertedAt, undefined);
+});
+
+const oldWaiting = {
+  transactionStatus: 'PostEx WareHouse',
+  transactionStatusHistory: [
+    {
+      transactionStatusMessageCode: '0001',
+      transactionStatusMessage: 'At <SHOP> Warehouse',
+      updatedAt: '2026-01-01T10:00:00.000+0500'
+    },
+    {
+      transactionStatusMessageCode: '0038',
+      transactionStatusMessage: 'Waiting for Delivery',
+      updatedAt: '2026-01-02T10:00:00.000+0500'
+    }
+  ]
+};
+
+test('a parcel that has not moved for 3 days is flagged and rings once; a new step clears it', async () => {
+  const { order, tracking } = await booked(oldWaiting);
+  await runCourierSync();
+  await runCourierSync();
+
+  const stuck = await Order.findById(order._id);
+  assert.equal(stuck.courierBooking.needsAttention, true);
+  assert.ok(stuck.courierBooking.stuckAlertedAt);
+  assert.equal(await rings('No courier update for 3 days'), 1);
+
+  tracking['CX-1001'] = {
+    ...oldWaiting,
+    trackingNumber: 'CX-1001',
+    transactionStatusHistory: [
+      ...oldWaiting.transactionStatusHistory,
+      {
+        transactionStatusMessageCode: '0004',
+        transactionStatusMessage: 'Enroute for Delivery',
+        updatedAt: new Date().toISOString()
+      }
+    ]
+  };
+  await runCourierSync();
+  const moving = await Order.findById(order._id);
+  assert.equal(moving.courierBooking.needsAttention, undefined);
+  assert.equal(moving.courierBooking.stuckAlertedAt, undefined);
+  assert.equal(await rings('No courier update for 3 days'), 1, 'no second ring');
+});
+
+test('the summary counts parcels that are out by courier stage, per business', async () => {
+  const { order, tracking } = await booked(real.REFUSED_AND_RETURNING);
+  const other = await setupOrder();
+  await runCourierSync();
+
+  const a = await orderSummary(order.business);
+  assert.deepEqual(a.byPhase, { returning: 1 });
+  assert.equal(a.returning, 1);
+  assert.equal(a.onRoute, 0);
+
+  tracking['CX-1001'] = {
+    transactionStatus: 'Out For Delivery',
+    transactionStatusHistory: hist(['0004', 'Enroute for Delivery'])
+  };
+  await runCourierSync();
+  const b = await orderSummary(order.business);
+  assert.deepEqual(b.byPhase, { 'on-route': 1 });
+  assert.equal(b.returning, 0);
+  assert.equal(b.onRoute, 1);
+
+  const none = await orderSummary(other.order.business);
+  assert.deepEqual(none.byPhase, {}, 'another business’s parcels are never counted');
 });

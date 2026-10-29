@@ -178,7 +178,7 @@ export const createPostex = ({
 };
 
 /** The few fields the app uses, from PostEx's long tracking record. */
-const normalizeTracking = t => {
+export const normalizeTracking = t => {
   if (!t) return {};
   return {
     trackingNumber: t.trackingNumber,
@@ -192,9 +192,11 @@ const normalizeTracking = t => {
     tax: toNumber(t.transactionTax),
     reversalFee: toNumber(t.reversalFee),
     reversalTax: toNumber(t.reversalTax),
+    // PostEx's own time for each step (`updatedAt` on the real API, `modifiedDatetime` on another channel).
     history: (t.transactionStatusHistory ?? []).map(h => ({
       code: h.transactionStatusMessageCode,
-      message: h.transactionStatusMessage
+      message: h.transactionStatusMessage,
+      at: h.updatedAt ?? h.modifiedDatetime ?? null
     }))
   };
 };

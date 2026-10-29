@@ -29,6 +29,7 @@ import {
   orderLoadSheetSchema,
   orderPhrasesSchema,
   orderBookWaitingSchema,
+  orderRefreshAllSchema,
   orderAirwayBillsSchema,
   orderPartialReturnSchema,
   orderMoneySchema,
@@ -65,6 +66,7 @@ import {
   getDeliverers,
   getAirwayBill,
   refreshCourierStatus,
+  refreshAllCouriers,
   getRequestPhrases,
   bookWaitingOrders,
   partialReturnOrder,
@@ -112,7 +114,7 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *     parameters:
  *       - { in: query, name: business, required: true, schema: { type: string } }
  *     responses:
- *       200: { description: "{ createdToday, dispatchedToday, deliveredToday, pending, byStatus }" }
+ *       200: { description: "{ createdToday, dispatchedToday, deliveredToday, pending, byStatus, byPhase (dispatched parcels by courier stage), returning, onRoute }" }
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/summary', can('orders', 'read'), getOrderSummary);
@@ -209,6 +211,34 @@ router.post(
   restrictBusinessToScope(),
   validate(orderAirwayBillsSchema),
   printAirwayBills
+);
+
+/**
+ * @swagger
+ * /orders/courier-refresh-all:
+ *   post:
+ *     summary: Check every dispatched courier parcel of the business now (once a minute per business)
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business]
+ *             properties:
+ *               business: { type: string }
+ *     responses:
+ *       200: { description: "{ checked, updated, errors }" }
+ *       429: { description: Checked a moment ago — the message says how many seconds to wait }
+ */
+router.post(
+  '/courier-refresh-all',
+  can('orders', 'update'),
+  restrictBusinessToScope(),
+  validate(orderRefreshAllSchema),
+  refreshAllCouriers
 );
 
 router.post(
