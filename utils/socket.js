@@ -4,6 +4,7 @@ import User from '../models/User.js';
 import { getAllowedOrigins } from './cors.js';
 import { userCan } from './permissions.js';
 import { createPresence, stampLastActive } from './presence.js';
+import { sessionIsLive } from './sessions.js';
 
 let io;
 
@@ -45,6 +46,9 @@ export const authenticateSocketToken = async token => {
     throw new Error('Authentication error: User not found or inactive');
   }
   if ((decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+    throw new Error('Authentication error: Invalid or expired token');
+  }
+  if (decoded.sid && !(await sessionIsLive(decoded.sid, user._id))) {
     throw new Error('Authentication error: Invalid or expired token');
   }
   return user;

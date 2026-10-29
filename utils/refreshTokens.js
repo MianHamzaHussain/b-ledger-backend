@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 
 import RefreshToken from '../models/RefreshToken.js';
+import Session from '../models/Session.js';
 
 /** Cookie name carrying the refresh token. httpOnly, so JS never reads it. */
 export const REFRESH_COOKIE = 'refreshToken';
@@ -9,11 +10,19 @@ const EXPIRE_DAYS = Number(process.env.REFRESH_TOKEN_EXPIRE_DAYS) || 30;
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
+/** How long a refresh token (and so a session) lives — shared with the Session TTL. */
+export const refreshLifetimeMs = () => EXPIRE_DAYS * 24 * 60 * 60 * 1000;
+
 /** Mint + persist a refresh token; return the plaintext (only ever set as a cookie). */
-export const issueRefreshToken = async userId => {
+export const issueRefreshToken = async (userId, sessionId) => {
   const token = crypto.randomBytes(40).toString('hex');
-  const expiresAt = new Date(Date.now() + EXPIRE_DAYS * 24 * 60 * 60 * 1000);
-  await RefreshToken.create({ user: userId, tokenHash: sha256(token), expiresAt });
+  const expiresAt = new Date(Date.now() + refreshLifetimeMs());
+  await RefreshToken.create({
+    user: userId,
+    session: sessionId,
+    tokenHash: sha256(token),
+    expiresAt
+  });
   return { token, expiresAt };
 };
 
@@ -33,9 +42,34 @@ export const rotateRefreshToken = async presented => {
   });
   if (!existing) return null;
   const userId = existing.user;
-  const next = await issueRefreshToken(userId);
-  return { userId, ...next };
+  const sessionId = existing.session;
+  const next = await issueRefreshToken(userId, sessionId);
+  if (sessionId) {
+    // Remember the consumed token so a later replay of it is recognised as a copied cookie.
+    await Session.updateOne(
+      { _id: sessionId },
+      {
+        $set: { expiresAt: next.expiresAt },
+        $push: { previousHashes: { $each: [sha256(presented)], $slice: -5 } }
+      }
+    );
+  }
+  return { userId, sessionId, ...next };
 };
+
+/**
+ * A refresh token that is unknown to the live table but matches one this device already
+ * rotated is a **copy**: the real client moved on, so someone else holds the old cookie. Returns the
+ * session it belonged to (the caller revokes it), or null for a token that is simply unknown.
+ */
+export const detectReuse = async presented => {
+  if (!presented) return null;
+  return Session.findOne({ previousHashes: sha256(presented) });
+};
+
+/** Tie an already-issued refresh token to a session (a legacy cookie adopted on its first refresh). */
+export const attachSession = (token, sessionId) =>
+  RefreshToken.updateOne({ tokenHash: sha256(token) }, { $set: { session: sessionId } });
 
 /** Drop a specific refresh token (logout). Safe to call with undefined. */
 export const revokeRefreshToken = async presented => {

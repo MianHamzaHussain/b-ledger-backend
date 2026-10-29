@@ -896,6 +896,17 @@ by, system }`. `by` is the token's user, never the body; a system event (the cou
   without `costs:read`** (their sentence holds the amount, which the route's field stripper cannot reach).
   Orders from before this release start empty — past edits were never recorded.
 
+- **Sessions — "where you are signed in"** (`models/Session.js`, `utils/sessions.js`, `utils/userAgent.js`).
+  One `Session` per device, created at sign-in; the refresh-token rows and the access token's `sid` claim
+  point at it, and the refresh rotation keeps it. `protect` and the socket handshake check the session is
+  still there (one indexed read), so deleting it signs that device out on its **next request**. Own
+  endpoints (token user only; someone else's id is a 404): `GET /auth/sessions`, `DELETE
+/auth/sessions/:id`, `POST /auth/sessions/sign-out-others`. **Logout is this device only**; a password
+  change/reset removes every session and refresh token and starts a fresh one for the current device. A
+  rotated refresh token coming back (`detectReuse`, via `Session.previousHashes`) is a copied cookie: that
+  device's session is revoked. Cookies from before sessions adopt one (`isLegacy`) on their first refresh;
+  access tokens with no `sid` simply expire within 15 minutes. Needs `TRUST_PROXY_HOPS` for the address.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from
