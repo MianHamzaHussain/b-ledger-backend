@@ -7,7 +7,7 @@ import { adapterFor } from '../utils/couriers/index.js';
 import { PARTY_TYPES } from '../utils/constants.js';
 
 /**
- * A courier's connection to its own service (PostEx today): the key, which pickup address to book
+ * A courier's connection to its own service (PostEx and TCS): the key, which pickup address to book
  * from, and whether booking is on. Admin only, and the key only ever goes IN — no response, log or
  * screen shows it, only whether one is saved.
  *
@@ -22,6 +22,8 @@ const view = party => {
     provider: link.provider ?? null,
     isEnabled: Boolean(link.isEnabled),
     hasToken: Boolean(link.hasToken),
+    accountNumber: link.accountNumber ?? null,
+    serviceCode: link.serviceCode ?? null,
     pickupAddressCode: link.pickupAddressCode ?? null,
     pickupAddressLabel: link.pickupAddressLabel ?? null,
     lastCheckedAt: link.lastCheckedAt ?? null,
@@ -45,9 +47,22 @@ export const getConnection = asyncHandler(async (req, res) => {
 export const saveConnection = asyncHandler(async (req, res) => {
   const party = req.resource;
   ensureCourier(party);
-  const { provider, token, pickupAddressCode, pickupAddressLabel, isEnabled } = req.body;
+  const { provider, pickupAddressCode, pickupAddressLabel, isEnabled, credentials } = req.body;
+  const { accountNumber, serviceCode } = req.body;
   let { autoConfirm } = req.body;
   const { recordPayments } = req.body;
+  const chosen = provider ?? party.integration?.provider;
+  // PostEx has one key; TCS signs in with four values, kept together as one encrypted secret.
+  if (credentials && chosen !== 'tcs') {
+    throw new ErrorResponse(
+      'Only TCS signs in with a client id, secret, username and password',
+      400
+    );
+  }
+  if (req.body.token && chosen === 'tcs') {
+    throw new ErrorResponse('TCS signs in with a client id, secret, username and password', 400);
+  }
+  const token = credentials ? JSON.stringify(credentials) : req.body.token;
 
   // Field by field, never the whole `integration` object: the saved key is hidden from this read
   // (select:false), so rewriting the object would silently delete it.
@@ -56,11 +71,20 @@ export const saveConnection = asyncHandler(async (req, res) => {
   if (provider) set['integration.provider'] = provider;
   // A connection made from now on starts with automatic delivered / returned ON (two matching checks);
   // an existing one is not changed silently — an admin turns it on with one click.
-  if (provider && !party.integration?.provider && autoConfirm === undefined) autoConfirm = true;
+  // TCS is new and not yet proven against the live service: it starts OFF and a person turns it on.
+  if (provider && !party.integration?.provider && autoConfirm === undefined) {
+    autoConfirm = provider !== 'tcs';
+  }
   if (autoConfirm !== undefined) {
     set['integration.autoConfirm'] = autoConfirm;
     if (autoConfirm) set['integration.autoConfirmBy'] = req.user.id;
     else unset['integration.autoConfirmBy'] = 1;
+  }
+  if (recordPayments && chosen === 'tcs') {
+    throw new ErrorResponse(
+      'TCS payments are entered from its invoice, not recorded automatically',
+      400
+    );
   }
   if (recordPayments !== undefined) {
     if (recordPayments && !token && !party.integration?.hasToken) {
@@ -74,6 +98,14 @@ export const saveConnection = asyncHandler(async (req, res) => {
     set['integration.tokenEnc'] = encryptSecret(token);
     set['integration.hasToken'] = true;
     unset['integration.lastError'] = 1;
+  }
+  if (accountNumber !== undefined) {
+    if (accountNumber) set['integration.accountNumber'] = accountNumber;
+    else unset['integration.accountNumber'] = 1;
+  }
+  if (serviceCode !== undefined) {
+    if (serviceCode) set['integration.serviceCode'] = serviceCode;
+    else unset['integration.serviceCode'] = 1;
   }
   if (pickupAddressCode !== undefined) {
     if (pickupAddressCode) set['integration.pickupAddressCode'] = pickupAddressCode;

@@ -18,8 +18,19 @@ export const partyUpdateSchema = partyCreateSchema.partial();
 
 /** A courier's connection to its service. The key only goes in — see the controller. */
 export const courierConnectionSchema = z.object({
-  provider: z.enum(['postex']).optional(),
+  provider: z.enum(['postex', 'tcs']).optional(),
   token: z.string().trim().min(8, 'That key looks too short').max(300).optional(),
+  /** TCS signs in with four values, not one key — saved together, encrypted, and never shown again. */
+  credentials: z
+    .object({
+      clientId: z.string().trim().min(1, 'Enter the client id').max(100),
+      clientSecret: z.string().trim().min(1, 'Enter the client secret').max(300),
+      username: z.string().trim().min(1, 'Enter the username').max(100),
+      password: z.string().trim().min(1, 'Enter the password').max(200)
+    })
+    .optional(),
+  accountNumber: z.string().trim().max(12).optional(),
+  serviceCode: z.string().trim().max(6).optional(),
   pickupAddressCode: z.string().trim().max(60).optional(),
   pickupAddressLabel: z.string().trim().max(200).optional(),
   isEnabled: z.boolean().optional(),

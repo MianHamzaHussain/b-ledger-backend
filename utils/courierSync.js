@@ -1,7 +1,7 @@
 import Order from '../models/Order.js';
 import { notify } from './notify.js';
 import ErrorResponse from './errorResponse.js';
-import { adapterFor } from './couriers/index.js';
+import { adapterFor, providerName } from './couriers/index.js';
 import { NOTIFICATION_TYPES, ORDER_STATUS } from './constants.js';
 import logger from './logger.js';
 import { NEEDS_ATTENTION, PHASES, phaseOf } from './couriers/statusWords.js';
@@ -179,7 +179,7 @@ const apply = async (order, fresh, { auto = null, confirm = null, keepSeen = fal
     await notify({
       business: order.business,
       type: NOTIFICATION_TYPES.COURIER_READY,
-      title: `${kind === 'delivered' ? 'Delivered' : 'Returned'}, says ${order.courierBooking.provider === 'postex' ? 'PostEx' : 'the courier'} — #${order.orderNumber} ${order.customerName}`,
+      title: `${kind === 'delivered' ? 'Delivered' : 'Returned'}, says ${providerName(order.courierBooking.provider)} — #${order.orderNumber} ${order.customerName}`,
       body: auto
         ? 'It will be marked automatically at the next check.'
         : 'Open the order to confirm it.',

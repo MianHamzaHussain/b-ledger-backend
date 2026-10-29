@@ -40,7 +40,8 @@ const BY_TEXT = [
   [/under review/, PHASES.UNDER_REVIEW],
   [/attempt/, PHASES.ATTEMPT_FAILED],
   [/out for delivery|on route|on root|dispatch/, PHASES.ON_ROUTE],
-  [/warehouse|picked by|received/, PHASES.AT_WAREHOUSE],
+  // TCS words its journey "Arrived at TCS Facility" / "Shipment Picked Up".
+  [/warehouse|picked by|picked up|received|facility|arrived/, PHASES.AT_WAREHOUSE],
   [/^booked|unbooked|pending|merchant/, PHASES.BOOKED]
 ];
 
