@@ -164,6 +164,20 @@ export const orderLoadSheetSchema = z.object({
   orderIds: z.array(id).min(1, 'Choose at least one order').max(100)
 });
 
+/** The business's own one-tap courier requests. The server also drops duplicates (any letter case). */
+export const orderPhrasesSchema = z.object({
+  business: id,
+  phrases: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1, 'A request can not be empty')
+        .max(60, 'Keep each under 60 characters')
+    )
+    .max(12, 'Keep it to 12 requests')
+});
+
 /** Move a booked order's due day. */
 export const orderBookedForSchema = z.object({ bookedFor: day });
 

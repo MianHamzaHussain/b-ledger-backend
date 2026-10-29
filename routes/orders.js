@@ -26,6 +26,7 @@ import {
   orderBookedForSchema,
   orderCourierConfirmSchema,
   orderLoadSheetSchema,
+  orderPhrasesSchema,
   orderMoneySchema,
   orderCreditSchema,
   customCostSchema
@@ -60,6 +61,8 @@ import {
   getDeliverers,
   getAirwayBill,
   refreshCourierStatus,
+  getRequestPhrases,
+  setRequestPhrases,
   getCourierParcels,
   getParcelPreview,
   getLoadSheet,
@@ -106,6 +109,44 @@ router.get('/price-hint', can('orders', 'read'), getPriceHint);
  *       404: { description: Outside your assigned businesses }
  */
 router.get('/summary', can('orders', 'read'), getOrderSummary);
+
+/**
+ * @swagger
+ * /orders/phrases:
+ *   get:
+ *     summary: The business's own one-tap courier requests
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: "A list of short phrases (up to 12)" }
+ *       404: { description: Business outside your scope }
+ *   put:
+ *     summary: Replace the business's own one-tap courier requests
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [business, phrases]
+ *             properties:
+ *               business: { type: string }
+ *               phrases: { type: array, maxItems: 12, items: { type: string, maxLength: 60 } }
+ *     responses:
+ *       200: { description: The saved list, duplicates removed }
+ */
+router.get('/phrases', can('orders', 'read'), getRequestPhrases);
+router.put(
+  '/phrases',
+  can('orders', 'update'),
+  restrictBusinessToScope(),
+  validate(orderPhrasesSchema),
+  setRequestPhrases
+);
 
 /**
  * @swagger

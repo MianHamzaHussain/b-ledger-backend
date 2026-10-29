@@ -1454,6 +1454,49 @@ export const getDeliverers = asyncHandler(async (req, res, next) => {
   res.status(200).json({ success: true, data: rows.map(r => r._id) });
 });
 
+/** A business's phrases, one of each (letter case ignored), in the order given. */
+const uniquePhrases = list => {
+  const seen = new Set();
+  return list.filter(p => {
+    const key = p.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+/**
+ * @desc   The business's own one-tap courier requests (the built-in ones live in the app).
+ * @route  GET /api/v1/orders/phrases?business=  (orders:read — scoped)
+ */
+export const getRequestPhrases = asyncHandler(async (req, res, next) => {
+  const { business } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  const allowed = req.accessFilter?.business?.$in;
+  if (allowed && !allowed.map(String).includes(String(business))) {
+    return next(new ErrorResponse('Business not found', 404));
+  }
+  const found = mongoose.isValidObjectId(business)
+    ? await Business.findById(business).select('requestPhrases')
+    : null;
+  if (!found) return next(new ErrorResponse('Business not found', 404));
+  res.status(200).json({ success: true, data: found.requestPhrases ?? [] });
+});
+
+/**
+ * @desc   Replace the business's own one-tap courier requests (add, remove, reorder in one save).
+ * @route  PUT /api/v1/orders/phrases  (orders:update — business must be in scope)
+ */
+export const setRequestPhrases = asyncHandler(async (req, res, next) => {
+  const phrases = uniquePhrases(req.body.phrases);
+  const result = await Business.updateOne(
+    { _id: req.body.business },
+    { $set: { requestPhrases: phrases } }
+  );
+  if (!result.matchedCount) return next(new ErrorResponse('Business not found', 404));
+  res.status(200).json({ success: true, data: phrases });
+});
+
 /**
  * @desc   Today's parcel numbers for the Orders screen: dispatched today, delivered today,
  *         pending now, and every status's count.

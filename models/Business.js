@@ -56,6 +56,16 @@ const BusinessSchema = new mongoose.Schema(
     brandColor: { type: String, match: [/^#[0-9a-fA-F]{6}$/, 'Use a colour like #1a73e8'] },
     /** What a new article starts with for "keep selling when out of stock". */
     defaultAllowOversell: { type: Boolean, default: false },
+    /**
+     * This business's own one-tap requests for the courier slip ("Open parcel allowed") — shown as chips
+     * beside the built-in ones. Edited by anyone who can change orders, through /orders/phrases, so nobody
+     * needs the Businesses permission for a line of text.
+     */
+    requestPhrases: {
+      type: [{ type: String, trim: true, maxlength: 60 }],
+      default: [],
+      validate: [list => list.length <= 12, 'Keep it to 12 requests']
+    },
     /** Real data: the testing reset refuses this business until an admin turns this off. */
     isProtected: { type: Boolean, default: false },
     storeLink: {

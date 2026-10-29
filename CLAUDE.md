@@ -927,6 +927,12 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   same `apply()` the 15-minute pass does (10 s cool-down). `GET /orders/summary` carries `needsAttention`;
   the list rows carry `courierBooking.phase`, `needsAttention` and `deliveryAttempts.reason` (reasons only).
 
+- **Own one-tap courier requests** (`Business.requestPhrases`, ≤ 12 phrases of ≤ 60 characters, R9-1b): the
+  built-in chips live in the app; a business adds its own through `GET/PUT /orders/phrases` — `orders:read` /
+  `orders:update`, scoped (`restrictBusinessToScope`), **not** the Businesses permission, since it is a line
+  of text. The server trims and drops a duplicate in any letter case; PUT replaces the whole list so add,
+  remove and reorder are one save.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from
