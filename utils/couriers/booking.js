@@ -2,7 +2,7 @@ import Order from '../../models/Order.js';
 import ErrorResponse from '../errorResponse.js';
 import { isMobile, normalizePhone } from '../phone.js';
 import { pakistanDay } from '../pakistanDay.js';
-import { adapterFor } from './index.js';
+import { adapterFor, providerName } from './index.js';
 import { liveItemNames, nameUpdates } from '../orderNames.js';
 import { cityMatchKey, nearCities } from '../cities.js';
 
@@ -45,7 +45,7 @@ export const servedCity = (cities, typed) => cities.byKey.get(cityMatchKey(typed
 const cityNotServed = (provider, typed, cities) => {
   const maybe = nearCities(cities.names, typed);
   const err = new ErrorResponse(
-    `${provider === 'postex' ? 'PostEx' : 'This courier'} does not deliver to ${typed}${
+    `${providerName(provider)} does not deliver to ${typed}${
       maybe.length ? ` — did you mean ${maybe.join(' or ')}?` : ''
     }`,
     400
@@ -75,11 +75,11 @@ const contents = (order, names = []) =>
     .slice(0, 300);
 
 /** Everything wrong with the order for a courier, in plain words, in the order a person would fix it. */
-export const parcelProblems = order => {
+export const parcelProblems = (order, courier = 'PostEx') => {
   const problems = [];
   if (!isMobile(normalizePhone(order.contactNumber))) {
     problems.push(
-      'PostEx needs the customer’s mobile number (03xx xxxxxxx). Correct the number on the order first.'
+      `${courier} needs the customer’s mobile number (03xx xxxxxxx). Correct the number on the order first.`
     );
   }
   if (!order.deliveryAddress?.trim()) {
@@ -95,8 +95,8 @@ export const parcelProblems = order => {
  * What the courier needs, built from the order — every field it asks for in the guide. `remarks` is what
  * the slip's Remarks box prints (default: what the customer asked for); `names` the products' current names.
  */
-export const parcelFor = (order, pickupAddressCode, { names, remarks } = {}) => {
-  const [problem] = parcelProblems(order);
+export const parcelFor = (order, pickupAddressCode, { names, remarks, courier } = {}) => {
+  const [problem] = parcelProblems(order, courier);
   if (problem) throw new ErrorResponse(problem, 400);
   const phone = normalizePhone(order.contactNumber);
   const pieces =
@@ -138,7 +138,11 @@ export const bookParcel = async (order, courierId, { remarks } = {}) => {
 
   // The slip must carry the article's name as it is called NOW, not as it was when the order was saved.
   const names = await liveItemNames(order);
-  const parcel = parcelFor(order, party.integration.pickupAddressCode, { names, remarks });
+  const parcel = parcelFor(order, party.integration.pickupAddressCode, {
+    names,
+    remarks,
+    courier: providerName(provider)
+  });
   const cities = await courierCities(courierId, api);
   const served = servedCity(cities, parcel.cityName);
   if (!served) throw cityNotServed(provider, parcel.cityName, cities);
@@ -280,20 +284,25 @@ export const attachParcel = async (order, courierId, trackingNumber) => {
  */
 export const previewParcel = async (order, courierId, { remarks } = {}) => {
   const { api, party } = await adapterFor(courierId, { requireEnabled: false });
+  const courier = providerName(party.integration?.provider);
   const names = await liveItemNames(order);
-  const problems = parcelProblems(order);
+  const problems = parcelProblems(order, courier);
 
   let parcel = null;
   let citySuggestions = [];
   if (!problems.length) {
-    parcel = parcelFor(order, party.integration?.pickupAddressCode ?? '', { names, remarks });
+    parcel = parcelFor(order, party.integration?.pickupAddressCode ?? '', {
+      names,
+      remarks,
+      courier
+    });
     // The courier's list of cities is a network call: if it fails the preview still works, it just can not say.
     try {
       const cities = await courierCities(courierId, api);
       if (!servedCity(cities, parcel.cityName)) {
         const maybe = nearCities(cities.names, parcel.cityName);
         problems.push(
-          `PostEx does not deliver to ${parcel.cityName}${maybe.length ? ` — did you mean ${maybe.join(' or ')}?` : ''}`
+          `${courier} does not deliver to ${parcel.cityName}${maybe.length ? ` — did you mean ${maybe.join(' or ')}?` : ''}`
         );
         citySuggestions = maybe;
       }

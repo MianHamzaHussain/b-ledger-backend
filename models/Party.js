@@ -53,11 +53,14 @@ const PartySchema = new mongoose.Schema(
      * normal read (`select: false`), and no endpoint ever returns it — only `hasToken`.
      */
     integration: {
-      provider: { type: String, enum: ['postex'] },
+      provider: { type: String, enum: ['postex', 'tcs'] },
       tokenEnc: { type: String, select: false },
       hasToken: { type: Boolean, default: false },
       isEnabled: { type: Boolean, default: false },
-      /** Which of the merchant's pickup addresses to book from. */
+      /** TCS only: the shop's TCS account number, and the service code bookings use (default "O"). */
+      accountNumber: { type: String, trim: true },
+      serviceCode: { type: String, trim: true },
+      /** Which of the merchant's pickup addresses (TCS: cost centers) to book from. */
       pickupAddressCode: { type: String, trim: true },
       pickupAddressLabel: { type: String, trim: true },
       lastCheckedAt: { type: Date },

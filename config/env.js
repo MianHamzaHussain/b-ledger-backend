@@ -28,7 +28,9 @@ if (missing.length) {
  * be live on a real server: the courier's key would be sent to the stand-in address instead of PostEx,
  * and booked parcels would be fake. Refuse to start in production rather than rely on remembering.
  */
-const DEMO_ONLY = ['POSTEX_BASE_URL', 'COURIER_SYNC_SECONDS'].filter(key => !isBlank(key));
+const DEMO_ONLY = ['POSTEX_BASE_URL', 'TCS_BASE_URL', 'COURIER_SYNC_SECONDS'].filter(
+  key => !isBlank(key)
+);
 if (DEMO_ONLY.length && process.env.NODE_ENV === 'production') {
   console.error(`\n✗ ${DEMO_ONLY.join(', ')} must not be set in production (demo-only settings).`);
   console.error('  Remove them from .env and restart.\n');

@@ -1133,6 +1133,33 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   `/auth/me`'s assigned businesses include them, so the switcher can draw them —
   keep them out of any other lean list.
 
+### 10.12 TCS (2026-10-29) — built from the guide, not yet proven live
+
+- `utils/couriers/tcs.js` is a second adapter behind the same interface as PostEx (`cities, addresses,
+createOrder, cancel, track, trackBulk, airwayBill, loadSheet, unbooked, paymentStatus, shipperAdvice`),
+  chosen by `integration.provider`. Nothing above the adapter knows which courier it is talking to; the
+  one place that names a courier to a person is `providerName()` in `utils/couriers/index.js`.
+- **It has not met the real service.** TCS gives no public test credentials. The first run against
+  their UAT (devconnect) must check: the sign-in (two steps — client id + secret → bearer; username +
+  password → `accesstoken`, also written into every body), that GET parameters belong in the query
+  string (the guide shows a GET "body"), the service code (default `O`), the weight (0.5 kg — no
+  weights are kept), the `OK`/`RO` tracking codes, and the DD/MM/YYYY payment date. Each is marked UAT.
+- **Credentials:** four values, saved together as ONE encrypted secret (`tokenEnc`, JSON) — the same
+  `secretBox` as PostEx, never returned or logged. The TCS account number and service code are plain
+  settings. A cost center is TCS's pickup point: `addresses()` lists them and `pickupAddressCode` holds
+  the chosen one. Tokens are remembered per client until they expire, with an early refresh.
+- **Safer defaults than PostEx:** auto-confirm starts OFF on a new TCS connection (it posts sales,
+  cost and stock, and the `OK`/`RO` mapping is unproven); recording TCS payments automatically is
+  refused (payments come from TCS's invoice through the courier-invoice screen). Tracking carries no
+  charges, so fees stay 0 until the invoice is entered. A wording nobody mapped is `unknown` and the
+  screen shows TCS's own words.
+- **Limits it enforces before sending:** COD ≤ Rs 250,000, a cost center that exists with an 11-digit
+  phone, names cut to TCS's first/middle/last fields, the address across its three 120-character lines.
+  No load sheet, shipper advice or "parcels made on TCS's site" list exists in this API — those
+  answer with a plain refusal (or an empty list).
+- Demo only: `TCS_BASE_URL` points the adapter at a stand-in; the server refuses to start in production
+  with it set (like `POSTEX_BASE_URL`).
+
 ---
 
 ## 11. Known Gaps
