@@ -21,6 +21,7 @@ import { notify } from '../utils/notify.js';
 import { pakistanDay } from '../utils/pakistanDay.js';
 import { orderSummary } from '../utils/orderSummary.js';
 import { refreshParcel } from '../utils/courierSync.js';
+import { assertNotBlocked } from '../utils/customerBlock.js';
 import {
   buildTimeline,
   itemsSummary,
@@ -317,6 +318,14 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       ? await resolveMoney(business, { account: req.body.advanceAccount }, req.user)
       : null;
 
+  // A blocked customer needs an explicit "create anyway" — checked here, before stock is reserved.
+  const blockedOverride = await assertNotBlocked(
+    business,
+    contactNumber,
+    req.body.confirmBlocked,
+    req.user
+  );
+
   // Courier is chosen at dispatch, not here — a walk-in/counter sale has none.
   const lineItems = await buildLineItems(business, items);
 
@@ -379,6 +388,7 @@ export const createOrder = asyncHandler(async (req, res, next) => {
       customerNote: customerNote || undefined,
       shopifyOrderNumber: shopifyOrderNumber || undefined,
       clientRef: clientRef || undefined,
+      blockedOverride,
       items: lineItems,
       customWork,
       // A counter sale takes its payment in the sale; any other order's advance
@@ -524,6 +534,16 @@ export const updateOrder = asyncHandler(async (req, res, next) => {
   // Phone is the customer identity — a changed number re-points to (or creates)
   // the right contact, mirroring createOrder.
   const customerPhone = normalizePhone(contactNumber);
+  // Moving the order to a blocked customer's number needs the same "create anyway" as a new order.
+  if (customerPhone !== normalizePhone(order.contactNumber)) {
+    const override = await assertNotBlocked(
+      business,
+      contactNumber,
+      req.body.confirmBlocked,
+      req.user
+    );
+    if (override) order.blockedOverride = override;
+  }
   const customer = await Customer.findOneAndUpdate(
     { business, phone: customerPhone },
     {

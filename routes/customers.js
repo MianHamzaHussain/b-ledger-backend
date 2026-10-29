@@ -8,7 +8,8 @@ import Customer from '../models/Customer.js';
 import {
   customerCreateSchema,
   customerImportSchema,
-  customerUpdateSchema
+  customerUpdateSchema,
+  customerBlockSchema
 } from '../schemas/customers.js';
 import {
   getCustomers,
@@ -16,7 +17,10 @@ import {
   createCustomer,
   importCustomers,
   exportCustomers,
-  updateCustomer
+  updateCustomer,
+  suggestCustomers,
+  getCustomerHistory,
+  setCustomerBlocked
 } from '../controllers/customerController.js';
 
 const router = express.Router();
@@ -115,6 +119,25 @@ router.get('/export', can('customers', 'read'), exportLimiter, exportCustomers);
 
 /**
  * @swagger
+ * /customers/suggest:
+ *   get:
+ *     summary: Type-ahead for the order form — matching customers with their order counts (no money)
+ *     tags: [Customers]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: q, required: true, schema: { type: string }, description: "name or number, 3+ characters" }
+ *       - { in: query, name: page,  schema: { type: integer } }
+ *       - { in: query, name: limit, schema: { type: integer, default: 5 } }
+ *     responses:
+ *       200: { description: "Up to `limit` customers; `pagination.next` when there are more" }
+ *       404: { description: Business outside your scope }
+ */
+// Gated by `orders:create` (people who take orders need it without Customers access); literal before /:id.
+router.get('/suggest', can('orders', 'create'), suggestCustomers);
+
+/**
+ * @swagger
  * /customers/{id}:
  *   get:
  *     summary: Get single customer
@@ -131,6 +154,53 @@ router.get('/export', can('customers', 'read'), exportLimiter, exportCustomers);
  *     responses:
  *       200: { description: Updated }
  */
+/**
+ * @swagger
+ * /customers/{id}/history:
+ *   get:
+ *     summary: A customer's counts (orders, delivered, returned…) and their orders, newest first
+ *     tags: [Customers]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *       - { in: query, name: page,  schema: { type: integer } }
+ *       - { in: query, name: limit, schema: { type: integer, default: 10 } }
+ *     responses:
+ *       200: { description: "{ customer, stats, orders } with pagination" }
+ *       404: { description: Not found, or outside your scope }
+ */
+router.get('/:id/history', can('customers', 'read'), loadScoped(Customer), getCustomerHistory);
+
+/**
+ * @swagger
+ * /customers/{id}/block:
+ *   put:
+ *     summary: Block or unblock a customer (a reason is required to block)
+ *     tags: [Customers]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [isBlocked]
+ *             properties:
+ *               isBlocked: { type: boolean }
+ *               reason: { type: string, maxLength: 200 }
+ *     responses:
+ *       200: { description: The customer }
+ */
+router.put(
+  '/:id/block',
+  can('customers', 'update'),
+  loadScoped(Customer),
+  validate(customerBlockSchema),
+  setCustomerBlocked
+);
+
 router
   .route('/:id')
   .get(can('customers', 'read'), loadScoped(Customer), getCustomer)

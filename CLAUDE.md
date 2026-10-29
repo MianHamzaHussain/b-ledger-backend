@@ -933,6 +933,18 @@ delivered · returned · cancelled · unknown`) and `phaseAt`; **a wording nobod
   of text. The server trims and drops a duplicate in any letter case; PUT replaces the whole list so add,
   remove and reorder are one save.
 
+- **Customers on the order form, their history, and blocking** (R9-3). `GET /customers/suggest?business=&q=`
+  (gated by **`orders:create`**, so people who take orders need no Customers access; scoped; 404 outside scope)
+  matches a name or a number typed any way (`+92 302`, `302`, `0302`), needs 3+ characters, five at a time, and
+  returns **names, counts and the last order's address — never money**. `GET /customers/:id/history` returns
+  the counts (orders, delivered — exchanged/refunded included —, returned, cancelled, refused tries, first/last
+  order, bought) plus the orders newest first, lean rows, paged. Counts are **computed on demand**
+  (`utils/customerStats.js`, one aggregation on the new `{ business, customer, createdAt }` index) and never
+  stored, because a stored counter drifts. **Block** (`PUT /customers/:id/block`, `customers:update`): a
+  person blocks with a reason (required) — the system never blocks by itself. `createOrder` (and `updateOrder`
+  when it moves the order to another number) **refuses a blocked number unless `confirmBlocked: true`**, before
+  any stock is reserved; the override is saved as `Order.blockedOverride { by, at, reason }`. Per business.
+
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
 - **Selling without stock.** `Product.allowOversell` (a new article starts from

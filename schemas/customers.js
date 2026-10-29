@@ -36,3 +36,14 @@ export const customerUpdateSchema = z.object({
   phone: z.string().trim().min(1, 'Please add a contact number').optional(),
   city: z.string().trim().optional()
 });
+
+/** Block or unblock a customer. A reason is required to block — the next person needs to know why. */
+export const customerBlockSchema = z
+  .object({
+    isBlocked: z.boolean(),
+    reason: z.string().trim().max(200, 'Keep the reason under 200 characters').optional()
+  })
+  .refine(v => !v.isBlocked || (v.reason && v.reason.length >= 3), {
+    message: 'Say why — a few words are enough',
+    path: ['reason']
+  });

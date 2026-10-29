@@ -52,6 +52,8 @@ export const orderCreateSchema = z
     bookedFor: day.optional(),
     /** Makes sending this order twice safe — see Order.clientRef. */
     clientRef: z.string().trim().min(1).max(64).optional(),
+    /** The customer is blocked and the person chose to create the order anyway. */
+    confirmBlocked: z.boolean().optional(),
     advanceAmount: z.coerce.number().min(0).optional(),
     /** Where the advance (or a counter sale's "paid now") went — a money account or partner:<id>. */
     advanceAccount: z.string().optional(),
@@ -75,6 +77,8 @@ export const orderUpdateSchema = z
     deliveryAddress: z.string().optional(),
     source: source.optional(),
     shopifyOrderNumber,
+    /** Moving the order to a blocked customer's number, and the person chose to go ahead. */
+    confirmBlocked: z.boolean().optional(),
     items: z.array(orderItem).default([]),
     customWork: z.array(customWork).max(20).default([])
   })

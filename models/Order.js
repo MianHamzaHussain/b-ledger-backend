@@ -306,6 +306,17 @@ const OrderSchema = new mongoose.Schema(
     },
     /** Every status change with its optional reason — the order's timeline. */
     statusHistory: { type: [StatusEventSchema], default: [] },
+    /** Set when the order was entered for a blocked customer with "create anyway" — who, when, why they were blocked. */
+    blockedOverride: {
+      type: new mongoose.Schema(
+        {
+          by: { type: mongoose.Schema.ObjectId, ref: 'User' },
+          at: { type: Date },
+          reason: { type: String }
+        },
+        { _id: false }
+      )
+    },
     /** Every other change after the order was taken (R9-4) — who, when, from → to. */
     activity: { type: [ActivityEventSchema], default: [] },
     /**
@@ -494,6 +505,8 @@ const OrderSchema = new mongoose.Schema(
 
 OrderSchema.index({ business: 1, status: 1 });
 OrderSchema.index({ business: 1, createdAt: -1 });
+// A customer's history and the order form's "repeat customer" counts: one customer's orders, newest first.
+OrderSchema.index({ business: 1, customer: 1, createdAt: -1 });
 OrderSchema.index({ business: 1, dispatchedAt: -1 });
 OrderSchema.index({ business: 1, deliveredAt: -1 });
 OrderSchema.index({ business: 1, refundDuePaisa: 1 });

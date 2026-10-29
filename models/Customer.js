@@ -45,6 +45,15 @@ const CustomerSchema = new mongoose.Schema(
       trim: true,
       maxlength: [200, 'Note can not be more than 200 characters']
     },
+    /**
+     * A customer the business no longer wants orders from. A person blocks (with the reason), the system
+     * never does. A blocked number can still be entered on an order, but only with an explicit "create
+     * anyway" that is recorded on the order (`Order.blockedOverride`). Per business, like the customer.
+     */
+    isBlocked: { type: Boolean, default: undefined },
+    blockedReason: { type: String, trim: true, maxlength: 200 },
+    blockedAt: { type: Date },
+    blockedBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
   },
