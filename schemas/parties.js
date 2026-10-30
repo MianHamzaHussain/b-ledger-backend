@@ -37,7 +37,9 @@ export const courierConnectionSchema = z.object({
   /** Mark delivered / returned automatically from the courier (two matching checks). */
   autoConfirm: z.boolean().optional(),
   /** Record the courier's payments into its wallet account (off until the first batch is checked). */
-  recordPayments: z.boolean().optional()
+  recordPayments: z.boolean().optional(),
+  /** Follow parcels whose tracking number was typed in by hand (on unless switched off). */
+  adoptTyped: z.boolean().optional()
 });
 
 /** A person's balance from before the business started on B Ledger. */

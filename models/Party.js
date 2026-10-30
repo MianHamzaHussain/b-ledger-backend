@@ -78,6 +78,8 @@ const PartySchema = new mongoose.Schema(
        * an admin has checked the first batch against the courier's statement (the amount is calculated).
        */
       recordPayments: { type: Boolean },
+      /** Take over a tracking number typed on a dispatched order when the courier knows that parcel. On unless set false. */
+      adoptTyped: { type: Boolean },
       recordPaymentsBy: { type: mongoose.Schema.ObjectId, ref: 'User' }
     },
     createdBy: { type: mongoose.Schema.ObjectId, ref: 'User' },

@@ -13,6 +13,7 @@ import {
 } from './couriers/statusWords.js';
 import { checkHeldCities } from './cityWatch.js';
 import { recordCourierWallets } from './courierWallet.js';
+import { adoptTypedParcels } from './couriers/adopt.js';
 
 /**
  * Keep dispatched parcels in step with the courier. PostEx has no webhook, so this ASKS: every 10
@@ -35,7 +36,14 @@ const PER_RUN = 300;
 // A parcel that has not moved for this long raises an alert, once.
 const STUCK_MS = 3 * 24 * 60 * 60 * 1000;
 
-const status = { lastRunAt: null, lastChecked: 0, lastUpdated: 0, lastReady: 0, lastErrors: 0 };
+const status = {
+  lastRunAt: null,
+  lastChecked: 0,
+  lastUpdated: 0,
+  lastReady: 0,
+  lastErrors: 0,
+  lastAdopted: 0
+};
 export const courierSyncStatus = () => ({ ...status });
 
 // Message codes from the PostEx guide, 3.8.3.
@@ -312,7 +320,13 @@ export const runCourierSync = async ({
   business = null,
   keepSeen = false
 } = {}) => {
-  const tally = { checked: 0, updated: 0, ready: 0, autoConfirmed: 0, errors: 0 };
+  const tally = { checked: 0, updated: 0, ready: 0, autoConfirmed: 0, errors: 0, adopted: 0 };
+  // First take over any tracking number a person typed in by hand, so those parcels are followed in this same pass.
+  try {
+    tally.adopted = (await adoptTypedParcels({ business })).adopted;
+  } catch (err) {
+    logger.error({ err }, 'typed tracking numbers could not be taken over');
+  }
   const orders = await Order.find({
     status: ORDER_STATUS.DISPATCHED,
     'courierBooking.trackingNumber': { $exists: true },
@@ -410,9 +424,10 @@ export const startCourierSync = ({ everyMs = EVERY_MS, confirm = null } = {}) =>
         lastChecked: t.checked,
         lastUpdated: t.updated,
         lastReady: t.ready,
-        lastErrors: t.errors
+        lastErrors: t.errors,
+        lastAdopted: t.adopted
       });
-      if (t.updated || t.ready) logger.info(t, 'courier sync');
+      if (t.updated || t.ready || t.adopted) logger.info(t, 'courier sync');
     } catch (err) {
       logger.error({ err }, 'courier sync failed');
     } finally {

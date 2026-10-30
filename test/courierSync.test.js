@@ -189,14 +189,17 @@ test('if the bulk call fails, parcels are asked for one at a time', async () => 
   assert.equal((await Order.findById(order._id)).courierBooking.courierStatus, 'Out For Delivery');
 });
 
-test('orders that were not booked through a courier are never asked about', async () => {
+test('a typed number the courier does not know is not followed, and the order is left as it was', async () => {
   const { order, courier } = await setupOrder();
   fakePostex({});
   await dispatchBooked(order, courier, { bookWithCourier: false, trackingId: 'TCS-9' });
-  const { calls } = fakePostex({});
+  fakePostex({});
   const tally = await runCourierSync();
-  assert.equal(tally.checked, 0);
-  assert.equal(calls.filter(u => u.includes('track')).length, 0);
+  assert.equal(tally.checked, 0, 'no booked parcel was checked');
+  assert.equal(tally.adopted, 0);
+  const o = await Order.findById(order._id);
+  assert.equal(o.courierBooking?.trackingNumber, undefined);
+  assert.match(o.adoptTry.reason, /does not know/);
 });
 
 test('a courier that was disconnected is skipped without stopping the run', async () => {
