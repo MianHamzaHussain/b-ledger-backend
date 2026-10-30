@@ -210,3 +210,24 @@ test('a courier that was disconnected is skipped without stopping the run', asyn
   assert.equal(tally.errors, 1);
   assert.equal((await Order.findById(order._id)).courierBooking.courierStatus, 'UnBooked');
 });
+
+test('the shop asking PostEx to try again is not counted as a failed delivery try', async () => {
+  const { order } = await booked({
+    transactionStatus: 'Attempted',
+    transactionStatusHistory: hist(
+      ['0004', 'Enroute for Delivery'],
+      ['0013', 'Attempt Made: RFD(REFUSED TO RECEIVE)'],
+      ['0013', 'Merchant Request For Re-Attempt'],
+      ['0004', 'Enroute for Delivery'],
+      ['0013', 'Attempt Made: CNA(CNA)']
+    )
+  });
+  await runCourierSync();
+
+  const attempts = (await Order.findById(order._id)).deliveryAttempts;
+  assert.deepEqual(
+    attempts.map(a => a.reason),
+    ['refused', 'not-available'],
+    'two real tries; the request to try again is not one'
+  );
+});
