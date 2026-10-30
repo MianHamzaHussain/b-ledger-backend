@@ -31,7 +31,6 @@ Env is loaded by Node itself (`node --env-file=.env`) — **no `dotenv`**.
 npm run dev           # node --watch (restarts on change)
 npm start             # production
 npm run seed          # create Admin role + first admin (reads SEED_ADMIN_*)
-npm run seed:destroy  # wipe users/roles/businesses (refuses in production)
 ```
 
 ---
@@ -879,8 +878,7 @@ booked` (`renameOnOpenOrders`), and booking a parcel reads the **live** name for
   **Confirmed** (tracking and booking cleared, stock still held — dispatching posts nothing), otherwise it
   is returned with no charge. A parcel the courier already shows as cancelled does not block it.
 - **Test and demo settings can not reach real data:** `POSTEX_BASE_URL` / `COURIER_SYNC_SECONDS` stop the
-  server starting in production; tests refuse a database whose name lacks "test"; `npm run find:testdata`
-  is a read-only scan of a real database for records that look like test data.
+  server starting in production; tests refuse a database whose name lacks "test".
 
 ### 10.11 Round 9 rules (2026-10-29)
 
@@ -965,8 +963,7 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     order, typed on one order, with the order's COD (or total) as its amount and, when PostEx sends one,
     the order's phone. Anything else stays as it was with the reason on `adoptTry` (retried at most hourly).
     A taken-over order gets the same `courierBooking` an in-app booking leaves, so auto-confirm and the
-    wallet apply to it. Per courier `integration.adoptTyped` (on unless `false`). `npm run adopt:dryrun`
-    is read-only and lists what would be followed — run it on the VPS before the first deploy.
+    wallet apply to it. Per courier `integration.adoptTyped` (on unless `false`).
   - **The Couriers tab** (`routes/couriers.js`, `utils/couriers/setup.js`). A courier is still a Khata party; the
     tab is its front door, behind its own `couriers` permission (read / create / update) so an owner can be given
     it without `parties`. `POST /couriers` adds one in a single step: party, encrypted key, a test (the pickup-address

@@ -199,7 +199,6 @@ you can run `node server.js` directly and drop `--env-file`.
 
 ```bash
 npm run seed          # create the Admin role + first admin (idempotent — safe to re-run)
-npm run seed:destroy  # wipe users/roles/businesses (refuses when NODE_ENV=production)
 ```
 
 `seed` reads the `SEED_ADMIN_*` variables. Log in as that admin, then create
@@ -209,16 +208,15 @@ other roles and users from the app.
 
 ## Scripts
 
-| Command                | Purpose                                                  |
-| ---------------------- | -------------------------------------------------------- |
-| `npm run dev`          | Development server with hot reload.                      |
-| `npm start`            | Production server.                                       |
-| `npm run seed`         | Create Admin role + first admin (idempotent).            |
-| `npm run seed:destroy` | Wipe users/roles/businesses (blocked in production).     |
-| `npm test`             | `node:test` suite against a throwaway Mongo (see below). |
-| `npm run lint`         | oxlint.                                                  |
-| `npm run format`       | Prettier write. `format:check` verifies without writing. |
-| `npm run check`        | lint + format check + tests — **run before pushing**.    |
+| Command          | Purpose                                                  |
+| ---------------- | -------------------------------------------------------- |
+| `npm run dev`    | Development server with hot reload.                      |
+| `npm start`      | Production server.                                       |
+| `npm run seed`   | Create Admin role + first admin (idempotent).            |
+| `npm test`       | `node:test` suite against a throwaway Mongo (see below). |
+| `npm run lint`   | oxlint.                                                  |
+| `npm run format` | Prettier write. `format:check` verifies without writing. |
+| `npm run check`  | lint + format check + tests — **run before pushing**.    |
 
 ---
 
