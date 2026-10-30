@@ -77,7 +77,7 @@ export const fakePostex = ({
     }
     if (u.includes('track-bulk-order')) {
       if (failBulk) return reply({ statusCode: '500' }, 500);
-      const numbers = new URL(u).searchParams.get('trackingNumber').split(',');
+      const numbers = new URL(u).searchParams.get('TrackingNumbers').split(',');
       return reply({
         statusCode: '200',
         dist: numbers.map(n =>

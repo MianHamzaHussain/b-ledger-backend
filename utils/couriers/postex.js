@@ -123,10 +123,10 @@ export const createPostex = ({
       return normalizeTracking(json.dist);
     },
 
-    /** Several parcels at once (comma-separated, as the guide says). */
+    /** Several parcels at once, comma-separated. The live service wants `TrackingNumbers` (the guide's `trackingNumber` is refused with a 400). */
     async trackBulk(trackingNumbers) {
       const json = await get(`${base}/order/v1/track-bulk-order`, {
-        query: { trackingNumber: trackingNumbers.join(',') }
+        query: { TrackingNumbers: trackingNumbers.join(',') }
       });
       return (json.dist ?? []).map(row => ({
         trackingNumber: row.trackingNumber,
