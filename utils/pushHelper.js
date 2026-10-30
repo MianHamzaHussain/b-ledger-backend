@@ -52,7 +52,9 @@ export const dispatchWebPushNotification = async (businessId, payload, excludeUs
     const body = JSON.stringify({
       title: payload.title || 'Update',
       body: payload.body || 'You have a new update.',
-      url: payload.url || '/dashboard'
+      url: payload.url || '/dashboard',
+      // So a tap on the phone opens the order in the business it belongs to, not the one last used.
+      business: String(businessId)
     });
 
     await Promise.allSettled(

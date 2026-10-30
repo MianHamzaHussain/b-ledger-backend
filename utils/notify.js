@@ -30,6 +30,7 @@ export const notify = async ({ business, type, title, body, link }) => {
   try {
     emitToBusiness(business, 'notification', {
       _id: doc._id,
+      business: String(business),
       type: doc.type,
       title: doc.title,
       body: doc.body,
