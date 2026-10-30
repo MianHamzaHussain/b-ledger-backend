@@ -77,9 +77,17 @@ export const attemptReason = message => {
   return 'other';
 };
 
+// "Merchant Request For Re-Attempt" carries the attempt code, but it is the SHOP asking PostEx to try again —
+// not a delivery that failed — so it is never counted as a try (it was filed as "other" and inflated the count).
+const isShopRequest = message => /^merchant request/i.test((message ?? '').trim());
+
 const attemptsIn = history =>
   history
-    .filter(h => h.code === ATTEMPT_CODE || /^attempt made/i.test(h.message ?? ''))
+    .filter(
+      h =>
+        (h.code === ATTEMPT_CODE || /^attempt made/i.test(h.message ?? '')) &&
+        !isShopRequest(h.message)
+    )
     .map(h => h.message.replace(/^attempt made:?\s*/i, '').trim() || 'No reason given');
 
 /** Apply one parcel's fresh state to its order. Returns what changed, for the run's tally. */
