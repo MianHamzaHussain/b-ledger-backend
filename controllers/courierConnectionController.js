@@ -16,7 +16,7 @@ import { PARTY_TYPES } from '../utils/constants.js';
  * @route  POST   /api/v1/parties/:id/connection/test
  * @route  DELETE /api/v1/parties/:id/connection
  */
-const view = party => {
+export const view = party => {
   const link = party.integration ?? {};
   return {
     provider: link.provider ?? null,

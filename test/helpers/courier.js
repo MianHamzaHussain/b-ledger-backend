@@ -37,13 +37,18 @@ export const fakePostex = ({
   failCancel,
   unbooked = [],
   // Tracking numbers the courier says it has paid out (its payment-status answer).
-  paid = []
+  paid = [],
+  // The shop's pickup addresses; `badKey` makes PostEx refuse the key, as it does for a wrong one.
+  addresses = [{ addressCode: '001', address: 'Shop 1, Liberty', cityName: 'Lahore' }],
+  badKey = false
 } = {}) => {
   const creates = [];
   const calls = [];
   courierDeps.fetchImpl = async (url, init) => {
     const u = String(url);
     calls.push(u);
+    if (badKey) return reply({ statusCode: '401' }, 401);
+    if (u.includes('get-merchant-address')) return reply({ statusCode: '200', dist: addresses });
     if (u.includes('get-operational-city')) {
       // A city is a name, or `{ name, isDeliveryCity }` to model PostEx listing one it does not deliver to.
       return reply({

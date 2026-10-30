@@ -13,7 +13,6 @@ import {
   courierConnectionSchema
 } from '../schemas/parties.js';
 import { getCourierItems, createCourierInvoice } from '../controllers/courierInvoiceController.js';
-import { requireAdmin } from '../middlewares/requireAdmin.js';
 import { lookupParties } from '../controllers/partyLookupController.js';
 import {
   getConnection,
@@ -224,7 +223,7 @@ router.get('/:id/statement', can('parties', 'read'), loadScoped(Party), getParty
  * @swagger
  * /parties/{id}/connection:
  *   get:
- *     summary: A courier's connection to its service (admin only; never returns the key)
+ *     summary: A courier's connection to its service (couriers permission; never returns the key)
  *     tags: [Parties]
  *     security: [{ bearerAuth: [] }]
  *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
@@ -247,15 +246,14 @@ router.get('/:id/statement', can('parties', 'read'), loadScoped(Party), getParty
  */
 router
   .route('/:id/connection')
-  .get(can('parties', 'read'), requireAdmin, loadScoped(Party), getConnection)
+  .get(can('couriers', 'read'), loadScoped(Party), getConnection)
   .put(
-    can('parties', 'update'),
-    requireAdmin,
+    can('couriers', 'update'),
     loadScoped(Party),
     validate(courierConnectionSchema),
     saveConnection
   )
-  .delete(can('parties', 'update'), requireAdmin, loadScoped(Party), removeConnection);
+  .delete(can('couriers', 'update'), loadScoped(Party), removeConnection);
 
 /**
  * @swagger
@@ -268,13 +266,7 @@ router
  *       200: { description: "{ addresses: [{ addressCode, address, cityName }] }" }
  *       502: { description: The courier refused the key or could not be reached }
  */
-router.post(
-  '/:id/connection/test',
-  can('parties', 'update'),
-  requireAdmin,
-  loadScoped(Party),
-  testConnection
-);
+router.post('/:id/connection/test', can('couriers', 'update'), loadScoped(Party), testConnection);
 
 /**
  * @swagger
