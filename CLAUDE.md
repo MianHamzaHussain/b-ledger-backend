@@ -856,7 +856,7 @@ A courier Party can be connected to its own service (`Party.integration`; PostEx
 - **Status check** (`utils/courierSync.js`, every 10 min, in-process like the booking reminders, shown in `/health`) only **marks** `courierBooking.confirmable`. It never changes `order.status` — delivered posts revenue, COGS and stock and is terminal, so a person confirms.
 - **Confirm** (`POST /orders/confirm-courier`, ≤ 50) runs the ordinary `updateOrderStatus` per order, filling the delivery/return charge with the courier's `fee + tax` when it reported one (otherwise blank → the courier invoice, §10.2). One order failing never stops the rest.
 - The courier's fee/tax is **its delivery charge**, not the FBR COD withholding — check one settled parcel against the statement before trusting the prefill.
-- Tests inject `courierDeps.fetchImpl`; no test can reach a real courier. `npm run postex:check` is a read-only local check of a key.
+- Tests inject `courierDeps.fetchImpl`; no test can reach a real courier. `npm run postex:stages` is a read-only local check of a key (it lists the parcels and the stage each gets).
 
 ### 10.10 Round 8 rules — names, remarks, payees (2026-10-26)
 
