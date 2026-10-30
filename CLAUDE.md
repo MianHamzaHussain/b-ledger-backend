@@ -959,6 +959,24 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     `deliveryAttempts.reason` (reasons only).
   - `npm run postex:stages` is a read-only check: it lists the key's parcels and prints the stage the app
     gives each one. Run it after any change to the stage rule, and once on the VPS after a deploy.
+  - **A tracking number typed by hand is taken over** (`utils/couriers/adopt.js`, run at the start of every
+    pass and of "Refresh couriers"). A dispatched order with a typed `trackingId` and no `courierBooking`
+    is looked up in PostEx's bulk tracking; it is followed only when the parcel is PostEx's, on no other
+    order, typed on one order, with the order's COD (or total) as its amount and, when PostEx sends one,
+    the order's phone. Anything else stays as it was with the reason on `adoptTry` (retried at most hourly).
+    A taken-over order gets the same `courierBooking` an in-app booking leaves, so auto-confirm and the
+    wallet apply to it. Per courier `integration.adoptTyped` (on unless `false`). `npm run adopt:dryrun`
+    is read-only and lists what would be followed — run it on the VPS before the first deploy.
+  - **The Couriers tab** (`routes/couriers.js`, `utils/couriers/setup.js`). A courier is still a Khata party; the
+    tab is its front door, behind its own `couriers` permission (read / create / update) so an owner can be given
+    it without `parties`. `POST /couriers` adds one in a single step: party, encrypted key, a test (the pickup-address
+    call), the pickup address when there is exactly one, booking on, automatic delivered / returned on (not for TCS),
+    and — PostEx only — the wallet account. **It never turns on `recordPayments`**: that posts calculated money, so a
+    person ticks it after checking the first batch against PostEx's statement. A failure removes the party and wallet
+    it made. The form is built from `PROVIDER_FORMS` (`GET /couriers/providers`), so a new courier is one entry plus its
+    adapter. The `/parties/:id/connection*` routes now need `couriers`, not "admin" (admins still pass).
+  - PostEx's bulk tracking wants `TrackingNumbers` (the guide's `trackingNumber` gets a 400), so a pass is
+    one call per 20 parcels.
 
 - **Own one-tap courier requests** (`Business.requestPhrases`, ≤ 12 phrases of ≤ 60 characters, R9-1b): the
   built-in chips live in the app; a business adds its own through `GET/PUT /orders/phrases` — `orders:read` /

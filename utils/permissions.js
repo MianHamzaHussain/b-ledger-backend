@@ -136,6 +136,18 @@ export const RESOURCES = {
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
   },
+  couriers: {
+    label: 'Couriers',
+    description:
+      'The courier companies you send parcels with: add one, connect its key, and see its connection.',
+    can: {
+      read: 'see the couriers and how each is connected',
+      create: 'add a courier and connect its key',
+      update: "change a courier's connection or switch its automatic steps"
+    },
+    scopable: true,
+    ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
+  },
   accounts: {
     label: 'Chart of Accounts',
     description:

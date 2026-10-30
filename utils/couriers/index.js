@@ -17,6 +17,29 @@ export const PROVIDER_NAMES = { postex: 'PostEx', tcs: 'TCS' };
 export const providerName = provider => PROVIDER_NAMES[provider] ?? 'This courier';
 
 /**
+ * What the "Add courier" form shows for each service — the one list the form is built from, so a new courier is
+ * one entry here (plus its adapter), not a new screen. `fields` are what a person types; secrets are never read back.
+ */
+export const PROVIDER_FORMS = {
+  postex: {
+    label: 'PostEx',
+    fields: [{ name: 'token', label: 'PostEx API key', secret: true }],
+    note: 'PostEx → Merchant portal → Settings → API key.'
+  },
+  tcs: {
+    label: 'TCS',
+    fields: [
+      { name: 'clientId', label: 'Client id' },
+      { name: 'clientSecret', label: 'Client secret', secret: true },
+      { name: 'username', label: 'Username' },
+      { name: 'password', label: 'Password', secret: true },
+      { name: 'accountNumber', label: 'TCS account number' }
+    ],
+    note: 'TCS has not been tried against the live service yet — check the first parcels by hand.'
+  }
+};
+
+/**
  * Point the adapter at a stand-in service (a local fake, for demos and recordings) — never in
  * production, where a changed address would send real keys somewhere else.
  */

@@ -16,7 +16,7 @@ import { PARTY_TYPES } from '../utils/constants.js';
  * @route  POST   /api/v1/parties/:id/connection/test
  * @route  DELETE /api/v1/parties/:id/connection
  */
-const view = party => {
+export const view = party => {
   const link = party.integration ?? {};
   return {
     provider: link.provider ?? null,
@@ -29,7 +29,8 @@ const view = party => {
     lastCheckedAt: link.lastCheckedAt ?? null,
     lastError: link.lastError ?? null,
     autoConfirm: Boolean(link.autoConfirm),
-    recordPayments: Boolean(link.recordPayments)
+    recordPayments: Boolean(link.recordPayments),
+    adoptTyped: link.adoptTyped !== false
   };
 };
 
@@ -50,7 +51,7 @@ export const saveConnection = asyncHandler(async (req, res) => {
   const { provider, pickupAddressCode, pickupAddressLabel, isEnabled, credentials } = req.body;
   const { accountNumber, serviceCode } = req.body;
   let { autoConfirm } = req.body;
-  const { recordPayments } = req.body;
+  const { recordPayments, adoptTyped } = req.body;
   const chosen = provider ?? party.integration?.provider;
   // PostEx has one key; TCS signs in with four values, kept together as one encrypted secret.
   if (credentials && chosen !== 'tcs') {
@@ -94,6 +95,7 @@ export const saveConnection = asyncHandler(async (req, res) => {
     if (recordPayments) set['integration.recordPaymentsBy'] = req.user.id;
     else unset['integration.recordPaymentsBy'] = 1;
   }
+  if (adoptTyped !== undefined) set['integration.adoptTyped'] = adoptTyped;
   if (token) {
     set['integration.tokenEnc'] = encryptSecret(token);
     set['integration.hasToken'] = true;

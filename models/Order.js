@@ -389,6 +389,13 @@ const OrderSchema = new mongoose.Schema(
      * The parcel as the courier's own service knows it (PostEx): booked from the dispatch dialog,
      * then kept up to date by the status check. `lockedAt` stops a double tap booking two parcels.
      */
+    /**
+     * A tracking number typed in by hand that the courier's service did not take over (not found, another order's,
+     * a different amount…): when it was last tried and why, in plain words. Tried again at most once an hour.
+     */
+    adoptTry: {
+      type: new mongoose.Schema({ at: { type: Date }, reason: { type: String } }, { _id: false })
+    },
     courierBooking: {
       type: new mongoose.Schema(
         {

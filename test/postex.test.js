@@ -171,7 +171,7 @@ test('trackBulk: several parcels in one call, comma-separated', async () => {
     })
   ]);
   const rows = await api.trackBulk(['CX-1', 'CX-2']);
-  assert.match(calls[0].url, /track-bulk-order\?trackingNumber=CX-1%2CCX-2$/);
+  assert.match(calls[0].url, /track-bulk-order\?TrackingNumbers=CX-1%2CCX-2$/);
   assert.equal(rows[0].status, 'Booked');
   assert.equal(rows[0].found, true);
   assert.equal(rows[1].found, false);
