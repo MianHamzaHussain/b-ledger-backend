@@ -165,7 +165,7 @@ npx web-push generate-vapid-keys
 | Variable             |        Required        | Purpose                                                                                                                                                                                                                                     |
 | -------------------- | :--------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `COURIER_SECRET_KEY` | ✔ to connect a courier | 64 hex characters (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`). Encrypts each courier's saved API key. **Secret, never commit.** Losing or changing it makes saved courier keys unreadable (re-enter them). |
-| `POSTEX_API_KEY`     |           –            | Local only — used by `npm run postex:check` to try a key read-only. The app itself never reads it; each courier's key is saved in the app.                                                                                                  |
+| `POSTEX_API_KEY`     |           –            | Local only — used by `npm run postex:stages` to try a key read-only. The app itself never reads it; each courier's key is saved in the app.                                                                                                 |
 | `ALLOW_DATA_RESET`   |           –            | `true` enables `POST /system/reset` — an admin-only wipe of **all business data** (users and roles are kept). **Leave unset in production.** Anything else refuses.                                                                         |
 
 > ⚠️ The reset is for testing. Before real business data goes in, remove this
@@ -199,7 +199,6 @@ you can run `node server.js` directly and drop `--env-file`.
 
 ```bash
 npm run seed          # create the Admin role + first admin (idempotent — safe to re-run)
-npm run seed:destroy  # wipe users/roles/businesses (refuses when NODE_ENV=production)
 ```
 
 `seed` reads the `SEED_ADMIN_*` variables. Log in as that admin, then create
@@ -209,16 +208,15 @@ other roles and users from the app.
 
 ## Scripts
 
-| Command                | Purpose                                                  |
-| ---------------------- | -------------------------------------------------------- |
-| `npm run dev`          | Development server with hot reload.                      |
-| `npm start`            | Production server.                                       |
-| `npm run seed`         | Create Admin role + first admin (idempotent).            |
-| `npm run seed:destroy` | Wipe users/roles/businesses (blocked in production).     |
-| `npm test`             | `node:test` suite against a throwaway Mongo (see below). |
-| `npm run lint`         | oxlint.                                                  |
-| `npm run format`       | Prettier write. `format:check` verifies without writing. |
-| `npm run check`        | lint + format check + tests — **run before pushing**.    |
+| Command          | Purpose                                                  |
+| ---------------- | -------------------------------------------------------- |
+| `npm run dev`    | Development server with hot reload.                      |
+| `npm start`      | Production server.                                       |
+| `npm run seed`   | Create Admin role + first admin (idempotent).            |
+| `npm test`       | `node:test` suite against a throwaway Mongo (see below). |
+| `npm run lint`   | oxlint.                                                  |
+| `npm run format` | Prettier write. `format:check` verifies without writing. |
+| `npm run check`  | lint + format check + tests — **run before pushing**.    |
 
 ---
 

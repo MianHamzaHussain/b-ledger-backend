@@ -2,7 +2,6 @@ import mongoose from 'mongoose';
 import connectDB from './config/db.js';
 import Role from './models/Role.js';
 import User from './models/User.js';
-import Business from './models/Business.js';
 import { ADMIN_ROLE_NAME } from './utils/constants.js';
 
 /**
@@ -66,27 +65,14 @@ const importData = async () => {
   console.log('Seed complete.');
 };
 
-/** Drops every collection this app owns. Refuses to run in production. */
-const deleteData = async () => {
-  if (process.env.NODE_ENV === 'production') {
-    console.error('Refusing to destroy data with NODE_ENV=production.');
-    process.exit(1);
-  }
-
-  await Promise.all([User.deleteMany(), Role.deleteMany(), Business.deleteMany()]);
-  console.log('All users, roles and businesses destroyed.');
-};
-
 const run = async () => {
   await connectDB();
 
   try {
     if (process.argv[2] === '-i') {
       await importData();
-    } else if (process.argv[2] === '-d') {
-      await deleteData();
     } else {
-      console.log('Usage: npm run seed (import) | npm run seed:destroy (destroy)');
+      console.log('Usage: npm run seed');
     }
     await mongoose.disconnect();
     process.exit(0);

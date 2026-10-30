@@ -76,11 +76,10 @@ export const typedOrders = ({ business = null, now = Date.now() } = {}) =>
     .limit(PER_RUN);
 
 /**
- * One pass. `dryRun` judges and reports without writing anything — what `scripts/adoptDryRun.mjs` uses.
- * Returns the tally and, for a dry run, each order's verdict.
+ * One pass: take over every typed number that is clearly the courier's parcel. Returns the tally.
  */
-export const adoptTypedParcels = async ({ business = null, dryRun = false } = {}) => {
-  const tally = { checked: 0, adopted: 0, skipped: 0, errors: 0, verdicts: [] };
+export const adoptTypedParcels = async ({ business = null } = {}) => {
+  const tally = { checked: 0, adopted: 0, skipped: 0, errors: 0 };
   const orders = await typedOrders({ business });
 
   const byCourier = new Map();
@@ -136,12 +135,6 @@ export const adoptTypedParcels = async ({ business = null, dryRun = false } = {}
           others: takenCount.get(number) ?? 0,
           typedOn: typed.get(number)
         });
-        if (dryRun) {
-          tally.verdicts.push({ order: o.orderNumber, tracking: number, ...verdict });
-          if (verdict.ok) tally.adopted += 1;
-          else tally.skipped += 1;
-          continue;
-        }
         if (!verdict.ok) {
           tally.skipped += 1;
           await Order.updateOne(
