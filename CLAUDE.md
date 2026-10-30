@@ -967,6 +967,8 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     A taken-over order gets the same `courierBooking` an in-app booking leaves, so auto-confirm and the
     wallet apply to it. Per courier `integration.adoptTyped` (on unless `false`). `npm run adopt:dryrun`
     is read-only and lists what would be followed — run it on the VPS before the first deploy.
+<<<<<<< HEAD
+=======
   - **The Couriers tab** (`routes/couriers.js`, `utils/couriers/setup.js`). A courier is still a Khata party; the
     tab is its front door, behind its own `couriers` permission (read / create / update) so an owner can be given
     it without `parties`. `POST /couriers` adds one in a single step: party, encrypted key, a test (the pickup-address
@@ -975,6 +977,7 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     person ticks it after checking the first batch against PostEx's statement. A failure removes the party and wallet
     it made. The form is built from `PROVIDER_FORMS` (`GET /couriers/providers`), so a new courier is one entry plus its
     adapter. The `/parties/:id/connection*` routes now need `couriers`, not "admin" (admins still pass).
+>>>>>>> master
   - PostEx's bulk tracking wants `TrackingNumbers` (the guide's `trackingNumber` gets a 400), so a pass is
     one call per 20 parcels.
 
