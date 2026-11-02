@@ -207,6 +207,8 @@ export const NOTIFICATION_TYPES = {
 
 /** Name of the protected, full-access role created by the seeder. */
 export const ADMIN_ROLE_NAME = 'Admin';
+/** The predefined role for the boss of a business (see utils/presetRoles.js). */
+export const BUSINESS_OWNER_ROLE_NAME = 'Business Owner';
 
 /** How a raw material is counted. Quantities may be fractional (2.5 metres). */
 export const MATERIAL_UNITS = [

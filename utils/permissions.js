@@ -167,7 +167,7 @@ export const RESOURCES = {
   },
   production: {
     // Production batches — building an article's cost from its inputs.
-    label: 'Production & Costing',
+    label: 'Production batches',
     description:
       "Making your own stock in batches, and what each batch cost. Also needs 'See costs & profit'.",
     can: {
