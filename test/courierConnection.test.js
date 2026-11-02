@@ -57,7 +57,11 @@ test('the key is encrypted when saved, and opens again only with the server key'
   assert.match(saved, /^v1:/);
   assert.equal(decryptSecret(saved), KEY);
   assert.notEqual(encryptSecret(KEY), saved, 'a fresh IV every time');
-  assert.throws(() => decryptSecret(saved.replace(/.$/, 'A')), /can not be opened|unreadable/);
+  // Tamper with the encrypted part, always by a character that really is different: replacing the last character
+  // with "A" changed nothing about 1 time in 64 (when it already was "A"), which made this test fail at random.
+  const [version, iv, tag, body] = saved.split(':');
+  const tampered = [version, iv, tag, (body[0] === 'A' ? 'B' : 'A') + body.slice(1)].join(':');
+  assert.throws(() => decryptSecret(tampered), /can not be opened|unreadable/);
 });
 
 test('without COURIER_SECRET_KEY nothing is stored in the clear — it is refused', async () => {
