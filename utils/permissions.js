@@ -86,7 +86,7 @@ export const RESOURCES = {
     scopable: false
   },
   products: {
-    label: 'Products',
+    label: 'Stock',
     description: 'Your products: their sizes, selling prices and how many are in stock.',
     can: {
       read: 'see products and stock',
@@ -190,8 +190,8 @@ export const RESOURCES = {
   },
   consignments: {
     // Sale-or-return: goods out with a reseller until kept/paid or returned.
-    label: 'Sale or Return',
-    description: 'Goods given to shops on sale or return.',
+    label: 'Resellers',
+    description: 'Goods given to resellers on sale or return.',
     can: {
       read: 'see what is out with each shop',
       create: 'give goods to a shop',

@@ -251,7 +251,7 @@ test('a cancelled made-from-scratch order puts the piece into stock at its cost,
   assert.equal(await net(ctx, CODES.INVENTORY), 900000);
 
   // Reopening takes it back out and puts the cost back on the order.
-  order = await setStatus(order, { status: 'pending' });
+  order = await setStatus(order, { status: 'created' });
   assert.equal((await customized(ctx)).length, 0);
   assert.equal(await net(ctx, CODES.CUSTOM_WIP), 900000);
 });
@@ -265,7 +265,7 @@ test('a piece sold since can not be taken back by reopening its order', async ()
     { _id: piece._id, 'variants._id': piece.variants[0]._id },
     { $inc: { 'variants.$.stock': -1, totalStock: -1 } }
   );
-  await assert.rejects(setStatus(order, { status: 'pending' }), /sold since/);
+  await assert.rejects(setStatus(order, { status: 'created' }), /sold since/);
 });
 
 test('a second piece with the same name joins the first as more stock', async () => {

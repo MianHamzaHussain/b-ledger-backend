@@ -23,6 +23,7 @@ import { logActivity } from './orderActivity.js';
 
 /** Statuses on which the customer can still pay us. */
 const TAKES_ADVANCE = new Set([
+  ORDER_STATUS.CREATED,
   ORDER_STATUS.PENDING,
   ORDER_STATUS.BOOKED,
   ORDER_STATUS.CONFIRMED,

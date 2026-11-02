@@ -61,7 +61,7 @@ test('a city PostEx does not serve stops the booking, and the order does not mov
   const { creates } = fakePostex({ cities: ['Karachi'] });
   const { order, courier } = await setup({ city: 'Lahore' });
   await assert.rejects(dispatch(order, courier), /does not deliver to Lahore/);
-  assert.equal((await Order.findById(order._id)).status, 'pending');
+  assert.equal((await Order.findById(order._id)).status, 'created');
   assert.equal(creates.length, 0);
 });
 
@@ -70,7 +70,7 @@ test('PostEx refusing the parcel leaves the order as it was, and says why', asyn
   const { order, courier } = await setup();
   await assert.rejects(dispatch(order, courier), /PostEx says: Invalid delivery address/);
   const fresh = await Order.findById(order._id);
-  assert.equal(fresh.status, 'pending');
+  assert.equal(fresh.status, 'created');
   assert.equal(
     fresh.courierBooking?.lockedAt,
     undefined,
@@ -125,7 +125,7 @@ test('a courier that is not connected can not be booked, and says so', async () 
   fakePostex();
   const { order, courier } = await setup({ connected: false });
   await assert.rejects(dispatch(order, courier), /not connected/);
-  assert.equal((await Order.findById(order._id)).status, 'pending');
+  assert.equal((await Order.findById(order._id)).status, 'created');
 });
 
 test('without "book with courier" dispatch still works by typing a tracking number', async () => {

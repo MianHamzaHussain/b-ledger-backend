@@ -265,9 +265,9 @@ test('reopen a cancelled order holds its stock again', async () => {
   const ctx = await setup();
   let order = await newOrder(ctx, { advanceAmount: 500, advanceAccount: ctx.cash });
   order = await setStatus(order, { status: 'cancelled' });
-  order = await setStatus(order, { status: 'pending' });
+  order = await setStatus(order, { status: 'created' });
 
-  assert.equal(order.status, 'pending');
+  assert.equal(order.status, 'created');
   assert.equal(order.codAmount, 2500);
   assert.equal(order.refundDuePaisa, 0);
 
