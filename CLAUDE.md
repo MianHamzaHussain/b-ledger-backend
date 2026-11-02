@@ -960,6 +960,19 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   - **Phone notifications name the business.** `utils/pushHelper.js` builds each recipient's own text (`pushPayloadFor`): for someone who works on
     more than one business (an Admin once there is more than one) the title starts with it — "Qam Style · New order #0122" — and the payload always
     carries `business` (and `businessName`) so a tap opens the right business (`?biz=`, frontend `useBusinessFromLink`).
+  - **Shopify orders come in by themselves (`utils/shopify/`).** One `ShopifyConnection` per business (Client ID plain; Client secret and the 24-hour
+    token encrypted with `secretBox`, never returned). Auth is the client-credentials grant — it works only when the app and the store are in the same
+    Shopify organization. `sync.js` asks Shopify for orders placed since the last check **every 10 minutes** (`SHOPIFY_SYNC_SECONDS`), and a signed
+    **webhook** (`POST /integrations/shopify/webhook`, raw body, HMAC with the Client secret, mounted before the JSON parser) just triggers the same
+    sync — nothing in its body is trusted; if `API_PUBLIC_URL` is unset or Shopify refuses, the 10-minute check still does the job. Orders placed
+    before `goLiveAt` (the day it was connected) are never brought in. `importer.js` makes the order through the **existing** create/edit handlers
+    (`callHandler`), with `clientRef = shopify:<id>` so one Shopify order can never become two. A line is matched to stock by a saved
+    `ShopifyVariantLink`, else by the **exact** product name and size (then the link is saved); anything else is **held** (`ShopifyHold`) with the reason —
+    an unknown product, not cash on delivery, a shipping charge, a discount, a total that is not the items' sum, no mobile number or address. A second order
+    from the same person (same number, address and city) on the same Pakistan day merges into the first **only while that order is Created or Pending**
+    (not yet confirmed): its lines are added, its Shopify number is appended (`51486+51487`), the timeline says so and a "New Shopify order added to #…"
+    notification is raised. `Order.shopifyOrderIds` is every Shopify order an order was made from (and what stops a repeat). Sending the status back to Shopify
+    is **not built yet**. `scripts/shopifyProbe.mjs` was a throwaway; delete it.
   - **Order status `created` (Round 11).** `ORDER_STATUS.CREATED` is the first status of every new order; `pending` now means
     "called, no answer" and keeps its old exits (existing `pending` orders were not migrated). `created` holds stock and is editable like
     any status before dispatch (`STOCK_HELD_STATUSES`, `BEFORE_DISPATCH`, `TAKES_ADVANCE`). A cancelled order reopens to `created`; a

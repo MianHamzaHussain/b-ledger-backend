@@ -148,11 +148,13 @@ re-checks, so a token can be revoked server-side.
 
 ### Web Push (PWA notifications)
 
-| Variable            | Required | Purpose                                                               |
-| ------------------- | :------: | --------------------------------------------------------------------- |
-| `VAPID_PUBLIC_KEY`  |    –     | Public half — **must equal** `VITE_VAPID_PUBLIC_KEY` in the frontend. |
-| `VAPID_PRIVATE_KEY` |    –     | Private half — **secret**, never commit.                              |
-| `VAPID_MAILTO`      |    –     | Contact URI for the push service, e.g. `mailto:admin@…`.              |
+| Variable               | Required | Purpose                                                                                                                                                                                |
+| ---------------------- | :------: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VAPID_PUBLIC_KEY`     |    –     | Public half — **must equal** `VITE_VAPID_PUBLIC_KEY` in the frontend.                                                                                                                  |
+| `VAPID_PRIVATE_KEY`    |    –     | Private half — **secret**, never commit.                                                                                                                                               |
+| `API_PUBLIC_URL`       |    –     | The API's public address (e.g. `https://backend.bledger.org`). Lets Shopify tell us at once when an order is placed (a webhook); without it new orders still arrive within 10 minutes. |
+| `SHOPIFY_SYNC_SECONDS` |    –     | How often to ask Shopify for new orders (default 600; never below 10).                                                                                                                 |
+| `VAPID_MAILTO`         |    –     | Contact URI for the push service, e.g. `mailto:admin@…`.                                                                                                                               |
 
 Generate a fresh pair (do this per environment):
 
