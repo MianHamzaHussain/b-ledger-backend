@@ -82,7 +82,7 @@ test('a tracking number the courier does not know is refused, and the order does
     dispatchBooked(order, courier, { bookWithCourier: false, attachCourierParcel: 'CX-0000' }),
     /does not know that tracking number/
   );
-  assert.equal((await Order.findById(order._id)).status, 'pending');
+  assert.equal((await Order.findById(order._id)).status, 'created');
 });
 
 test('one parcel can not be attached to two orders', async () => {

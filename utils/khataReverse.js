@@ -36,7 +36,7 @@ export const reverseMessage = kind => {
     case JOURNAL_SOURCES.BATCH:
       return 'This came from a production batch';
     case JOURNAL_SOURCES.CONSIGNMENT:
-      return 'Undo this on the Sale or Return';
+      return 'Undo this on the Resellers page';
     default:
       return 'Undo this in Accountant tools';
   }

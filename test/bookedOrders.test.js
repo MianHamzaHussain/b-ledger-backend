@@ -101,6 +101,7 @@ test('the status table lets a booked order be released, dispatched or cancelled'
   assert.deepEqual(ORDER_TRANSITIONS.booked.sort(), [
     'cancelled',
     'confirmed',
+    'created',
     'dispatched',
     'pending'
   ]);

@@ -246,14 +246,14 @@ router.get('/:id/statement', can('parties', 'read'), loadScoped(Party), getParty
  */
 router
   .route('/:id/connection')
-  .get(can('couriers', 'read'), loadScoped(Party), getConnection)
+  .get(can('integrations', 'read'), loadScoped(Party), getConnection)
   .put(
-    can('couriers', 'update'),
+    can('integrations', 'update'),
     loadScoped(Party),
     validate(courierConnectionSchema),
     saveConnection
   )
-  .delete(can('couriers', 'update'), loadScoped(Party), removeConnection);
+  .delete(can('integrations', 'update'), loadScoped(Party), removeConnection);
 
 /**
  * @swagger
@@ -266,7 +266,12 @@ router
  *       200: { description: "{ addresses: [{ addressCode, address, cityName }] }" }
  *       502: { description: The courier refused the key or could not be reached }
  */
-router.post('/:id/connection/test', can('couriers', 'update'), loadScoped(Party), testConnection);
+router.post(
+  '/:id/connection/test',
+  can('integrations', 'update'),
+  loadScoped(Party),
+  testConnection
+);
 
 /**
  * @swagger

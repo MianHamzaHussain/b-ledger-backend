@@ -73,12 +73,12 @@ test('each business counts its own orders for the day from 1', async () => {
   assert.notEqual(a.orderNumber, b.orderNumber, 'the permanent number still never repeats');
 });
 
-test('a new order starts its timeline as pending, by whoever created it', async () => {
+test('a new order starts its timeline as created, by whoever created it', async () => {
   const biz = await makeBusiness();
   const order = await newOrder(biz, await makeProduct(biz._id));
 
   assert.equal(order.statusHistory.length, 1);
-  assert.equal(order.statusHistory[0].status, 'pending');
+  assert.equal(order.statusHistory[0].status, 'created');
   assert.equal(String(order.statusHistory[0].by), String(userId));
 });
 

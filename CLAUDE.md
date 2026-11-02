@@ -957,6 +957,24 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     `deliveryAttempts.reason` (reasons only).
   - `npm run postex:stages` is a read-only check: it lists the key's parcels and prints the stage the app
     gives each one. Run it after any change to the stage rule, and once on the VPS after a deploy.
+  - **Order status `created` (Round 11).** `ORDER_STATUS.CREATED` is the first status of every new order; `pending` now means
+    "called, no answer" and keeps its old exits (existing `pending` orders were not migrated). `created` holds stock and is editable like
+    any status before dispatch (`STOCK_HELD_STATUSES`, `BEFORE_DISPATCH`, `TAKES_ADVANCE`). A cancelled order reopens to `created`; a
+    booked one may be released to `created` or `pending`. The timeline always opens with "Order placed" for the first step, whichever of the two it is.
+  - **Business Owner — delegated users and roles (Round 11, `utils/delegation.js`).** `users` and `roles` are now scopable. A
+    person whose Users/Roles scope is `own` (a Business Owner) manages only their own businesses; scope `all` is an
+    Admin-granted global manager; Admin is unrestricted. The rules, applied on **every** request: **R1** a person they add
+    or change is assigned only businesses they have (at least one); **R2** they see only people whose businesses are _all_
+    theirs and who are not an Admin — anyone else is a **404** (`loadUser`, `scopeUsers`); **R3** the ceiling — they give only
+    actions they hold and no wider scope (`assertWithinCeiling`); **R4** Users, Roles and Accountant tools are never delegated;
+    **R5** roles: those made for their own businesses (`Role.business`, editable) and Admin-made ones marked `delegable`
+    (usable, not editable); **R6** not themselves, not an Admin, not another manager; personal `permissionOverrides` are
+    Admin-only. `can('users'|'roles', …)` leaves a filter that matches nothing for an own-scope manager, so a route that forgets
+    `scopeUsers`/`scopeRoles` fails closed. `GET /roles/registry` adds `grantable` (null for an Admin). Role names are unique
+    per business (`{ name, business }`; `Role.syncIndexes()` runs at boot to drop the old index on `name`). `test/delegation.test.js`
+    is the escalation matrix — every refusal must leave the database unchanged; keep it passing.
+    **Before deploying:** list non-admin roles that hold Users/Roles permissions (their stored scope `own` now limits them), then
+    create the _Business Owner_ role in the app (Users and Roles at scope **own**, plus what the owner should run) and try it.
   - **A tracking number typed by hand is taken over** (`utils/couriers/adopt.js`, run at the start of every
     pass and of "Refresh couriers"). A dispatched order with a typed `trackingId` and no `courierBooking`
     is looked up in PostEx's bulk tracking; it is followed only when the parcel is PostEx's, on no other
@@ -965,13 +983,13 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     A taken-over order gets the same `courierBooking` an in-app booking leaves, so auto-confirm and the
     wallet apply to it. Per courier `integration.adoptTyped` (on unless `false`).
   - **The Couriers tab** (`routes/couriers.js`, `utils/couriers/setup.js`). A courier is still a Khata party; the
-    tab is its front door, behind its own `couriers` permission (read / create / update) so an owner can be given
+    tab is its front door, behind its own `integrations` permission (read / create / update; it was `couriers` before Round 11 — stored roles are renamed once by `npm run migrate:integrations`, then that script is deleted) so an owner can be given
     it without `parties`. `POST /couriers` adds one in a single step: party, encrypted key, a test (the pickup-address
     call), the pickup address when there is exactly one, booking on, automatic delivered / returned on (not for TCS),
     and — PostEx only — the wallet account. **It never turns on `recordPayments`**: that posts calculated money, so a
     person ticks it after checking the first batch against PostEx's statement. A failure removes the party and wallet
     it made. The form is built from `PROVIDER_FORMS` (`GET /couriers/providers`), so a new courier is one entry plus its
-    adapter. The `/parties/:id/connection*` routes now need `couriers`, not "admin" (admins still pass).
+    adapter. The `/parties/:id/connection*` routes now need `integrations`, not "admin" (admins still pass).
   - PostEx's bulk tracking wants `TrackingNumbers` (the guide's `trackingNumber` gets a 400), so a pass is
     one call per 20 parcels.
 

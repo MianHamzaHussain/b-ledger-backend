@@ -37,7 +37,6 @@ const RoleSchema = new mongoose.Schema(
     name: {
       type: String,
       required: [true, 'Please add a role name'],
-      unique: true,
       trim: true,
       maxlength: [50, 'Role name can not be more than 50 characters']
     },
@@ -65,6 +64,13 @@ const RoleSchema = new mongoose.Schema(
      * fullAccess on Admin so neither the flag nor the role itself can be
      * removed by an over-confident click.
      */
+    /**
+     * The business this role was made for (by an owner). Empty = a role an Admin made for everyone. An owner sees,
+     * edits and gives only the roles of their own businesses — see utils/delegation.js.
+     */
+    business: { type: mongoose.Schema.ObjectId, ref: 'Business' },
+    /** An Admin-made role that owners may give to their people (they still cannot edit it). Admin-set only. */
+    delegable: { type: Boolean, default: false },
     isSystem: {
       type: Boolean,
       default: false
@@ -74,6 +80,10 @@ const RoleSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// A role name is unique within its business (and among the Admin-made everyone-roles, which have none), so two owners
+// can each have a "Manager". This replaces the old index on `name` alone; `Role.syncIndexes()` at boot swaps them.
+RoleSchema.index({ name: 1, business: 1 }, { unique: true });
 
 /** One permission row per resource — prevents contradictory duplicates. */
 RoleSchema.pre('validate', function () {

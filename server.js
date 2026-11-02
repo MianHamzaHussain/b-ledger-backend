@@ -27,10 +27,13 @@ import { createShutdown } from './utils/shutdown.js';
 import { reminderStatus, startBookingReminders } from './utils/bookingReminders.js';
 import { courierSyncStatus, startCourierSync } from './utils/courierSync.js';
 import { confirmOneFromCourier } from './controllers/orderController.js';
+import Role from './models/Role.js';
 
 const dirName = path.dirname(fileURLToPath(import.meta.url));
 
 await connectDB();
+// Role names became unique per business (Round 11): make the database's indexes match, dropping the old one on `name`.
+await Role.syncIndexes().catch(err => logger.warn({ err: err.message }, 'role indexes not synced'));
 
 const app = express();
 

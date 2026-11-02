@@ -222,7 +222,7 @@ test('reopening a cancelled order undoes the write-off', async () => {
   });
   order = await Order.findById(order._id);
   order = await setStatus(order, { status: 'cancelled' });
-  order = await setStatus(order, { status: 'pending' });
+  order = await setStatus(order, { status: 'created' });
 
   const wip = await accountByCode(ctx.biz._id, CODES.CUSTOM_WIP);
   const writeOff = await accountByCode(ctx.biz._id, CODES.CUSTOM_WRITE_OFF);

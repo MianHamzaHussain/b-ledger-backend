@@ -936,7 +936,7 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
     await releaseStock(order.items);
   }
 
-  if (order.status === ORDER_STATUS.CANCELLED && status === ORDER_STATUS.PENDING) {
+  if (order.status === ORDER_STATUS.CANCELLED && status === ORDER_STATUS.CREATED) {
     // Its made-from-scratch pieces come back out of stock first — refused if one
     // was sold meanwhile, before anything else changes.
     await takeScratchBack(order, req.user.id);

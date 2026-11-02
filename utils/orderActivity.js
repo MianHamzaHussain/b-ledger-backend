@@ -77,10 +77,15 @@ export const itemsSummary = order => {
 export const buildTimeline = (order, user) => {
   const canSeeCosts = userCan(user, 'costs', 'read');
 
-  const steps = (order.statusHistory ?? []).map(e => ({
+  const steps = (order.statusHistory ?? []).map((e, i) => ({
     kind: 'status',
     status: e.status,
-    text: STATUS_WORDS[e.status] ?? e.status,
+    // The first step is always "Order placed" — for an older order that was `pending` from the start as much as a
+    // new one that is `created` — so the timeline reads the same before and after the Created status existed.
+    text:
+      i === 0 && (e.status === ORDER_STATUS.CREATED || e.status === ORDER_STATUS.PENDING)
+        ? 'Order placed'
+        : (STATUS_WORDS[e.status] ?? e.status),
     note: e.note,
     at: e.at,
     by: e.by
@@ -101,7 +106,8 @@ export const buildTimeline = (order, user) => {
 };
 
 const STATUS_WORDS = {
-  [ORDER_STATUS.PENDING]: 'Order placed',
+  [ORDER_STATUS.CREATED]: 'Created',
+  [ORDER_STATUS.PENDING]: 'Pending — no answer',
   [ORDER_STATUS.BOOKED]: 'Booked for later',
   [ORDER_STATUS.CONFIRMED]: 'Confirmed',
   [ORDER_STATUS.DISPATCHED]: 'Dispatched',

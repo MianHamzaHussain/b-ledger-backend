@@ -71,6 +71,7 @@ export const orderSummary = async (business, now = new Date()) => {
     byPhase,
     returning: byPhase.returning ?? 0,
     onRoute: byPhase['on-route'] ?? 0,
+    created: byStatus.created ?? 0,
     pending: byStatus.pending ?? 0,
     byStatus
   };

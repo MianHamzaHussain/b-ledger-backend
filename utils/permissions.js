@@ -46,7 +46,10 @@ export const RESOURCES = {
       update: "change a person's role, businesses and access, or switch them off",
       delete: 'remove a person'
     },
-    scopable: false
+    // Scope "own" = a Business Owner: only people whose businesses are all theirs (utils/delegation.js). Until a route
+    // adds `scopeUsers` the filter below matches nothing, so a forgotten guard shows no one rather than everyone.
+    scopable: true,
+    ownFilter: () => ({ _id: { $in: [] } })
   },
   roles: {
     label: 'Roles',
@@ -58,7 +61,9 @@ export const RESOURCES = {
       update: 'change what a role is allowed to do',
       delete: 'remove a role'
     },
-    scopable: false
+    // Scope "own" = a Business Owner: the roles of their own businesses (utils/delegation.js); fails closed like users.
+    scopable: true,
+    ownFilter: () => ({ _id: { $in: [] } })
   },
   businesses: {
     label: 'Businesses',
@@ -86,7 +91,7 @@ export const RESOURCES = {
     scopable: false
   },
   products: {
-    label: 'Products',
+    label: 'Stock',
     description: 'Your products: their sizes, selling prices and how many are in stock.',
     can: {
       read: 'see products and stock',
@@ -136,14 +141,14 @@ export const RESOURCES = {
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
   },
-  couriers: {
-    label: 'Couriers',
+  integrations: {
+    label: 'Integrations',
     description:
-      'The courier companies you send parcels with: add one, connect its key, and see its connection.',
+      'The services you connect: the couriers you send parcels with and, later, your Shopify store. Add one, connect its key and see how it is connected.',
     can: {
-      read: 'see the couriers and how each is connected',
-      create: 'add a courier and connect its key',
-      update: "change a courier's connection or switch its automatic steps"
+      read: 'see the integrations and how each is connected',
+      create: 'add a courier or connect a store and enter its key',
+      update: "change an integration's connection or switch its automatic steps"
     },
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
@@ -190,8 +195,8 @@ export const RESOURCES = {
   },
   consignments: {
     // Sale-or-return: goods out with a reseller until kept/paid or returned.
-    label: 'Sale or Return',
-    description: 'Goods given to shops on sale or return.',
+    label: 'Resellers',
+    description: 'Goods given to resellers on sale or return.',
     can: {
       read: 'see what is out with each shop',
       create: 'give goods to a shop',

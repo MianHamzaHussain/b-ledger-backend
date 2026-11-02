@@ -1,15 +1,9 @@
 import webpush from 'web-push';
 import User from '../models/User.js';
-import Role from '../models/Role.js';
+import { fullAccessRoleIds } from './fullAccessRoles.js';
 import logger from './logger.js';
 
 let isVapidInitialized = false;
-
-/** Ids of roles that see everything, so admins receive all notifications. */
-const fullAccessRoleIds = async () => {
-  const roles = await Role.find({ fullAccess: true }).select('_id');
-  return roles.map(r => r._id);
-};
 
 const initVapid = () => {
   if (isVapidInitialized) return true;

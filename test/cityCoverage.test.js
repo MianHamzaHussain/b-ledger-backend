@@ -72,7 +72,7 @@ test('a refused city says what was probably meant, and the order waits for it', 
     /does not deliver to Islamkott — did you mean Islamkot\?/.test(err.message)
   );
   const held = await Order.findById(order._id);
-  assert.equal(held.status, 'pending', 'the order did not move');
+  assert.equal(held.status, 'created', 'the order did not move');
   assert.equal(held.awaitingCity.city, 'Islamkott');
   assert.equal(String(held.awaitingCity.courier), String(courier._id));
   assert.equal(held.awaitingCity.openedAt, undefined);
@@ -145,7 +145,7 @@ test('Book all refuses an order whose city has not opened yet', async () => {
     body: { business: String(biz._id), orderIds: [String(order._id)] }
   });
   assert.equal(body.data.booked, 0);
-  assert.equal((await Order.findById(order._id)).status, 'pending');
+  assert.equal((await Order.findById(order._id)).status, 'created');
 });
 
 test('changing the order’s city stops it waiting for the old one', async () => {

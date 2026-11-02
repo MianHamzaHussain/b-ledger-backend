@@ -71,21 +71,23 @@ test('counts today by the day each thing happened, in Pakistan time', async () =
   assert.equal(out.deliveredToday, 1);
 });
 
-test('pending is every pending order, whatever its date, and byStatus lists them all', async () => {
+test('created and pending are counted whatever the date, and byStatus lists them all', async () => {
   const biz = await makeBusiness();
   await make(biz, { createdAt: new Date('2026-08-01T05:00:00Z') });
   await make(biz, { createdAt: NOW });
+  await make(biz, { status: 'pending' });
   await make(biz, { status: 'confirmed' });
   const out = await orderSummary(biz._id, NOW);
-  assert.equal(out.pending, 2);
-  assert.deepEqual(out.byStatus, { pending: 2, confirmed: 1 });
+  assert.equal(out.created, 2);
+  assert.equal(out.pending, 1);
+  assert.deepEqual(out.byStatus, { created: 2, pending: 1, confirmed: 1 });
 });
 
 test('only that business is counted', async () => {
   const mine = await makeBusiness();
   const other = await makeBusiness({ name: 'Other' });
   await make(other, { createdAt: NOW });
-  assert.equal((await orderSummary(mine._id, NOW)).pending, 0);
+  assert.equal((await orderSummary(mine._id, NOW)).created, 0);
 });
 
 test('the route needs a business, and an out-of-scope one looks like it does not exist', async () => {

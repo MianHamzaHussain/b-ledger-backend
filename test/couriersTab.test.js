@@ -149,13 +149,15 @@ test("a business outside the person's own is not found, and the provider list na
   assert.ok(body.data.every(p => p.fields.length > 0));
 });
 
-test('couriers is a registered permission: an owner can be given it, and a role without it cannot', () => {
+test('integrations is a registered permission: an owner can be given it, and a role without it cannot', () => {
   const owner = {
     role: {
-      permissions: [{ resource: 'couriers', actions: ['read', 'create', 'update'], scope: 'own' }]
+      permissions: [
+        { resource: 'integrations', actions: ['read', 'create', 'update'], scope: 'own' }
+      ]
     }
   };
-  assert.equal(userCan(owner, 'couriers', 'create'), true);
-  assert.equal(userCan(owner, 'couriers', 'delete'), false, 'there is no delete');
-  assert.equal(userCan({ role: { permissions: [] } }, 'couriers', 'read'), false);
+  assert.equal(userCan(owner, 'integrations', 'create'), true);
+  assert.equal(userCan(owner, 'integrations', 'delete'), false, 'there is no delete');
+  assert.equal(userCan({ role: { permissions: [] } }, 'integrations', 'read'), false);
 });

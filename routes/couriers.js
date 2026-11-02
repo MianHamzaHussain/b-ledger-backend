@@ -18,7 +18,7 @@ router.use(protect);
  *     responses:
  *       200: { description: "[{ id, label, fields: [{ name, label, secret? }], note }]" }
  */
-router.get('/providers', can('couriers', 'read'), getProviders);
+router.get('/providers', can('integrations', 'read'), getProviders);
 
 /**
  * @swagger
@@ -41,9 +41,9 @@ router.get('/providers', can('couriers', 'read'), getProviders);
  */
 router
   .route('/')
-  .get(can('couriers', 'read'), listCouriers)
+  .get(can('integrations', 'read'), listCouriers)
   .post(
-    can('couriers', 'create'),
+    can('integrations', 'create'),
     restrictBusinessToScope(),
     validate(courierCreateSchema),
     addCourier

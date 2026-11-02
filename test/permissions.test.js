@@ -25,9 +25,20 @@ test('role grid grants exactly its listed actions', () => {
 });
 
 test('a non-scopable resource is forced to scope "all"', () => {
-  // `users` is registered non-scopable; a role asking for "own" still gets "all".
-  const map = resolvePermissions(role([{ resource: 'users', actions: ['read'], scope: 'own' }]));
-  assert.equal(map.get('users').scope, 'all');
+  // `costs` is registered non-scopable; a role asking for "own" still gets "all".
+  const map = resolvePermissions(role([{ resource: 'costs', actions: ['read'], scope: 'own' }]));
+  assert.equal(map.get('costs').scope, 'all');
+});
+
+test('users and roles are scopable: "own" stays "own" (a Business Owner), "all" stays "all"', () => {
+  const map = resolvePermissions(
+    role([
+      { resource: 'users', actions: ['read'], scope: 'own' },
+      { resource: 'roles', actions: ['read'], scope: 'all' }
+    ])
+  );
+  assert.equal(map.get('users').scope, 'own');
+  assert.equal(map.get('roles').scope, 'all');
 });
 
 test('a grant override adds actions on top of the role', () => {

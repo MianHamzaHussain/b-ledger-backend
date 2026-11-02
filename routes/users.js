@@ -1,6 +1,7 @@
 import express from 'express';
 import { protect } from '../middlewares/auth.js';
 import { can } from '../middlewares/permissions.js';
+import { loadUser, scopeUsers } from '../middlewares/delegation.js';
 import advancedResults from '../middlewares/advancedResults.js';
 import { validate } from '../middlewares/validate.js';
 import User from '../models/User.js';
@@ -38,7 +39,7 @@ router.use(protect);
  *       404: { description: User not found }
  */
 // Literal sub-path before the parameterised /:id routes.
-router.post('/:id/reinvite', can('users', 'create'), reinviteUser);
+router.post('/:id/reinvite', can('users', 'create'), loadUser({ manage: true }), reinviteUser);
 
 /**
  * @swagger
@@ -54,7 +55,7 @@ router.post('/:id/reinvite', can('users', 'create'), reinviteUser);
  *       403: { description: Not allowed to manage an Admin's sign-ins }
  *       404: { description: User not found }
  */
-router.get('/:id/sessions', can('users', 'update'), getUserSessions);
+router.get('/:id/sessions', can('users', 'update'), loadUser({ manage: true }), getUserSessions);
 
 /**
  * @swagger
@@ -70,7 +71,12 @@ router.get('/:id/sessions', can('users', 'update'), getUserSessions);
  *       200: { description: Signed out }
  *       404: { description: Not one of that user's devices }
  */
-router.delete('/:id/sessions/:sid', can('users', 'update'), deleteUserSession);
+router.delete(
+  '/:id/sessions/:sid',
+  can('users', 'update'),
+  loadUser({ manage: true }),
+  deleteUserSession
+);
 
 /**
  * @swagger
@@ -84,7 +90,12 @@ router.delete('/:id/sessions/:sid', can('users', 'update'), deleteUserSession);
  *     responses:
  *       200: { description: "{ signedOut: n }" }
  */
-router.post('/:id/sign-out-all', can('users', 'update'), signOutUserEverywhere);
+router.post(
+  '/:id/sign-out-all',
+  can('users', 'update'),
+  loadUser({ manage: true }),
+  signOutUserEverywhere
+);
 
 /**
  * @swagger
@@ -97,7 +108,7 @@ router.post('/:id/sign-out-all', can('users', 'update'), signOutUserEverywhere);
  *       200: { description: "{ online: [userId] }" }
  *       403: { description: Missing users:read permission }
  */
-router.get('/presence', can('users', 'read'), getPresence);
+router.get('/presence', can('users', 'read'), scopeUsers, getPresence);
 
 /**
  * @swagger
@@ -159,7 +170,12 @@ router.get('/presence', can('users', 'read'), getPresence);
  */
 router
   .route('/')
-  .get(can('users', 'read'), advancedResults(User, 'role', ['name', 'email', 'phone']), getUsers)
+  .get(
+    can('users', 'read'),
+    scopeUsers,
+    advancedResults(User, 'role', ['name', 'email', 'phone']),
+    getUsers
+  )
   .post(can('users', 'create'), validate(userCreateSchema), createUser);
 
 /**
@@ -196,8 +212,8 @@ router
  */
 router
   .route('/:id')
-  .get(can('users', 'read'), getUser)
-  .put(can('users', 'update'), validate(userUpdateSchema), updateUser)
-  .delete(can('users', 'delete'), deleteUser);
+  .get(can('users', 'read'), loadUser(), getUser)
+  .put(can('users', 'update'), loadUser({ manage: true }), validate(userUpdateSchema), updateUser)
+  .delete(can('users', 'delete'), loadUser({ manage: true }), deleteUser);
 
 export default router;

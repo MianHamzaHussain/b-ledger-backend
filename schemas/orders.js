@@ -99,6 +99,7 @@ const scratchPiece = z.object({
 
 export const orderStatusSchema = z.object({
   status: z.enum([
+    'created',
     'pending',
     'booked',
     'confirmed',

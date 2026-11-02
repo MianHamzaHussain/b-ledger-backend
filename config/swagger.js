@@ -251,7 +251,15 @@ const swaggerDefinition = {
           },
           status: {
             type: 'string',
-            enum: ['pending', 'confirmed', 'dispatched', 'delivered', 'cancelled', 'returned'],
+            enum: [
+              'created',
+              'pending',
+              'confirmed',
+              'dispatched',
+              'delivered',
+              'cancelled',
+              'returned'
+            ],
             description: 'Fulfillment axis'
           },
           paymentStatus: {
