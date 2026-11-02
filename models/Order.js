@@ -342,6 +342,13 @@ const OrderSchema = new mongoose.Schema(
     returnedItems: { type: [ReturnedItemSchema], default: [] },
     /** How many pieces in all (denormalised for the list row: "Returned 1 of 2"). */
     returnedPieces: { type: Number, min: 0 },
+    /**
+     * The Shopify orders this order was made from — more than one when the same person ordered twice the same
+     * day to the same address and the two were merged. Also what stops one Shopify order being brought in twice.
+     */
+    shopifyOrderIds: { type: [String], default: undefined },
+    /** The Pakistan day of the first Shopify order — a second one is merged only on the same day. */
+    shopifyDay: { type: String },
     /** Every other change after the order was taken (R9-4) — who, when, from → to. */
     activity: { type: [ActivityEventSchema], default: [] },
     /**
@@ -600,6 +607,7 @@ OrderSchema.index(
 OrderSchema.index({ business: 1, trackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, reversalTrackingId: 1 }, { sparse: true });
 OrderSchema.index({ business: 1, shopifyOrderNumber: 1 }, { sparse: true });
+OrderSchema.index({ business: 1, shopifyOrderIds: 1 }, { sparse: true });
 // The courier status check: dispatched parcels that have a courier booking.
 OrderSchema.index({ status: 1, 'courierBooking.provider': 1 });
 // The reminder job's query: booked orders by due day, across businesses.

@@ -202,7 +202,9 @@ export const NOTIFICATION_TYPES = {
   // The courier lists a city again that it had refused — held orders can be booked.
   COURIER_CITY_OPEN: 'courier-city-open',
   // The courier paid a batch of parcels into its wallet (the expected amount).
-  COURIER_PAID: 'courier-paid'
+  COURIER_PAID: 'courier-paid',
+  // A Shopify order could not be brought in by itself (an unknown product, a payment taken online…).
+  SHOPIFY_ATTENTION: 'shopify-attention'
 };
 
 /** Name of the protected, full-access role created by the seeder. */

@@ -27,6 +27,8 @@ import { createShutdown } from './utils/shutdown.js';
 import { reminderStatus, startBookingReminders } from './utils/bookingReminders.js';
 import { courierSyncStatus, startCourierSync } from './utils/courierSync.js';
 import { confirmOneFromCourier } from './controllers/orderController.js';
+import { receiveShopifyWebhook } from './controllers/shopifyController.js';
+import { shopifySyncStatus, startShopifySync } from './utils/shopify/sync.js';
 import Role from './models/Role.js';
 import { ensureBusinessOwnerRole } from './utils/presetRoles.js';
 
@@ -87,6 +89,14 @@ app.use(
       'https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-standalone-preset.js'
     ]
   })
+);
+
+// Shopify signs its webhook over the exact bytes it sends, so this one route gets the raw body — before the JSON
+// parser below would turn it into an object and the signature could no longer be checked.
+app.post(
+  '/api/v1/integrations/shopify/webhook',
+  express.raw({ type: '*/*', limit: '2mb' }),
+  receiveShopifyWebhook
 );
 
 app.use(express.json({ limit: '1mb' }));
@@ -150,7 +160,8 @@ app.get('/api/v1/health', (req, res) => {
     // A stale lastRunAt means the booked-order reminders have stopped.
     reminders: reminderStatus(),
     // The courier status check (PostEx): a stale lastRunAt means it has stopped.
-    courierSync: courierSyncStatus()
+    courierSync: courierSyncStatus(),
+    shopifySync: shopifySyncStatus()
   });
 });
 
@@ -176,6 +187,9 @@ const stopReminders = startBookingReminders();
 // The automatic delivered / returned goes through the same function a person's tap does.
 const stopCourierSync = startCourierSync({ confirm: confirmOneFromCourier });
 
+// New Shopify orders, asked for every 10 minutes (a webhook brings them in sooner when it is set up).
+const stopShopifySync = startShopifySync();
+
 // One shutdown for SIGTERM (systemd restarts and deploys) and Ctrl+C. See utils/shutdown.js for why a
 // bare `process.on('SIGTERM', stopTimer)` is not enough: it stops the process from exiting at all.
 const closeHttp = () =>
@@ -188,7 +202,13 @@ const closeHttp = () =>
   });
 const shutdown = createShutdown({
   log: logger,
-  steps: [stopReminders, stopCourierSync, closeHttp, () => mongoose.connection.close()]
+  steps: [
+    stopReminders,
+    stopCourierSync,
+    stopShopifySync,
+    closeHttp,
+    () => mongoose.connection.close()
+  ]
 });
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => void shutdown(signal));
 
