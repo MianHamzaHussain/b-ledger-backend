@@ -28,12 +28,17 @@ import { reminderStatus, startBookingReminders } from './utils/bookingReminders.
 import { courierSyncStatus, startCourierSync } from './utils/courierSync.js';
 import { confirmOneFromCourier } from './controllers/orderController.js';
 import Role from './models/Role.js';
+import { ensureBusinessOwnerRole } from './utils/presetRoles.js';
 
 const dirName = path.dirname(fileURLToPath(import.meta.url));
 
 await connectDB();
 // Role names became unique per business (Round 11): make the database's indexes match, dropping the old one on `name`.
 await Role.syncIndexes().catch(err => logger.warn({ err: err.message }, 'role indexes not synced'));
+// The predefined Business Owner role: created once if it is missing, never overwritten.
+await ensureBusinessOwnerRole()
+  .then(made => made && logger.info('created the Business Owner role'))
+  .catch(err => logger.warn({ err: err.message }, 'Business Owner role not created'));
 
 const app = express();
 

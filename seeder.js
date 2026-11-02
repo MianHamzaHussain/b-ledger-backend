@@ -3,6 +3,7 @@ import connectDB from './config/db.js';
 import Role from './models/Role.js';
 import User from './models/User.js';
 import { ADMIN_ROLE_NAME } from './utils/constants.js';
+import { ensureBusinessOwnerRole } from './utils/presetRoles.js';
 
 /**
  * Seeds the protected Admin role and the first admin user.
@@ -45,6 +46,9 @@ const importData = async () => {
   } else {
     console.log(`Role already present: ${ADMIN_ROLE_NAME}`);
   }
+
+  // The predefined Business Owner role, so an Admin can give it to the boss of a business straight away.
+  if (await ensureBusinessOwnerRole()) console.log('Created role: Business Owner');
 
   const existingAdmin = await User.findOne({ email: SEED_ADMIN_EMAIL.toLowerCase() });
 

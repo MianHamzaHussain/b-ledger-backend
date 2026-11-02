@@ -973,6 +973,11 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     `scopeUsers`/`scopeRoles` fails closed. `GET /roles/registry` adds `grantable` (null for an Admin). Role names are unique
     per business (`{ name, business }`; `Role.syncIndexes()` runs at boot to drop the old index on `name`). `test/delegation.test.js`
     is the escalation matrix — every refusal must leave the database unchanged; keep it passing.
+    **The predefined Business Owner role** (`utils/presetRoles.js`): created at boot, and by the seeder, if no role of that name exists; an existing
+    one is never touched. It is an explicit allow-list (`OWNER_ACCESS`): everything an owner runs, each area at scope `own` (people, roles,
+    integrations, orders, stock, production, money screens), their business's details read/update only, categories and costs read-only
+    — and **not** Accountant tools (`NOT_FOR_OWNERS`; an Admin ticks it for a particular owner). A new permission area fails
+    `test/presetRoles.test.js` until it is put in one of the two lists, so an owner never silently gains it.
     **Before deploying:** list non-admin roles that hold Users/Roles permissions (their stored scope `own` now limits them), then
     create the _Business Owner_ role in the app (Users and Roles at scope **own**, plus what the owner should run) and try it.
   - **A tracking number typed by hand is taken over** (`utils/couriers/adopt.js`, run at the start of every
