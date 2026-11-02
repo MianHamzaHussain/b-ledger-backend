@@ -957,6 +957,9 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     `deliveryAttempts.reason` (reasons only).
   - `npm run postex:stages` is a read-only check: it lists the key's parcels and prints the stage the app
     gives each one. Run it after any change to the stage rule, and once on the VPS after a deploy.
+  - **Phone notifications name the business.** `utils/pushHelper.js` builds each recipient's own text (`pushPayloadFor`): for someone who works on
+    more than one business (an Admin once there is more than one) the title starts with it — "Qam Style · New order #0122" — and the payload always
+    carries `business` (and `businessName`) so a tap opens the right business (`?biz=`, frontend `useBusinessFromLink`).
   - **Order status `created` (Round 11).** `ORDER_STATUS.CREATED` is the first status of every new order; `pending` now means
     "called, no answer" and keeps its old exits (existing `pending` orders were not migrated). `created` holds stock and is editable like
     any status before dispatch (`STOCK_HELD_STATUSES`, `BEFORE_DISPATCH`, `TAKES_ADVANCE`). A cancelled order reopens to `created`; a

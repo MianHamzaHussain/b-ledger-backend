@@ -1,5 +1,6 @@
 import webpush from 'web-push';
 import User from '../models/User.js';
+import Business from '../models/Business.js';
 import { fullAccessRoleIds } from './fullAccessRoles.js';
 import logger from './logger.js';
 
@@ -21,6 +22,26 @@ const initVapid = () => {
 };
 
 /**
+ * The text of one phone notification. For someone who works on more than one business the title starts with the
+ * business ("Qam Style · New order #0122"), so a glance at the lock screen says where it comes from; someone with a
+ * single business is spared the repetition. `business` rides along so a tap opens it in the right business.
+ */
+export const pushPayloadFor = ({ title, body, url, businessId, businessName, showBusiness }) => {
+  const heading = title || 'Update';
+  return JSON.stringify({
+    title: showBusiness && businessName ? `${businessName} · ${heading}` : heading,
+    body: body || 'You have a new update.',
+    url: url || '/dashboard',
+    business: String(businessId),
+    businessName: businessName || undefined
+  });
+};
+
+/** Does this person work on more than one business? (An Admin sees them all.) */
+export const worksOnSeveral = (isAdmin, assignedCount, totalBusinesses) =>
+  isAdmin ? totalBusinesses > 1 : assignedCount > 1;
+
+/**
  * Send a PWA background notification to everyone entitled to a business's
  * events: users assigned to it, plus all full-access admins.
  *
@@ -36,24 +57,32 @@ export const dispatchWebPushNotification = async (businessId, payload, excludeUs
   try {
     if (!initVapid()) return;
 
+    const adminRoles = await fullAccessRoleIds();
     const recipients = await User.find({
       status: 'active',
       'pushSubscriptions.0': { $exists: true },
       ...(excludeUserId ? { _id: { $ne: excludeUserId } } : {}),
-      $or: [{ assignedBusinesses: businessId }, { role: { $in: await fullAccessRoleIds() } }]
+      $or: [{ assignedBusinesses: businessId }, { role: { $in: adminRoles } }]
     });
 
-    const body = JSON.stringify({
-      title: payload.title || 'Update',
-      body: payload.body || 'You have a new update.',
-      url: payload.url || '/dashboard',
-      // So a tap on the phone opens the order in the business it belongs to, not the one last used.
-      business: String(businessId)
-    });
+    const business = await Business.findById(businessId).select('name');
+    const totalBusinesses = await Business.countDocuments();
+    const isAdminUser = user => adminRoles.some(id => String(id) === String(user.role));
 
     await Promise.allSettled(
-      recipients.flatMap(user =>
-        user.pushSubscriptions.map(subscription =>
+      recipients.flatMap(user => {
+        // Each person gets the wording that suits them: the business name only if they work on several.
+        const body = pushPayloadFor({
+          ...payload,
+          businessId,
+          businessName: business?.name?.trim(),
+          showBusiness: worksOnSeveral(
+            isAdminUser(user),
+            user.assignedBusinesses?.length ?? 0,
+            totalBusinesses
+          )
+        });
+        return user.pushSubscriptions.map(subscription =>
           webpush.sendNotification(subscription, body).catch(async err => {
             // 410 Gone / 404 Not Found mean the browser dropped the
             // subscription — prune it so the list does not rot.
@@ -64,8 +93,8 @@ export const dispatchWebPushNotification = async (businessId, payload, excludeUs
               ).catch(() => {});
             }
           })
-        )
-      )
+        );
+      })
     );
   } catch (error) {
     // Notifications are never allowed to fail the request that triggered them.
