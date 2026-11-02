@@ -962,12 +962,13 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     carries `business` (and `businessName`) so a tap opens the right business (`?biz=`, frontend `useBusinessFromLink`).
   - **Shopify orders come in by themselves (`utils/shopify/`).** One `ShopifyConnection` per business (Client ID plain; Client secret and the 24-hour
     token encrypted with `secretBox`, never returned). Auth is the client-credentials grant — it works only when the app and the store are in the same
-    Shopify organization. `sync.js` asks Shopify for orders placed since the last check **every 10 minutes** (`SHOPIFY_SYNC_SECONDS`), and a signed
-    **webhook** (`POST /integrations/shopify/webhook`, raw body, HMAC with the Client secret, mounted before the JSON parser) just triggers the same
-    sync — nothing in its body is trusted; if `API_PUBLIC_URL` is unset or Shopify refuses, the 10-minute check still does the job. Orders placed
+    Shopify organization. `sync.js` is **webhook-first**: a signed **webhook** (`POST /integrations/shopify/webhook`, raw body, HMAC with the Client secret, mounted before the JSON
+    parser) triggers a sync of that store — nothing in its body is trusted. The loop (`SHOPIFY_SYNC_SECONDS`, every 10 minutes) skips a store whose webhook is
+    active unless an hour has passed since its last check (a safety net — Shopify does not guarantee delivery); a store without a webhook is asked every pass.
+    `ensureWebhook` registers the webhook by itself once `API_PUBLIC_URL` is set (retried at most hourly per store), so no one has to reconnect. Orders placed
     before `goLiveAt` (the day it was connected) are never brought in. `importer.js` makes the order through the **existing** create/edit handlers
     (`callHandler`), with `clientRef = shopify:<id>` so one Shopify order can never become two. A line is matched to stock by a saved
-    `ShopifyVariantLink`, else by the **exact** product name and size (then the link is saved); anything else is **held** (`ShopifyHold`) with the reason —
+    `ShopifyVariantLink`, else by a barcode in the Shopify SKU, else by the product name and size compared the way a person reads them (case, spacing and look-alike dashes ignored; never a guess — two stock items with one name is a hold). The link is saved; anything else is **held** (`ShopifyHold`) with the reason, naming the unmatched item —
     an unknown product, not cash on delivery, a shipping charge, a discount, a total that is not the items' sum, no mobile number or address. A second order
     from the same person (same number, address and city) on the same Pakistan day merges into the first **only while that order is Created or Pending**
     (not yet confirmed): its lines are added, its Shopify number is appended (`51486+51487`), the timeline says so and a "New Shopify order added to #…"

@@ -15,6 +15,14 @@ const PAGE = 50;
 const MAX_PAGES = 10;
 /** Look a little before the last check, so an order placed at that exact moment is never missed. */
 const OVERLAP_MS = 10 * 60 * 1000;
+/**
+ * Once Shopify is telling us about every order (the webhook is set up), asking every 10 minutes is wasted work; the
+ * question is kept hourly only as a safety net, because Shopify itself says a webhook can be missed.
+ */
+const SAFETY_MS = 60 * 60 * 1000;
+/** Setting up the webhook is retried at most this often per store, so a refusal is not hammered. */
+const WEBHOOK_RETRY_MS = 60 * 60 * 1000;
+const webhookTried = new Map();
 
 const status = {
   lastRunAt: null,
@@ -87,6 +95,7 @@ export const syncConnection = async (connectionOrId, { retry = false } = {}) => 
   try {
     const connection = await withSecrets(id);
     if (!connection?.isActive) return tally;
+    await ensureWebhook(connection);
     const startedAt = new Date();
     try {
       const actor = await actorFor(connection);
@@ -132,9 +141,16 @@ export const runShopifySync = async ({ business = null } = {}) => {
   const connections = await ShopifyConnection.find({
     isActive: true,
     ...(business ? { business } : {})
-  }).select('_id');
+  }).select('_id webhookActive lastSyncAt');
+  // A store the webhook covers is only double-checked hourly; one without a webhook is asked every pass. Asking for
+  // one business ("Check now") always asks.
+  const due = c =>
+    Boolean(business) ||
+    !c.webhookActive ||
+    !c.lastSyncAt ||
+    Date.now() - c.lastSyncAt.getTime() >= SAFETY_MS;
   const total = { checked: 0, created: 0, merged: 0, held: 0, skipped: 0, errors: 0 };
-  for (const { _id } of connections) {
+  for (const { _id } of connections.filter(due)) {
     const t = await syncConnection(_id);
     for (const key of Object.keys(total)) total[key] += t[key] ?? 0;
   }
@@ -180,6 +196,23 @@ export const registerWebhook = async connection => {
     return false;
   }
 };
+
+/**
+ * Set the webhook up when it is not yet — so adding `API_PUBLIC_URL` later, or a refusal that has since cleared, needs
+ * no one to reconnect. Quiet and cheap: nothing happens without a public address, and a failure waits an hour.
+ */
+const ensureWebhook = async connection => {
+  if (connection.webhookActive || !process.env.API_PUBLIC_URL) return;
+  const last = webhookTried.get(String(connection._id));
+  if (last && Date.now() - last < WEBHOOK_RETRY_MS) return;
+  webhookTried.set(String(connection._id), Date.now());
+  if (await registerWebhook(connection)) {
+    await ShopifyConnection.updateOne({ _id: connection._id }, { $set: { webhookActive: true } });
+    connection.webhookActive = true;
+  }
+};
+
+export const clearWebhookRetry = () => webhookTried.clear();
 
 /** Run now and then every 10 minutes; never overlaps itself, never takes the server down. */
 export const startShopifySync = ({ everyMs = EVERY_MS } = {}) => {

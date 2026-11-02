@@ -10,9 +10,10 @@ export const fakeShopify = ({
   tokenStatus = 200,
   tokenBody,
   shopName = 'Test Store ',
-  ordersFail = false
+  ordersFail = false,
+  webhookFail = false
 } = {}) => {
-  const state = { orders, calls: [], tokenRequests: 0 };
+  const state = { orders, calls: [], tokenRequests: 0, orderQueries: 0, webhookCalls: 0 };
   shopifyDeps.fetchImpl = async (url, init) => {
     const u = String(url);
     state.calls.push(u);
@@ -28,6 +29,17 @@ export const fakeShopify = ({
     if (u.includes('/graphql.json')) {
       const { query } = JSON.parse(init.body);
       if (query.includes('webhookSubscriptionCreate')) {
+        state.webhookCalls += 1;
+        if (webhookFail) {
+          return reply({
+            data: {
+              webhookSubscriptionCreate: {
+                webhookSubscription: null,
+                userErrors: [{ message: 'Address is not allowed' }]
+              }
+            }
+          });
+        }
         return reply({
           data: {
             webhookSubscriptionCreate: { webhookSubscription: { id: 'gid://x/1' }, userErrors: [] }
@@ -35,6 +47,7 @@ export const fakeShopify = ({
         });
       }
       if (query.includes('orders(')) {
+        state.orderQueries += 1;
         if (ordersFail) return reply({}, 503);
         return reply({
           data: {
