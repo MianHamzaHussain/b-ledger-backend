@@ -22,30 +22,56 @@ import { mapOrder, problemsWith, sameText } from './mapper.js';
 /** Orders that have not had their confirmation call yet — the only ones another order may be merged into. */
 const MERGEABLE = [ORDER_STATUS.CREATED, ORDER_STATUS.PENDING];
 
-const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * Names compared the way a person reads them: case, spacing and the many look-alike dashes ("Noor-e-Ain" typed with
+ * an en dash is still Noor-e-Ain) do not make two names different.
+ */
 const plain = text =>
   String(text ?? '')
-    .trim()
+    .normalize('NFKC')
     .toLowerCase()
-    .replace(/\s+/g, ' ');
+    .replace(/[‐-―−]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-/** The one stock item whose name (and size) is exactly this Shopify line — or nothing, never a guess. */
+/**
+ * The one stock item for this Shopify line — or nothing, never a guess. A barcode in the SKU field is exact (barcodes
+ * are unique across the catalogue); otherwise the name and size must match. `why` says in words what failed.
+ */
 const matchByName = async (business, line) => {
-  if (!line.title) return null;
-  const products = await Product.find({
-    business,
-    name: new RegExp(`^${escapeRegex(line.title)}$`, 'i')
-  }).select('name variants');
-  if (products.length !== 1) return null;
+  if (line.sku) {
+    const bySku = await Product.findOne({ business, 'variants.barcode': line.sku }).select(
+      'variants'
+    );
+    const variant = bySku?.variants.find(v => v.barcode === line.sku);
+    if (variant) return { match: { product: bySku._id, variantId: variant._id } };
+  }
+  if (!line.title) return { why: 'an item has no name in Shopify' };
+
+  const wantedName = plain(line.title);
+  const products = (await Product.find({ business }).select('name variants')).filter(
+    p => plain(p.name) === wantedName
+  );
+  if (products.length === 0) return { why: `no stock item is named "${line.title}"` };
+  if (products.length > 1) {
+    return {
+      why: `${products.length} stock items are named "${line.title}" — match this one by hand`
+    };
+  }
 
   const [product] = products;
   const wanted = plain(line.variantTitle);
   const isDefault = !wanted || wanted === 'default title';
   if (isDefault && product.variants.length === 1) {
-    return { product: product._id, variantId: product.variants[0]._id };
+    return { match: { product: product._id, variantId: product.variants[0]._id } };
   }
   const sized = product.variants.filter(v => plain(v.label) === wanted);
-  return sized.length === 1 ? { product: product._id, variantId: sized[0]._id } : null;
+  if (sized.length === 1) return { match: { product: product._id, variantId: sized[0]._id } };
+  return {
+    why: sized.length
+      ? `"${line.title}" has the size "${line.variantTitle}" more than once in stock`
+      : `"${line.title}" has no size "${line.variantTitle || 'default'}" in stock`
+  };
 };
 
 /** The stock item for one Shopify line: a saved link first, then an exact name match (saved for next time). */
@@ -58,10 +84,10 @@ const resolveLine = async (business, line) => {
         business,
         'variants._id': link.variantId
       });
-      if (stillThere) return { product: link.product, variantId: link.variantId };
+      if (stillThere) return { match: { product: link.product, variantId: link.variantId } };
     }
   }
-  const match = await matchByName(business, line);
+  const { match, why } = await matchByName(business, line);
   if (match && line.variantId) {
     await ShopifyVariantLink.updateOne(
       { business, shopifyVariantId: line.variantId },
@@ -77,7 +103,7 @@ const resolveLine = async (business, line) => {
       { upsert: true }
     );
   }
-  return match;
+  return { match, why };
 };
 
 /** Keep an order that cannot be made by itself, with why, and tell people once. */
@@ -235,10 +261,12 @@ export const importOrder = async (connection, node, actor) => {
   const reasons = problemsWith(mapped);
   const items = [];
   const unmatched = [];
+  const whys = [];
   for (const line of mapped.lines) {
-    const found = await resolveLine(business, line);
+    const { match: found, why } = await resolveLine(business, line);
     if (found) items.push({ ...found, quantity: line.quantity, unitPrice: line.unitPrice });
     else {
+      whys.push(why);
       unmatched.push({
         title: line.title,
         variantTitle: line.variantTitle,
@@ -251,6 +279,7 @@ export const importOrder = async (connection, node, actor) => {
     reasons.push(
       `${unmatched.length} item${unmatched.length === 1 ? '' : 's'} not matched to your stock yet`
     );
+    reasons.push(...whys.filter(Boolean));
   }
   if (reasons.length) return holdOrder(business, node, mapped, reasons, unmatched);
 

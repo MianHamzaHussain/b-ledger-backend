@@ -525,3 +525,78 @@ test('the webhook does not trust its own body: a tampered body with the old sign
   const sig = crypto.createHmac('sha256', SECRET).update(Buffer.from(raw)).digest('base64');
   assert.equal(await webhook({ body: '{"id":2}', signature: sig }), 401);
 });
+
+// ── matching a line to stock ─────────────────────────────────────────────────
+
+const lineOf = extra => ({
+  title: 'BEIGE MEHFIL',
+  variantTitle: 'M',
+  sku: '',
+  quantity: 1,
+  originalUnitPriceSet: { shopMoney: { amount: '16000' } },
+  variant: { id: 'gid://shopify/ProductVariant/501' },
+  product: { id: 'gid://shopify/Product/501' },
+  ...extra
+});
+
+test('look-alike dashes, extra spaces and capitals in a name do not stop the match', async () => {
+  await Product.updateOne({ _id: product._id }, { $set: { name: 'Noor-e-Ain' } });
+  const out = await importOrder(
+    connection,
+    orderNode({ number: 51490, lines: [lineOf({ title: ' noor–e–ain ', variantTitle: 'M' })] }),
+    actor
+  );
+  assert.equal(out.result, 'created');
+});
+
+test('a barcode in the Shopify SKU matches exactly, whatever the names say', async () => {
+  const variantL = (await Product.findById(product._id)).variants.find(v => v.label === 'L');
+  const barcode = variantL.barcode;
+  const out = await importOrder(
+    connection,
+    orderNode({
+      number: 51491,
+      lines: [lineOf({ title: 'Something else', variantTitle: 'XS', sku: barcode })]
+    }),
+    actor
+  );
+  assert.equal(out.result, 'created');
+  assert.equal(
+    String((await Order.findById(out.orderId)).items[0].variantId),
+    String(variantL._id)
+  );
+});
+
+test('a held order says why: no such item, two with the name, or no such size', async () => {
+  const none = await importOrder(
+    connection,
+    orderNode({ number: 51492, lines: [lineOf({ title: 'Nothing like it' })] }),
+    actor
+  );
+  assert.equal(none.result, 'held');
+
+  const noSize = await importOrder(
+    connection,
+    orderNode({ number: 51493, lines: [lineOf({ variantTitle: 'XS' })] }),
+    actor
+  );
+  assert.equal(noSize.result, 'held');
+
+  await Product.create({
+    business: biz._id,
+    category: oid(),
+    name: 'Beige Mehfil',
+    createdBy: userId,
+    variants: [{ label: 'M', costPrice: 0, salePrice: 1, stock: 1 }]
+  });
+  const twice = await importOrder(connection, orderNode({ number: 51494 }), actor);
+  assert.equal(twice.result, 'held');
+
+  const reasonsOf = async n =>
+    (await ShopifyHold.findOne({ business: biz._id, shopifyOrderId: String(n) })).reasons.join(
+      ' | '
+    );
+  assert.match(await reasonsOf(51492), /no stock item is named "Nothing like it"/);
+  assert.match(await reasonsOf(51493), /has no size "XS" in stock/);
+  assert.match(await reasonsOf(51494), /2 stock items are named/);
+});

@@ -968,7 +968,7 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     `ensureWebhook` registers the webhook by itself once `API_PUBLIC_URL` is set (retried at most hourly per store), so no one has to reconnect. Orders placed
     before `goLiveAt` (the day it was connected) are never brought in. `importer.js` makes the order through the **existing** create/edit handlers
     (`callHandler`), with `clientRef = shopify:<id>` so one Shopify order can never become two. A line is matched to stock by a saved
-    `ShopifyVariantLink`, else by the **exact** product name and size (then the link is saved); anything else is **held** (`ShopifyHold`) with the reason —
+    `ShopifyVariantLink`, else by a barcode in the Shopify SKU, else by the product name and size compared the way a person reads them (case, spacing and look-alike dashes ignored; never a guess — two stock items with one name is a hold). The link is saved; anything else is **held** (`ShopifyHold`) with the reason, naming the unmatched item —
     an unknown product, not cash on delivery, a shipping charge, a discount, a total that is not the items' sum, no mobile number or address. A second order
     from the same person (same number, address and city) on the same Pakistan day merges into the first **only while that order is Created or Pending**
     (not yet confirmed): its lines are added, its Shopify number is appended (`51486+51487`), the timeline says so and a "New Shopify order added to #…"
