@@ -46,7 +46,10 @@ export const RESOURCES = {
       update: "change a person's role, businesses and access, or switch them off",
       delete: 'remove a person'
     },
-    scopable: false
+    // Scope "own" = a Business Owner: only people whose businesses are all theirs (utils/delegation.js). Until a route
+    // adds `scopeUsers` the filter below matches nothing, so a forgotten guard shows no one rather than everyone.
+    scopable: true,
+    ownFilter: () => ({ _id: { $in: [] } })
   },
   roles: {
     label: 'Roles',
@@ -58,7 +61,9 @@ export const RESOURCES = {
       update: 'change what a role is allowed to do',
       delete: 'remove a role'
     },
-    scopable: false
+    // Scope "own" = a Business Owner: the roles of their own businesses (utils/delegation.js); fails closed like users.
+    scopable: true,
+    ownFilter: () => ({ _id: { $in: [] } })
   },
   businesses: {
     label: 'Businesses',

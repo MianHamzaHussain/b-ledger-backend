@@ -961,6 +961,20 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     "called, no answer" and keeps its old exits (existing `pending` orders were not migrated). `created` holds stock and is editable like
     any status before dispatch (`STOCK_HELD_STATUSES`, `BEFORE_DISPATCH`, `TAKES_ADVANCE`). A cancelled order reopens to `created`; a
     booked one may be released to `created` or `pending`. The timeline always opens with "Order placed" for the first step, whichever of the two it is.
+  - **Business Owner — delegated users and roles (Round 11, `utils/delegation.js`).** `users` and `roles` are now scopable. A
+    person whose Users/Roles scope is `own` (a Business Owner) manages only their own businesses; scope `all` is an
+    Admin-granted global manager; Admin is unrestricted. The rules, applied on **every** request: **R1** a person they add
+    or change is assigned only businesses they have (at least one); **R2** they see only people whose businesses are _all_
+    theirs and who are not an Admin — anyone else is a **404** (`loadUser`, `scopeUsers`); **R3** the ceiling — they give only
+    actions they hold and no wider scope (`assertWithinCeiling`); **R4** Users, Roles and Accountant tools are never delegated;
+    **R5** roles: those made for their own businesses (`Role.business`, editable) and Admin-made ones marked `delegable`
+    (usable, not editable); **R6** not themselves, not an Admin, not another manager; personal `permissionOverrides` are
+    Admin-only. `can('users'|'roles', …)` leaves a filter that matches nothing for an own-scope manager, so a route that forgets
+    `scopeUsers`/`scopeRoles` fails closed. `GET /roles/registry` adds `grantable` (null for an Admin). Role names are unique
+    per business (`{ name, business }`; `Role.syncIndexes()` runs at boot to drop the old index on `name`). `test/delegation.test.js`
+    is the escalation matrix — every refusal must leave the database unchanged; keep it passing.
+    **Before deploying:** list non-admin roles that hold Users/Roles permissions (their stored scope `own` now limits them), then
+    create the _Business Owner_ role in the app (Users and Roles at scope **own**, plus what the owner should run) and try it.
   - **A tracking number typed by hand is taken over** (`utils/couriers/adopt.js`, run at the start of every
     pass and of "Refresh couriers"). A dispatched order with a typed `trackingId` and no `courierBooking`
     is looked up in PostEx's bulk tracking; it is followed only when the parcel is PostEx's, on no other

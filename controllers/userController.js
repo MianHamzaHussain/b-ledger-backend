@@ -9,6 +9,7 @@ import { getInvitationEmail } from '../templates/emails/invitation.js';
 import logger from '../utils/logger.js';
 import { listSessions, revokeSession, revokeOtherSessions } from '../utils/sessions.js';
 import mongoose from 'mongoose';
+import { assertBusinessesAllowed, assertCanGiveRole, isAdmin } from '../utils/delegation.js';
 
 /** Invite links live for 24h — long enough for a new hire to act, short enough to expire. */
 const INVITE_EXPIRY_MS = 24 * 60 * 60 * 1000;
@@ -54,7 +55,16 @@ export const getUsers = asyncHandler(async (req, res, next) => {
  * @access    Private (users:read)
  */
 export const getPresence = asyncHandler(async (req, res) => {
-  res.status(200).json({ success: true, data: { online: presence.onlineIds() } });
+  const online = presence.onlineIds();
+  // Someone who sees only their own businesses' people is told only about them.
+  const filter = req.accessFilter ?? {};
+  const visible = Object.keys(filter).length
+    ? new Set((await User.find(filter).select('_id')).map(u => String(u._id)))
+    : null;
+  res.status(200).json({
+    success: true,
+    data: { online: visible ? online.filter(id => visible.has(String(id))) : online }
+  });
 });
 
 /**
@@ -94,6 +104,9 @@ export const createUser = asyncHandler(async (req, res, next) => {
   if (role.fullAccess && !req.user.role?.fullAccess) {
     return next(new ErrorResponse('Not authorized to assign the Admin role', 403));
   }
+  // A manager who is not an Admin: only their own businesses, only roles they may give, nothing above their own access.
+  assertBusinessesAllowed(req.user, req.body.assignedBusinesses);
+  assertCanGiveRole(req.user, role, req.body.permissionOverrides);
 
   const user = new User({
     ...req.body,
@@ -140,10 +153,18 @@ export const reinviteUser = asyncHandler(async (req, res, next) => {
  * @access    Private (users:update)
  */
 export const updateUser = asyncHandler(async (req, res, next) => {
+  // `loadUser({ manage: true })` has already checked the person may be seen and changed by the signed-in user.
   const user = await User.findById(req.params.id);
 
   if (!user) {
     return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));
+  }
+
+  if (req.body.assignedBusinesses !== undefined) {
+    assertBusinessesAllowed(req.user, req.body.assignedBusinesses);
+  }
+  if (req.body.permissionOverrides?.length && !isAdmin(req.user)) {
+    return next(new ErrorResponse('Only an Admin can set personal permissions', 403));
   }
 
   // Passwords are changed by their owner through /auth/updatepassword, never
@@ -158,6 +179,7 @@ export const updateUser = asyncHandler(async (req, res, next) => {
     if (role.fullAccess && !req.user.role?.fullAccess) {
       return next(new ErrorResponse('Not authorized to assign the Admin role', 403));
     }
+    assertCanGiveRole(req.user, role, req.body.permissionOverrides);
   }
 
   Object.assign(user, req.body);
