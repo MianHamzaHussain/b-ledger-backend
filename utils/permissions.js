@@ -136,14 +136,14 @@ export const RESOURCES = {
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
   },
-  couriers: {
-    label: 'Couriers',
+  integrations: {
+    label: 'Integrations',
     description:
-      'The courier companies you send parcels with: add one, connect its key, and see its connection.',
+      'The services you connect: the couriers you send parcels with and, later, your Shopify store. Add one, connect its key and see how it is connected.',
     can: {
-      read: 'see the couriers and how each is connected',
-      create: 'add a courier and connect its key',
-      update: "change a courier's connection or switch its automatic steps"
+      read: 'see the integrations and how each is connected',
+      create: 'add a courier or connect a store and enter its key',
+      update: "change an integration's connection or switch its automatic steps"
     },
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })
