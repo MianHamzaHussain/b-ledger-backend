@@ -154,30 +154,49 @@ const createNew = async (connection, actor, mapped, items) => {
     }
   });
   const order = body.data;
+  const note = await samePhoneNote(connection.business, mapped, order._id);
   await Order.updateOne(
     { _id: order._id },
-    { $set: { shopifyOrderIds: [mapped.id], shopifyDay: pakistanDay(new Date(mapped.createdAt)) } },
+    {
+      $set: {
+        shopifyOrderIds: [mapped.id],
+        shopifyDay: pakistanDay(new Date(mapped.createdAt)),
+        ...(note ? { note } : {})
+      }
+    },
     { timestamps: false }
   );
   return { result: 'created', orderId: order._id, orderNumber: order.orderNumber };
 };
 
-/** An order from the same person, to the same address, the same day, not yet called: this one joins it. */
-const findMergeTarget = async (business, mapped) => {
+/** Orders from the same person (by phone), from Shopify, the same Pakistan day, not yet called. */
+const sameDayOrders = async (business, mapped) => {
   const customer = await Customer.findOne({ business, phone: normalizePhone(mapped.phone) });
-  if (!customer) return null;
-  const candidates = await Order.find({
+  if (!customer) return [];
+  return Order.find({
     business,
     customer: customer._id,
     source: SALES_CHANNELS.SHOPIFY,
     status: { $in: MERGEABLE },
     shopifyDay: pakistanDay(new Date(mapped.createdAt))
   });
-  return (
-    candidates.find(
-      o => sameText(o.deliveryAddress, mapped.address) && sameText(o.city, mapped.city)
-    ) ?? null
-  );
+};
+
+/** Same person, same address, same day, not yet called: this one joins it. */
+const findMergeTarget = async (business, mapped) =>
+  (await sameDayOrders(business, mapped)).find(
+    o => sameText(o.deliveryAddress, mapped.address) && sameText(o.city, mapped.city)
+  ) ?? null;
+
+/**
+ * A same-day order from the same phone to a different address is never merged (a wrong merge sends a parcel to the
+ * wrong house), but the person making the call should know to ask — so the new order says so in its note.
+ */
+const samePhoneNote = async (business, mapped, exceptId) => {
+  const [other] = (await sameDayOrders(business, mapped)).filter(o => !o._id.equals(exceptId));
+  return other
+    ? `Same phone as order #${other.orderNumber} today, but a different address — check with the customer before calling.`
+    : undefined;
 };
 
 const mergeInto = async (actor, order, mapped, items) => {
