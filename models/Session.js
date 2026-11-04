@@ -20,6 +20,10 @@ const SessionSchema = new mongoose.Schema(
      * the mark of a copied cookie — the whole session is then revoked (`detectReuse`).
      */
     previousHashes: { type: [String], select: false },
+    /** When the refresh token last rotated — a replay of the newest rotated token just after this is a lost response. */
+    rotatedAt: { type: Date },
+    /** The one rotated token already answered inside the grace window; a second replay of it is a copy (revoke). */
+    recoveredHash: { type: String, select: false },
     /** A session adopted from a refresh cookie issued before sessions existed. */
     isLegacy: { type: Boolean, default: undefined },
     expiresAt: { type: Date, required: true }
