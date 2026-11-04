@@ -449,6 +449,8 @@ const OrderSchema = new mongoose.Schema(
           chargeClaimedAt: { type: Date },
           /** A charge the courier took (a returned parcel, or a delivered one with no cash on delivery) moved onto its wallet — set once. */
           walletChargeEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
+          /** When that charge was moved onto the wallet — what the wallet list sorts on. */
+          walletChargedAt: { type: Date },
           billPrinted: { type: Boolean },
           billPrintedAt: { type: Date },
           billPrintedBy: { type: mongoose.Schema.ObjectId, ref: 'User' },

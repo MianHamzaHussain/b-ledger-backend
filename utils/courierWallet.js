@@ -242,7 +242,10 @@ const recordCourierCharges = async (party, userId, now) => {
     await Order.updateMany(
       { 'courierBooking.chargeClaim': token },
       {
-        $set: { 'courierBooking.walletChargeEntry': entry._id },
+        $set: {
+          'courierBooking.walletChargeEntry': entry._id,
+          'courierBooking.walletChargedAt': now
+        },
         $unset: { 'courierBooking.chargeClaim': 1, 'courierBooking.chargeClaimedAt': 1 }
       },
       { timestamps: false }

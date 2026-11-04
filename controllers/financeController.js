@@ -17,7 +17,11 @@ import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledg
 import { salaryLines } from '../utils/partyPosting.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
 import { cashbook, moneySummary } from '../utils/cashbook.js';
-import { courierWalletStatement } from '../utils/courierWalletStatement.js';
+import {
+  WALLET_TABS,
+  courierWalletParcels,
+  courierWalletSummary
+} from '../utils/courierWalletStatement.js';
 import { undoCourierInvoice } from '../utils/courierInvoice.js';
 import { courierPerformance } from '../utils/courierPerformance.js';
 import {
@@ -751,25 +755,28 @@ const parseDateParam = (value, name, edge = 'start') => {
   return date;
 };
 
-/**
- * @desc   The courier's wallet parcel by parcel: tracking number, order, and what it paid (+) or charged (−), with
- *         where the wallet stands — what is in it, what is still to come, what will be taken.
- * @route  GET /api/v1/finance/courier-wallet?business=&account=<wallet id>&from=&to=   (journal:read — scoped)
- */
-export const getCourierWallet = asyncHandler(async (req, res, next) => {
+/** The wallet named in the query, if it is one of this business's courier wallets — or an error to hand on. */
+const courierWalletOf = async (req, next) => {
   const { business, account } = req.query;
   if (!business) return next(new ErrorResponse('Select a business', 400));
   if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
-
   const wallet = mongoose.isValidObjectId(account)
     ? await Account.findOne({ _id: account, business, heldByCourier: true })
     : null;
   if (!wallet) return next(new ErrorResponse('That is not a courier wallet', 404));
+  return wallet;
+};
 
-  const out = await courierWalletStatement(business, wallet, {
-    from: parseDateParam(req.query.from, 'from'),
-    to: parseDateParam(req.query.to, 'to', 'end')
-  });
+/**
+ * @desc   Where the courier's wallet stands — what is in it, what the courier still owes, what will be taken — and
+ *         how many parcels each tab holds. The parcels themselves come a page at a time (getCourierWalletParcels).
+ * @route  GET /api/v1/finance/courier-wallet?business=&account=<wallet id>   (journal:read — scoped)
+ */
+export const getCourierWallet = asyncHandler(async (req, res, next) => {
+  const wallet = await courierWalletOf(req, next);
+  if (!wallet) return;
+
+  const out = await courierWalletSummary(req.query.business, wallet);
   res.status(200).json({
     success: true,
     data: {
@@ -779,13 +786,43 @@ export const getCourierWallet = asyncHandler(async (req, res, next) => {
       charges: fromPaisa(out.pendingChargesPaisa),
       willGet: fromPaisa(out.willGetPaisa),
       feeUnknown: out.feeUnknown,
-      total: out.total,
-      rows: out.rows.map(({ codPaisa, amountPaisa, ...r }) => ({
-        ...r,
-        cod: fromPaisa(codPaisa),
-        amount: amountPaisa == null ? null : fromPaisa(amountPaisa)
-      }))
+      counts: out.counts
     }
+  });
+});
+
+/**
+ * @desc   A page of the courier's parcels, newest first: tracking number, order, and what it paid (+) or charged (−).
+ * @route  GET /api/v1/finance/courier-wallet/parcels?business=&account=&tab=all|paid|upcoming|charges&search=&page=&limit=
+ *         (journal:read — scoped)
+ */
+export const getCourierWalletParcels = asyncHandler(async (req, res, next) => {
+  const wallet = await courierWalletOf(req, next);
+  if (!wallet) return;
+
+  const tab = req.query.tab ?? 'all';
+  if (!WALLET_TABS.includes(tab))
+    return next(new ErrorResponse('Choose all, paid, upcoming or charges', 400));
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
+  const search = String(req.query.search ?? '').slice(0, 100);
+
+  const { total, rows } = await courierWalletParcels(req.query.business, wallet, {
+    tab,
+    search,
+    page,
+    limit
+  });
+  res.status(200).json({
+    success: true,
+    count: rows.length,
+    total,
+    pagination: page * limit < total ? { next: { page: page + 1, limit } } : {},
+    data: rows.map(({ codPaisa, amountPaisa, ...r }) => ({
+      ...r,
+      cod: fromPaisa(codPaisa),
+      amount: amountPaisa == null ? null : fromPaisa(amountPaisa)
+    }))
   });
 });
 

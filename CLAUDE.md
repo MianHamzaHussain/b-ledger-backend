@@ -1124,12 +1124,15 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   twice. **The wallet cannot be spent**: `resolveMoney` refuses a `heldByCourier` account for refunds, expenses,
   salaries and payments (a server rule, not only the screen); `Move money` may take it as the **source** only
   (`allowCourierHeld`), never as the destination. **Reading it is allowed** — the Cash book opens on it
-  (`getCashbook` passes `allowCourierHeld`; every spending path still refuses). **`GET /finance/courier-wallet`**
-  (`utils/courierWalletStatement.js`, `journal:read`, scoped) lists the wallet **parcel by parcel**: tracking
-  number, order, and `paid` (+ COD − charges), `charge` (− a return's or a no-cash parcel's charge), `owed`
-  (delivered, not paid yet; blank while the fee is unknown) and `charge-pending`, plus where it stands — `inWallet`,
-  `owed`, `charges`, `willGet` (= in wallet + owed − charges). A parcel recorded before `walletPaisa` existed is
-  recomputed from its sale entry (`netOwed`), so no migration. Nothing is posted by reading.
+  (`getCashbook` passes `allowCourierHeld`; every spending path still refuses). **`GET /finance/courier-wallet`** (`utils/courierWalletStatement.js`, `journal:read`,
+  scoped) is the light **summary** — `inWallet`, `owed`, `charges`, `willGet` (= in wallet + owed − charges), `feeUnknown`,
+  and `counts` per tab; **`GET /finance/courier-wallet/parcels?tab=all|paid|upcoming|charges&search=&page=&limit=`** is a
+  **page** of parcels (standard list envelope, newest first by `codSettledAt` / `walletChargedAt` / `returnedAt` /
+  `deliveredAt`), so a long history never loads at once. Each row: tracking number, order, `kind` — `paid` (+ COD −
+  charges), `charge` (− a return's or a no-cash parcel's charge), `owed` (delivered, not paid yet; blank while the fee is
+  unknown) or `charge-pending` — and its amount. "Upcoming" = `owed` + `charge-pending`. `search` is a plain word (order
+  number, tracking number or customer), never a pattern. A parcel recorded before `walletPaisa` existed is recomputed
+  from its sale entry (`netOwed`), so no migration. Nothing is posted by reading.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
