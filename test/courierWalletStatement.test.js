@@ -1,5 +1,6 @@
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import mongoose from 'mongoose';
 import { connect, clear, disconnect, runHandler, userId } from './helpers/db.js';
 import Order from '../models/Order.js';
 import Party from '../models/Party.js';
@@ -117,5 +118,17 @@ test('only a courier wallet of this business can be read', async () => {
       accessFilter: {}
     }),
     /not a courier wallet/
+  );
+});
+
+test('another business’s wallet reads as not found, never as forbidden', async () => {
+  const { biz, courier } = await deliveredParcel();
+  const wallet = await walletFor(biz, courier);
+  await assert.rejects(
+    runHandler(getCourierWallet, {
+      query: { business: String(biz._id), account: String(wallet._id) },
+      accessFilter: { business: { $in: [String(new mongoose.Types.ObjectId())] } }
+    }),
+    /Business not found/
   );
 });
