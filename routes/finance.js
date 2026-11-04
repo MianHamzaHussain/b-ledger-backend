@@ -56,6 +56,7 @@ import {
   unlockPeriod,
   getCashbook,
   getCourierWallet,
+  getCourierWalletParcels,
   getMoneySummary
 } from '../controllers/financeController.js';
 
@@ -427,19 +428,34 @@ router.get('/cashbook', can('journal', 'read'), getCashbook);
  * @swagger
  * /finance/courier-wallet:
  *   get:
- *     summary: The courier's wallet parcel by parcel — tracking, order, and what was paid (+) or charged (−)
+ *     summary: Where the courier's wallet stands, and how many parcels each tab holds
  *     tags: [Finance]
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: query, name: business, required: true, schema: { type: string } }
  *       - { in: query, name: account, required: true, schema: { type: string }, description: The courier wallet account id }
- *       - { in: query, name: from, schema: { type: string, format: date } }
- *       - { in: query, name: to, schema: { type: string, format: date } }
  *     responses:
- *       200: { description: "inWallet, owed, charges, willGet and one row per parcel" }
+ *       200: { description: "inWallet, owed, charges, willGet, feeUnknown and counts per tab" }
+ *       404: { description: Not a courier wallet of this business }
+ * /finance/courier-wallet/parcels:
+ *   get:
+ *     summary: A page of the wallet's parcels — tracking, order, and what was paid (+) or charged (−)
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: account, required: true, schema: { type: string } }
+ *       - { in: query, name: tab, schema: { type: string, enum: [all, paid, upcoming, charges] } }
+ *       - { in: query, name: search, schema: { type: string }, description: Order number, tracking number or customer }
+ *       - { in: query, name: page, schema: { type: integer } }
+ *       - { in: query, name: limit, schema: { type: integer, maximum: 100 } }
+ *     responses:
+ *       200: { description: The standard list envelope, newest first }
+ *       400: { description: Unknown tab }
  *       404: { description: Not a courier wallet of this business }
  */
 router.get('/courier-wallet', can('journal', 'read'), getCourierWallet);
+router.get('/courier-wallet/parcels', can('journal', 'read'), getCourierWalletParcels);
 
 /**
  * @swagger
