@@ -1123,7 +1123,13 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   **minus** until a payout nets it. Parcels are claimed in a conditional write first, so two runs cannot pay one
   twice. **The wallet cannot be spent**: `resolveMoney` refuses a `heldByCourier` account for refunds, expenses,
   salaries and payments (a server rule, not only the screen); `Move money` may take it as the **source** only
-  (`allowCourierHeld`), never as the destination.
+  (`allowCourierHeld`), never as the destination. **Reading it is allowed** — the Cash book opens on it
+  (`getCashbook` passes `allowCourierHeld`; every spending path still refuses). **`GET /finance/courier-wallet`**
+  (`utils/courierWalletStatement.js`, `journal:read`, scoped) lists the wallet **parcel by parcel**: tracking
+  number, order, and `paid` (+ COD − charges), `charge` (− a return's or a no-cash parcel's charge), `owed`
+  (delivered, not paid yet; blank while the fee is unknown) and `charge-pending`, plus where it stands — `inWallet`,
+  `owed`, `charges`, `willGet` (= in wallet + owed − charges). A parcel recorded before `walletPaisa` existed is
+  recomputed from its sale entry (`netOwed`), so no migration. Nothing is posted by reading.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
