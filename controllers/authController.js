@@ -11,6 +11,8 @@ import {
   issueRefreshToken,
   rotateRefreshToken,
   detectReuse,
+  isLostResponse,
+  recoverLostRotation,
   attachSession,
   revokeRefreshToken,
   refreshCookieOptions,
@@ -262,15 +264,25 @@ export const resetPassword = asyncHandler(async (req, res, next) => {
  */
 export const refreshAccessToken = asyncHandler(async (req, res, next) => {
   const presented = req.cookies?.[REFRESH_COOKIE];
-  const rotated = await rotateRefreshToken(presented);
+  let rotated = await rotateRefreshToken(presented);
 
   if (!rotated) {
-    // A token this device already rotated, presented again, is a copied cookie: cut that device
-    // off entirely, so the thief (who may rotate first next time) and the owner both have to sign in.
     const copied = await detectReuse(presented);
-    if (copied) await revokeSession(copied.user, copied._id);
-    res.clearCookie(REFRESH_COOKIE, clearCookieOptions());
-    return next(new ErrorResponse('Not authorized to access this route', 401));
+    if (copied && isLostResponse(copied, presented)) {
+      // The device asked again because the answer to its last refresh never reached it (a weak signal) —
+      // not a theft. Answer once more; a second replay of the same token is then treated as a copy.
+      logger.info(
+        { userId: String(copied.user), session: String(copied._id) },
+        'refresh recovered after a lost response'
+      );
+      rotated = await recoverLostRotation(copied, presented);
+    } else {
+      // A token this device already rotated, presented again, is a copied cookie: cut that device
+      // off entirely, so the thief (who may rotate first next time) and the owner both have to sign in.
+      if (copied) await revokeSession(copied.user, copied._id);
+      res.clearCookie(REFRESH_COOKIE, clearCookieOptions());
+      return next(new ErrorResponse('Not authorized to access this route', 401));
+    }
   }
 
   const user = await User.findById(rotated.userId).select('+tokenVersion').populate('role');

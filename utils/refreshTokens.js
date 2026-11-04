@@ -49,7 +49,7 @@ export const rotateRefreshToken = async presented => {
     await Session.updateOne(
       { _id: sessionId },
       {
-        $set: { expiresAt: next.expiresAt },
+        $set: { expiresAt: next.expiresAt, rotatedAt: new Date() },
         $push: { previousHashes: { $each: [sha256(presented)], $slice: -5 } }
       }
     );
@@ -64,7 +64,51 @@ export const rotateRefreshToken = async presented => {
  */
 export const detectReuse = async presented => {
   if (!presented) return null;
-  return Session.findOne({ previousHashes: sha256(presented) });
+  return Session.findOne({ previousHashes: sha256(presented) }).select(
+    '+previousHashes +recoveredHash'
+  );
+};
+
+/**
+ * How long after a rotation the NEWEST rotated token may be presented once more without it being a theft.
+ * On a phone the refresh response is sometimes lost (a tunnel, a weak signal, a timeout) after the server has
+ * already rotated: the device still holds the old cookie and asks again, which looks exactly like a copied cookie.
+ * Revoking the device for that signed honest people out about once a day. 0 turns the grace off.
+ */
+const reuseGraceMs = () => {
+  const raw = process.env.REFRESH_REUSE_GRACE_SECONDS;
+  const seconds = raw === undefined || raw === '' ? 30 : Number(raw);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+};
+
+/**
+ * Is this replay a lost response rather than a copy? Only the most recently rotated token qualifies (an older
+ * one is certainly not the live client's), only just after the rotation, and only ONCE — the second replay of the
+ * same token is treated as the theft it would then be.
+ */
+export const isLostResponse = (session, presented) => {
+  const grace = reuseGraceMs();
+  if (!grace || !session.rotatedAt) return false;
+  const hash = sha256(presented);
+  return (
+    session.previousHashes?.at(-1) === hash &&
+    session.recoveredHash !== hash &&
+    Date.now() - session.rotatedAt.getTime() < grace
+  );
+};
+
+/**
+ * Answer a lost response: the new token the client never received is replaced by another (only its hash is
+ * stored, so it cannot be re-sent), and the replayed token is marked as used up.
+ */
+export const recoverLostRotation = async (session, presented) => {
+  await RefreshToken.deleteMany({ session: session._id });
+  const next = await issueRefreshToken(session.user, session._id);
+  await Session.updateOne(
+    { _id: session._id },
+    { $set: { expiresAt: next.expiresAt, rotatedAt: new Date(), recoveredHash: sha256(presented) } }
+  );
+  return { userId: session.user, sessionId: session._id, ...next };
 };
 
 /** Tie an already-issued refresh token to a session (a legacy cookie adopted on its first refresh). */

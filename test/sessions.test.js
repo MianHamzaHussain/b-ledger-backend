@@ -212,6 +212,13 @@ test('logging out signs out this device only', async () => {
   assert.equal(await Session.countDocuments({ user: user._id }), 1);
 });
 
+/** Pretend the last rotation happened long ago, so a replay is outside the lost-response grace window. */
+const agePastGrace = user =>
+  Session.updateOne(
+    { user: user._id },
+    { $set: { rotatedAt: new Date(Date.now() - 5 * 60 * 1000) } }
+  );
+
 test('a copied refresh cookie, replayed after the real one moved on, cuts the device off', async () => {
   const user = await makeUser();
   const { cookie: original } = await signIn(user, CHROME_WIN, '1.1.1.1');
@@ -221,7 +228,8 @@ test('a copied refresh cookie, replayed after the real one moved on, cuts the de
   const current = cookies.refreshToken;
   assert.equal(await Session.countDocuments({ user: user._id }), 1);
 
-  // A thief replays the ORIGINAL cookie.
+  // Minutes later (well outside the lost-response window) a thief replays the ORIGINAL cookie.
+  await agePastGrace(user);
   await assert.rejects(
     run(refreshAccessToken, { cookies: { refreshToken: original } }),
     err => err.statusCode === 401
@@ -233,6 +241,76 @@ test('a copied refresh cookie, replayed after the real one moved on, cuts the de
     run(refreshAccessToken, { cookies: { refreshToken: current } }),
     err => err.statusCode === 401
   );
+});
+
+test('a refresh whose answer was lost on the way is answered again, and the person stays signed in', async () => {
+  const user = await makeUser();
+  const { cookie: original } = await signIn(user, CHROME_WIN, '1.1.1.1');
+
+  // The server rotates, but the phone never receives the answer — it still holds `original`.
+  await run(refreshAccessToken, { cookies: { refreshToken: original } });
+
+  // It asks again with the cookie it has, a moment later: not a theft.
+  const again = await run(refreshAccessToken, { cookies: { refreshToken: original } });
+  assert.equal(again.body.success, true);
+  assert.ok(again.body.token);
+  assert.equal(
+    await Session.countDocuments({ user: user._id }),
+    1,
+    'still signed in on this device'
+  );
+
+  // And the new cookie it got keeps working.
+  const next = await run(refreshAccessToken, {
+    cookies: { refreshToken: again.cookies.refreshToken }
+  });
+  assert.equal(next.body.success, true);
+});
+
+test('the lost-response allowance is used once: the same old cookie again is a copy', async () => {
+  const user = await makeUser();
+  const { cookie: original } = await signIn(user, CHROME_WIN, '1.1.1.1');
+  await run(refreshAccessToken, { cookies: { refreshToken: original } });
+  await run(refreshAccessToken, { cookies: { refreshToken: original } }); // the allowance
+
+  await assert.rejects(
+    run(refreshAccessToken, { cookies: { refreshToken: original } }),
+    err => err.statusCode === 401
+  );
+  assert.equal(await Session.countDocuments({ user: user._id }), 0, 'the device is cut off');
+});
+
+test('an older cookie than the newest rotated one is never excused, even a moment later', async () => {
+  const user = await makeUser();
+  const { cookie: first } = await signIn(user, CHROME_WIN, '1.1.1.1');
+  const second = (await run(refreshAccessToken, { cookies: { refreshToken: first } })).cookies
+    .refreshToken;
+  await run(refreshAccessToken, { cookies: { refreshToken: second } }); // `first` is now two rotations old
+
+  await assert.rejects(
+    run(refreshAccessToken, { cookies: { refreshToken: first } }),
+    err => err.statusCode === 401
+  );
+  assert.equal(await Session.countDocuments({ user: user._id }), 0);
+});
+
+test('the allowance can be turned off, and then any replay cuts the device off at once', async () => {
+  const keep = process.env.REFRESH_REUSE_GRACE_SECONDS;
+  process.env.REFRESH_REUSE_GRACE_SECONDS = '0';
+  try {
+    const user = await makeUser();
+    const { cookie: original } = await signIn(user, CHROME_WIN, '1.1.1.1');
+    await run(refreshAccessToken, { cookies: { refreshToken: original } });
+
+    await assert.rejects(
+      run(refreshAccessToken, { cookies: { refreshToken: original } }),
+      err => err.statusCode === 401
+    );
+    assert.equal(await Session.countDocuments({ user: user._id }), 0);
+  } finally {
+    if (keep === undefined) delete process.env.REFRESH_REUSE_GRACE_SECONDS;
+    else process.env.REFRESH_REUSE_GRACE_SECONDS = keep;
+  }
 });
 
 test('a refresh cookie from before sessions existed adopts a session on its first refresh', async () => {

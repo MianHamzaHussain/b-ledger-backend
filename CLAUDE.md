@@ -902,7 +902,13 @@ by, system }`. `by` is the token's user, never the body; a system event (the cou
 /auth/sessions/:id`, `POST /auth/sessions/sign-out-others`. **Logout is this device only**; a password
   change/reset removes every session and refresh token and starts a fresh one for the current device. A
   rotated refresh token coming back (`detectReuse`, via `Session.previousHashes`) is a copied cookie: that
-  device's session is revoked. Cookies from before sessions adopt one (`isLegacy`) on their first refresh;
+  device's session is revoked — **except a lost response**: on a phone the refresh answer is sometimes lost after the
+  server rotated, so the device asks again with the cookie it still has. Only the **newest** rotated token, within
+  `REFRESH_REUSE_GRACE_SECONDS` (default 30, `0` = off) of the rotation, and **once** (`Session.recoveredHash`), is answered
+  with a fresh token (`isLostResponse` / `recoverLostRotation`, logged as "refresh recovered after a lost response");
+  anything older, later, or a second replay revokes the device as before. The trade: a thief who replays within that window
+  gets one answer — and the owner is then signed out by the next replay, so it is noticed. Without the grace, honest phones were
+  signed out about once a day. Cookies from before sessions adopt one (`isLegacy`) on their first refresh;
   access tokens with no `sid` simply expire within 15 minutes. Needs `TRUST_PROXY_HOPS` for the address.
   **Admins** (`users:update`) have `GET /users/:id/sessions`, `DELETE /users/:id/sessions/:sid` and
   `POST /users/:id/sign-out-all` (sessions + refresh tokens + a `tokenVersion` bump); a non-admin can not
