@@ -123,9 +123,9 @@ export const courierWalletStatement = async (business, wallet, { from, to } = {}
   let feeUnknown = 0;
   for (const o of owedOrders) {
     // Without a known fee the figure would be overstated, so it is left blank and not counted.
-    const known = o.deliveryChargePaisa != null;
-    const paisa = known ? expected(o) : null;
-    if (known) owedPaisa += paisa;
+    const isKnown = o.deliveryChargePaisa != null;
+    const paisa = isKnown ? expected(o) : null;
+    if (isKnown) owedPaisa += paisa;
     else feeUnknown += 1;
     rows.push(row(o, 'owed', o.deliveredAt, paisa));
   }
