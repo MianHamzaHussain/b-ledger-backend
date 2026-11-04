@@ -1114,13 +1114,22 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   When on, about hourly: a delivered, unpaid, COD parcel **whose fee is known** that the courier says it paid is
   recorded in one entry, **Dr wallet / Cr COD receivable [courier]** for the receivable **as booked at
   delivery** (read from the sale entry, so it clears to exactly zero even if the COD-tax settings changed), the
-  parcel is marked paid (`courierSettlement`, so **undoing the entry from the journal reopens it**), and the
-  bell rings once per batch (`courier-paid`). A returned parcel's charge, already booked against the courier by the
-  standard Returned posting, is moved onto the wallet (**Dr COD receivable / Cr wallet**), so the wallet shows a
+  parcel is marked paid (`courierSettlement`, so **undoing the entry from the journal reopens it**) and keeps
+  **what it put into the wallet** (`courierBooking.walletPaisa`) and **the day the courier says it settled it**
+  (`courierBooking.settlementDate`), and the bell rings once per batch (`courier-paid`). A charge the courier takes
+  — **a returned parcel's, or a delivered parcel with no cash to collect** (`codAmount` 0, fee known; the courier
+  charges both) — is already booked against the courier (its receivable sits below zero) and is moved onto the
+  wallet (**Dr COD receivable / Cr wallet**, `courierBooking.walletChargeEntry`), so the wallet shows a
   **minus** until a payout nets it. Parcels are claimed in a conditional write first, so two runs cannot pay one
   twice. **The wallet cannot be spent**: `resolveMoney` refuses a `heldByCourier` account for refunds, expenses,
   salaries and payments (a server rule, not only the screen); `Move money` may take it as the **source** only
-  (`allowCourierHeld`), never as the destination.
+  (`allowCourierHeld`), never as the destination. **Reading it is allowed** — the Cash book opens on it
+  (`getCashbook` passes `allowCourierHeld`; every spending path still refuses). **`GET /finance/courier-wallet`**
+  (`utils/courierWalletStatement.js`, `journal:read`, scoped) lists the wallet **parcel by parcel**: tracking
+  number, order, and `paid` (+ COD − charges), `charge` (− a return's or a no-cash parcel's charge), `owed`
+  (delivered, not paid yet; blank while the fee is unknown) and `charge-pending`, plus where it stands — `inWallet`,
+  `owed`, `charges`, `willGet` (= in wallet + owed − charges). A parcel recorded before `walletPaisa` existed is
+  recomputed from its sale entry (`netOwed`), so no migration. Nothing is posted by reading.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 

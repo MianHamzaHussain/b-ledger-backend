@@ -2,12 +2,18 @@ import crypto from 'node:crypto';
 import { makeBusiness, makeProduct, makeParty, runHandler, userId } from './db.js';
 import Order from '../../models/Order.js';
 import Party from '../../models/Party.js';
+import Business from '../../models/Business.js';
 import '../../models/Category.js';
-import { createOrder, updateOrderStatus } from '../../controllers/orderController.js';
+import {
+  confirmOneFromCourier,
+  createOrder,
+  updateOrderStatus
+} from '../../controllers/orderController.js';
 import { saveConnection } from '../../controllers/courierConnectionController.js';
 import { orderCreateSchema, orderStatusSchema } from '../../schemas/orders.js';
 import { courierConnectionSchema } from '../../schemas/parties.js';
 import { courierDeps } from '../../utils/couriers/index.js';
+import { runCourierSync } from '../../utils/courierSync.js';
 
 /**
  * Shared set-up for the courier tests: a business with a connected PostEx courier, an order, and a
@@ -38,6 +44,8 @@ export const fakePostex = ({
   unbooked = [],
   // Tracking numbers the courier says it has paid out (its payment-status answer).
   paid = [],
+  // The day it says it settled them.
+  settlementDate = '2026-10-28',
   // The shop's pickup addresses; `badKey` makes PostEx refuse the key, as it does for a wrong one.
   addresses = [{ addressCode: '001', address: 'Shop 1, Liberty', cityName: 'Lahore' }],
   badKey = false
@@ -72,7 +80,7 @@ export const fakePostex = ({
       const n = decodeURIComponent(u.split('payment-status/')[1]);
       return reply({
         statusCode: '200',
-        dist: paid.includes(n) ? { settle: true, settlementDate: '2026-10-28' } : { settle: false }
+        dist: paid.includes(n) ? { settle: true, settlementDate } : { settle: false }
       });
     }
     if (u.includes('get-unbooked-orders')) return reply({ statusCode: '200', dist: unbooked });
@@ -166,4 +174,51 @@ export const dispatchBooked = (order, courier, extra = {}) =>
       bookWithCourier: true,
       ...extra
     })
+  });
+
+export const hist = (...codes) =>
+  codes.map(([code, message]) => ({
+    transactionStatusMessageCode: code,
+    transactionStatusMessage: message
+  }));
+
+/** PostEx's record of a delivered parcel: fee 180 + tax 29, so the shop is charged 209. */
+export const DELIVERED = {
+  transactionStatus: 'Delivered',
+  transactionFee: 180,
+  transactionTax: 29,
+  transactionStatusHistory: hist(['0005', 'Delivered'])
+};
+
+/** PostEx's record of a returned parcel: the shop is charged 120 + 19 = 139. */
+export const RETURNED = {
+  transactionStatus: 'Returned',
+  reversalFee: 120,
+  reversalTax: 19,
+  transactionStatusHistory: hist(['0006', 'Returned'])
+};
+
+/** A parcel that is booked, then marked delivered (fee 209 known) by the automatic confirm. */
+export const deliveredParcel = async ({ paid = true, record = DELIVERED, codTax } = {}) => {
+  fakePostex({});
+  const made = await setupOrder();
+  // COD tax as the business has it when the parcel is delivered (default none, to keep the sums plain).
+  await Business.updateOne(
+    { _id: made.biz._id },
+    { $set: { codTax: codTax ?? { whtPercent: 0, salesTaxPercent: 0 } } }
+  );
+  await dispatchBooked(made.order, made.courier);
+  fakePostex({ tracking: { 'CX-1001': record }, paid: paid ? ['CX-1001'] : [] });
+  const sync = () => runCourierSync({ confirm: confirmOneFromCourier });
+  await sync();
+  await sync();
+  return made;
+};
+
+/** Switch on recording the courier's payments (an admin does this after checking the first batch). */
+export const recordingOn = courier =>
+  runHandler(saveConnection, {
+    user: admin,
+    resource: courier,
+    body: courierConnectionSchema.parse({ recordPayments: true })
   });

@@ -439,12 +439,15 @@ const OrderSchema = new mongoose.Schema(
           /** When the courier was last asked whether it had paid this parcel, and when it said it had. */
           paymentCheckedAt: { type: Date },
           codSettledAt: { type: Date },
+          /** The day the courier says it settled this parcel, and what it put into the wallet for it (paisa). */
+          settlementDate: { type: Date },
+          walletPaisa: { type: Number },
           /** Held while a payment / charge batch is being posted, so two runs cannot post one parcel twice. */
           settleClaim: { type: String },
           settleClaimedAt: { type: Date },
           chargeClaim: { type: String },
           chargeClaimedAt: { type: Date },
-          /** A returned parcel's charge moved onto the courier's wallet — set once. */
+          /** A charge the courier took (a returned parcel, or a delivered one with no cash on delivery) moved onto its wallet — set once. */
           walletChargeEntry: { type: mongoose.Schema.ObjectId, ref: 'JournalEntry' },
           billPrinted: { type: Boolean },
           billPrintedAt: { type: Date },

@@ -55,6 +55,7 @@ import {
   lockPeriod,
   unlockPeriod,
   getCashbook,
+  getCourierWallet,
   getMoneySummary
 } from '../controllers/financeController.js';
 
@@ -421,6 +422,24 @@ router.get('/trial-balance', can('reports', 'read'), getTrialBalance);
  *       404: { description: Business outside your scope }
  */
 router.get('/cashbook', can('journal', 'read'), getCashbook);
+
+/**
+ * @swagger
+ * /finance/courier-wallet:
+ *   get:
+ *     summary: The courier's wallet parcel by parcel — tracking, order, and what was paid (+) or charged (−)
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: account, required: true, schema: { type: string }, description: The courier wallet account id }
+ *       - { in: query, name: from, schema: { type: string, format: date } }
+ *       - { in: query, name: to, schema: { type: string, format: date } }
+ *     responses:
+ *       200: { description: "inWallet, owed, charges, willGet and one row per parcel" }
+ *       404: { description: Not a courier wallet of this business }
+ */
+router.get('/courier-wallet', can('journal', 'read'), getCourierWallet);
 
 /**
  * @swagger

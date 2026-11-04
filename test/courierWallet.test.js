@@ -15,10 +15,20 @@ import { accountBalance } from '../utils/ledger.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { confirmOneFromCourier } from '../controllers/orderController.js';
 import { recordTransfer } from '../controllers/moneyAccountController.js';
-import { reverseJournalEntry } from '../controllers/financeController.js';
+import { getCashbook, reverseJournalEntry } from '../controllers/financeController.js';
 import { saveConnection } from '../controllers/courierConnectionController.js';
 import { courierConnectionSchema } from '../schemas/parties.js';
-import { admin, fakePostex, restoreFetch, setupOrder, dispatchBooked } from './helpers/courier.js';
+import {
+  DELIVERED,
+  RETURNED,
+  fakePostex,
+  restoreFetch,
+  setupOrder,
+  dispatchBooked,
+  deliveredParcel,
+  recordingOn
+} from './helpers/courier.js';
+import { admin } from './helpers/courier.js';
 
 /**
  * The courier's wallet (R9-6): money the courier holds for the shop. Off unless an admin switched it on;
@@ -32,43 +42,6 @@ afterEach(async () => {
   clearCityCache();
   await clear();
 });
-
-const hist = (...codes) =>
-  codes.map(([code, message]) => ({
-    transactionStatusMessageCode: code,
-    transactionStatusMessage: message
-  }));
-
-const DELIVERED = {
-  transactionStatus: 'Delivered',
-  transactionFee: 180,
-  transactionTax: 29,
-  transactionStatusHistory: hist(['0005', 'Delivered'])
-};
-
-/** A parcel that is booked, then marked delivered (fee 209 known) by the automatic confirm. */
-const deliveredParcel = async ({ paid = true, record = DELIVERED, codTax } = {}) => {
-  fakePostex({});
-  const made = await setupOrder();
-  // COD tax as the business has it when the parcel is delivered (default none, to keep the sums plain).
-  await Business.updateOne(
-    { _id: made.biz._id },
-    { $set: { codTax: codTax ?? { whtPercent: 0, salesTaxPercent: 0 } } }
-  );
-  await dispatchBooked(made.order, made.courier);
-  fakePostex({ tracking: { 'CX-1001': record }, paid: paid ? ['CX-1001'] : [] });
-  const sync = () => runCourierSync({ confirm: confirmOneFromCourier });
-  await sync();
-  await sync();
-  return made;
-};
-
-const recordingOn = courier =>
-  runHandler(saveConnection, {
-    user: admin,
-    resource: courier,
-    body: courierConnectionSchema.parse({ recordPayments: true })
-  });
 
 const walletOf = (biz, courier) => Account.findOne({ business: biz._id, courier: courier._id });
 const balanceOf = async (biz, account) => accountBalance(biz._id, account._id);
@@ -160,13 +133,7 @@ test('a parcel the courier has not paid stays unpaid, and one without a known fe
 });
 
 test('a returned parcel’s charge takes the wallet below zero, once', async () => {
-  const returned = {
-    transactionStatus: 'Returned',
-    reversalFee: 120,
-    reversalTax: 19,
-    transactionStatusHistory: hist(['0006', 'Returned'])
-  };
-  const { order, courier, biz } = await deliveredParcel({ paid: false, record: returned });
+  const { order, courier, biz } = await deliveredParcel({ paid: false, record: RETURNED });
   assert.equal((await Order.findById(order._id)).status, 'returned');
   await recordingOn(await Party.findById(courier._id));
 
@@ -278,4 +245,70 @@ test('if the COD-tax settings change after delivery, the wallet still clears exa
   const receivable = await accountByCode(biz._id, CODES.COD_RECEIVABLE);
   assert.equal(await accountBalance(biz._id, receivable._id), 0, 'no residue on the courier');
   assert.equal(await balanceOf(biz, await walletOf(biz, courier)), 379100);
+});
+
+test('the wallet opens in the Cash book to be read — spending from it is still refused', async () => {
+  const { courier, biz } = await deliveredParcel();
+  await recordingOn(await Party.findById(courier._id));
+  await recordCourierWallets();
+  const wallet = await walletOf(biz, courier);
+
+  const out = await runHandler(getCashbook, {
+    query: { business: String(biz._id), account: String(wallet._id) },
+    accessFilter: {}
+  });
+  assert.equal(out.body.data.closing, 3791);
+  assert.equal(out.body.data.rows.length, 1);
+  await assert.rejects(
+    resolveMoney(biz._id, { account: String(wallet._id) }),
+    /held by the courier/
+  );
+});
+
+test('each paid parcel keeps what it put into the wallet and the day the courier says it settled it', async () => {
+  fakePostex({});
+  const made = await setupOrder();
+  await Business.updateOne(
+    { _id: made.biz._id },
+    { $set: { codTax: { whtPercent: 0, salesTaxPercent: 0 } } }
+  );
+  await dispatchBooked(made.order, made.courier);
+  fakePostex({
+    tracking: { 'CX-1001': DELIVERED },
+    paid: ['CX-1001'],
+    settlementDate: '2026-11-03'
+  });
+  const sync = () => runCourierSync({ confirm: confirmOneFromCourier });
+  await sync();
+  await sync();
+  await recordingOn(await Party.findById(made.courier._id));
+  await recordCourierWallets();
+
+  const fresh = await Order.findById(made.order._id);
+  assert.equal(fresh.courierBooking.walletPaisa, 379100);
+  assert.equal(fresh.courierBooking.settlementDate.toISOString().slice(0, 10), '2026-11-03');
+});
+
+test('a delivered parcel with no cash to collect is still charged: its fee comes off the wallet, once', async () => {
+  fakePostex({});
+  const made = await setupOrder();
+  await Business.updateOne(
+    { _id: made.biz._id },
+    { $set: { codTax: { whtPercent: 0, salesTaxPercent: 0 } } }
+  );
+  // Paid in full up front: nothing for the courier to collect, but it still charges for the delivery.
+  await Order.updateOne({ _id: made.order._id }, { $set: { codAmount: 0, advanceAmount: 4000 } });
+  await dispatchBooked(await Order.findById(made.order._id), made.courier);
+  fakePostex({ tracking: { 'CX-1001': DELIVERED }, paid: [] });
+  const sync = () => runCourierSync({ confirm: confirmOneFromCourier });
+  await sync();
+  await sync();
+  assert.equal((await Order.findById(made.order._id)).status, 'delivered');
+  await recordingOn(await Party.findById(made.courier._id));
+
+  assert.equal((await recordCourierWallets()).charges, 1);
+  const wallet = await walletOf(made.biz, made.courier);
+  assert.equal(await balanceOf(made.biz, wallet), -20900, 'the wallet shows the minus');
+  assert.equal((await recordCourierWallets()).charges, 0, 'not taken twice');
+  assert.equal(await balanceOf(made.biz, wallet), -20900);
 });

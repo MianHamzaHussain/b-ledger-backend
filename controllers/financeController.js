@@ -17,6 +17,7 @@ import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledg
 import { salaryLines } from '../utils/partyPosting.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
 import { cashbook, moneySummary } from '../utils/cashbook.js';
+import { courierWalletStatement } from '../utils/courierWalletStatement.js';
 import { undoCourierInvoice } from '../utils/courierInvoice.js';
 import { courierPerformance } from '../utils/courierPerformance.js';
 import {
@@ -751,6 +752,44 @@ const parseDateParam = (value, name, edge = 'start') => {
 };
 
 /**
+ * @desc   The courier's wallet parcel by parcel: tracking number, order, and what it paid (+) or charged (−), with
+ *         where the wallet stands — what is in it, what is still to come, what will be taken.
+ * @route  GET /api/v1/finance/courier-wallet?business=&account=<wallet id>&from=&to=   (journal:read — scoped)
+ */
+export const getCourierWallet = asyncHandler(async (req, res, next) => {
+  const { business, account } = req.query;
+  if (!business) return next(new ErrorResponse('Select a business', 400));
+  if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
+
+  const wallet = mongoose.isValidObjectId(account)
+    ? await Account.findOne({ _id: account, business, heldByCourier: true })
+    : null;
+  if (!wallet) return next(new ErrorResponse('That is not a courier wallet', 404));
+
+  const out = await courierWalletStatement(business, wallet, {
+    from: parseDateParam(req.query.from, 'from'),
+    to: parseDateParam(req.query.to, 'to', 'end')
+  });
+  res.status(200).json({
+    success: true,
+    data: {
+      wallet: { _id: wallet._id, name: wallet.name },
+      inWallet: fromPaisa(out.walletPaisa),
+      owed: fromPaisa(out.owedPaisa),
+      charges: fromPaisa(out.pendingChargesPaisa),
+      willGet: fromPaisa(out.willGetPaisa),
+      feeUnknown: out.feeUnknown,
+      total: out.total,
+      rows: out.rows.map(({ codPaisa, amountPaisa, ...r }) => ({
+        ...r,
+        cod: fromPaisa(codPaisa),
+        amount: amountPaisa == null ? null : fromPaisa(amountPaisa)
+      }))
+    }
+  });
+});
+
+/**
  * @desc   Cash book: opening balance, every movement in and out, closing balance
  *         of one money account (or a partner's running account) for a date
  *         range — the ledger read as a rokar.
@@ -766,10 +805,12 @@ export const getCashbook = asyncHandler(async (req, res, next) => {
   // 'cash' / 'bank' still name the original two; anything else is a money
   // account id or a partner, checked like any other money reference.
   const legacy = account === 'cash' || account === 'bank' || !account;
+  // Reading the courier's wallet is fine — only spending from it is refused (resolveMoney, no flag, everywhere else).
   const money = await resolveMoney(
     business,
     legacy ? { method: account || 'cash' } : { account },
-    req.user
+    req.user,
+    { allowCourierHeld: true }
   );
 
   const book = await cashbook(business, {
