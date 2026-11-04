@@ -40,7 +40,7 @@ const CLAIM_MS = 10 * 60 * 1000;
  * entry — so the receivable returns to exactly zero even if the business's COD-tax settings changed since.
  * Only if the entry cannot be found is it recomputed from the order.
  */
-const netOwed = (order, codTax, bookedBy) => {
+export const netOwed = (order, codTax, bookedBy) => {
   const entry = bookedBy.get(String(order.saleEntry));
   const line = entry?.lines.find(
     l => String(l.party) === String(order.courier) && (l.debitPaisa || l.creditPaisa)
@@ -49,6 +49,15 @@ const netOwed = (order, codTax, bookedBy) => {
   return computeRemittance(toPaisa(order.codAmount), order.deliveryChargePaisa || 0, codTax || {})
     .bankPaisa;
 };
+
+const asDate = value => {
+  const d = value ? new Date(value) : null;
+  return d && !Number.isNaN(d.getTime()) ? d : undefined;
+};
+
+/** What the courier takes for a parcel that brings in no cash: a return's charge, or a delivered no-COD parcel's. */
+export const chargeOf = order =>
+  order.status === ORDER_STATUS.RETURNED ? order.returnChargePaisa : order.deliveryChargePaisa;
 
 /**
  * Ask the courier which delivered parcels it has paid, and record those into its wallet in ONE entry. A parcel
@@ -83,7 +92,7 @@ const recordPaidParcels = async (party, api, userId, now) => {
         { $set: { 'courierBooking.paymentCheckedAt': now } },
         { timestamps: false }
       );
-      if (answer.settled) settled.push(order);
+      if (answer.settled) settled.push({ order, settlementDate: answer.settlementDate });
     } catch (err) {
       logger.warn(
         { tracking: order.courierBooking.trackingNumber, err: err.message },
@@ -97,7 +106,7 @@ const recordPaidParcels = async (party, api, userId, now) => {
   const token = crypto.randomUUID();
   await Order.updateMany(
     {
-      _id: { $in: settled.map(o => o._id) },
+      _id: { $in: settled.map(s => s.order._id) },
       paymentStatus: PAYMENT_STATUS.UNPAID,
       $or: [
         { 'courierBooking.settleClaimedAt': { $exists: false } },
@@ -116,10 +125,11 @@ const recordPaidParcels = async (party, api, userId, now) => {
       _id: { $in: claimed.map(o => o.saleEntry).filter(Boolean) }
     });
     const bookedBy = new Map(sales.map(e => [String(e._id), e]));
-    const totalPaisa = claimed.reduce(
-      (sum, o) => sum + Math.max(0, netOwed(o, biz?.codTax, bookedBy)),
-      0
+    const paisaOf = new Map(
+      claimed.map(o => [String(o._id), Math.max(0, netOwed(o, biz?.codTax, bookedBy))])
     );
+    const dayOf = new Map(settled.map(s => [String(s.order._id), asDate(s.settlementDate)]));
+    const totalPaisa = [...paisaOf.values()].reduce((sum, p) => sum + p, 0);
     await ensureChart(business);
     const wallet = await courierWalletFor(business, party, userId);
     const receivable = await accountByCode(business, CODES.COD_RECEIVABLE);
@@ -134,16 +144,26 @@ const recordPaidParcels = async (party, api, userId, now) => {
       ],
       userId
     });
-    await Order.updateMany(
-      { 'courierBooking.settleClaim': token },
-      {
-        $set: {
-          paymentStatus: PAYMENT_STATUS.PAID,
-          courierSettlement: entry._id,
-          'courierBooking.codSettledAt': now
-        },
-        $unset: { 'courierBooking.settleClaim': 1, 'courierBooking.settleClaimedAt': 1 }
-      },
+    // What each parcel put into the wallet, and the day the courier says it settled it, stay on the parcel so the
+    // wallet can list them without recalculating.
+    await Order.bulkWrite(
+      claimed.map(o => ({
+        updateOne: {
+          filter: { _id: o._id, 'courierBooking.settleClaim': token },
+          update: {
+            $set: {
+              paymentStatus: PAYMENT_STATUS.PAID,
+              courierSettlement: entry._id,
+              'courierBooking.codSettledAt': now,
+              'courierBooking.walletPaisa': paisaOf.get(String(o._id)),
+              ...(dayOf.get(String(o._id))
+                ? { 'courierBooking.settlementDate': dayOf.get(String(o._id)) }
+                : {})
+            },
+            $unset: { 'courierBooking.settleClaim': 1, 'courierBooking.settleClaimedAt': 1 }
+          }
+        }
+      })),
       { timestamps: false }
     );
     tally.paid = claimed.length;
@@ -169,18 +189,21 @@ const recordPaidParcels = async (party, api, userId, now) => {
 };
 
 /**
- * A returned parcel's fee: the standard Returned posting already booked it against what the courier owes us
- * (so its receivable sits below zero). Mirror the courier's own way of settling it — it takes the charge from
- * its balance — by moving that amount onto the wallet, which then shows a minus until the next payout nets it off.
+ * A parcel that brings in no cash but is still charged: a returned parcel, or a delivered one with nothing to
+ * collect (the courier charges both). The books already hold the charge against what the courier owes us (its
+ * receivable sits below zero). Mirror the courier's own way of settling it — it takes the charge from its balance —
+ * by moving that amount onto the wallet, which then shows a minus until the next payout nets it off.
  */
-const recordReturnCharges = async (party, userId, now) => {
+const recordCourierCharges = async (party, userId, now) => {
   const orders = await Order.find({
     business: party.business,
     courier: party._id,
-    status: ORDER_STATUS.RETURNED,
-    returnChargePaisa: { $gt: 0 },
     'courierBooking.walletChargeEntry': { $exists: false },
-    'courierBooking.trackingNumber': { $exists: true }
+    'courierBooking.trackingNumber': { $exists: true },
+    $or: [
+      { status: ORDER_STATUS.RETURNED, returnChargePaisa: { $gt: 0 } },
+      { status: ORDER_STATUS.DELIVERED, codAmount: { $lte: 0 }, deliveryChargePaisa: { $gt: 0 } }
+    ]
   }).limit(PER_RUN);
   if (!orders.length) return 0;
 
@@ -201,14 +224,14 @@ const recordReturnCharges = async (party, userId, now) => {
   if (!claimed.length) return 0;
 
   try {
-    const totalPaisa = claimed.reduce((sum, o) => sum + o.returnChargePaisa, 0);
+    const totalPaisa = claimed.reduce((sum, o) => sum + chargeOf(o), 0);
     await ensureChart(party.business);
     const wallet = await courierWalletFor(party.business, party, userId);
     const receivable = await accountByCode(party.business, CODES.COD_RECEIVABLE);
     const entry = await postEntry({
       business: party.business,
       date: now,
-      memo: `${party.name} took the charge for ${claimed.length} returned parcel${claimed.length === 1 ? '' : 's'}`,
+      memo: `${party.name} took the charge for ${claimed.length} parcel${claimed.length === 1 ? '' : 's'}`,
       source: { kind: JOURNAL_SOURCES.COURIER_INVOICE, ref: String(party._id) },
       lines: [
         { account: receivable._id, party: party._id, debitPaisa: totalPaisa },
@@ -236,8 +259,8 @@ const recordReturnCharges = async (party, userId, now) => {
 };
 
 /**
- * One pass over every courier that has recording switched on: paid parcels into its wallet, then returned
- * parcels' charges out of it. One courier's failure never stops the others.
+ * One pass over every courier that has recording switched on: paid parcels into its wallet, then the charges
+ * (returned, and delivered with no cash) out of it. One courier's failure never stops the others.
  */
 export const recordCourierWallets = async ({ now = new Date() } = {}) => {
   const parties = await Party.find({
@@ -263,7 +286,7 @@ export const recordCourierWallets = async ({ now = new Date() } = {}) => {
       tally.checked += t.checked;
       tally.paid += t.paid;
       tally.paidPaisa += t.paidPaisa;
-      tally.charges += await recordReturnCharges(party, userId, now);
+      tally.charges += await recordCourierCharges(party, userId, now);
     } catch (err) {
       tally.errors += 1;
       logger.error({ courier: String(party._id), err }, 'courier wallet not updated');
