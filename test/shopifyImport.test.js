@@ -600,3 +600,28 @@ test('a held order says why: no such item, two with the name, or no such size', 
   assert.match(await reasonsOf(51493), /has no size "XS" in stock/);
   assert.match(await reasonsOf(51494), /2 stock items are named/);
 });
+
+test('a same-day order from the same phone to a different address stays apart but says to check', async () => {
+  const first = await importOrder(connection, orderNode({ number: 51495 }), actor);
+  const second = await importOrder(
+    connection,
+    orderNode({ number: 51496, address: 'House 19, Block C' }),
+    actor
+  );
+
+  assert.equal(second.result, 'created', 'never merged onto a different address');
+  const firstOrder = await Order.findById(first.orderId);
+  const secondOrder = await Order.findById(second.orderId);
+  assert.equal(firstOrder.note, undefined, 'the first order has nothing to flag');
+  assert.match(secondOrder.note, new RegExp(`#${firstOrder.orderNumber}.*different address`));
+});
+
+test('a different person, or a different day, gets no such note', async () => {
+  await importOrder(connection, orderNode({ number: 51497 }), actor);
+  const other = await importOrder(
+    connection,
+    orderNode({ number: 51498, phone: '0311 7654321', name: 'Sana Khan', address: 'Shop 4' }),
+    actor
+  );
+  assert.equal((await Order.findById(other.orderId)).note, undefined);
+});
