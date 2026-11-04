@@ -15,7 +15,7 @@ import { accountBalance } from '../utils/ledger.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { confirmOneFromCourier } from '../controllers/orderController.js';
 import { recordTransfer } from '../controllers/moneyAccountController.js';
-import { reverseJournalEntry } from '../controllers/financeController.js';
+import { getCashbook, reverseJournalEntry } from '../controllers/financeController.js';
 import { saveConnection } from '../controllers/courierConnectionController.js';
 import { courierConnectionSchema } from '../schemas/parties.js';
 import { admin, fakePostex, restoreFetch, setupOrder, dispatchBooked } from './helpers/courier.js';
@@ -278,4 +278,22 @@ test('if the COD-tax settings change after delivery, the wallet still clears exa
   const receivable = await accountByCode(biz._id, CODES.COD_RECEIVABLE);
   assert.equal(await accountBalance(biz._id, receivable._id), 0, 'no residue on the courier');
   assert.equal(await balanceOf(biz, await walletOf(biz, courier)), 379100);
+});
+
+test('the wallet opens in the Cash book to be read — spending from it is still refused', async () => {
+  const { courier, biz } = await deliveredParcel();
+  await recordingOn(await Party.findById(courier._id));
+  await recordCourierWallets();
+  const wallet = await walletOf(biz, courier);
+
+  const out = await runHandler(getCashbook, {
+    query: { business: String(biz._id), account: String(wallet._id) },
+    accessFilter: {}
+  });
+  assert.equal(out.body.data.closing, 3791);
+  assert.equal(out.body.data.rows.length, 1);
+  await assert.rejects(
+    resolveMoney(biz._id, { account: String(wallet._id) }),
+    /held by the courier/
+  );
 });

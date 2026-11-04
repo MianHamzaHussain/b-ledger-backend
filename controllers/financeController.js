@@ -766,10 +766,12 @@ export const getCashbook = asyncHandler(async (req, res, next) => {
   // 'cash' / 'bank' still name the original two; anything else is a money
   // account id or a partner, checked like any other money reference.
   const legacy = account === 'cash' || account === 'bank' || !account;
+  // Reading the courier's wallet is fine — only spending from it is refused (resolveMoney, no flag, everywhere else).
   const money = await resolveMoney(
     business,
     legacy ? { method: account || 'cash' } : { account },
-    req.user
+    req.user,
+    { allowCourierHeld: true }
   );
 
   const book = await cashbook(business, {
