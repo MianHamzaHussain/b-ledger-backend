@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { parseBusinessDate } from '../utils/pakistanDay.js';
+import { COURIER_WALLET_TABS } from '../utils/constants.js';
 
 /**
  * Zod schemas for the finance record endpoints. Amounts are coerced (a numeric
@@ -141,4 +142,41 @@ export const transferSchema = z.object({
   amount,
   memo,
   date
+});
+
+// ── Query strings (GET) — checked by validateQuery before the controller ─────────────────────────────
+
+const objectId = (message = 'Invalid id') => z.string().regex(/^[0-9a-fA-F]{24}$/, message);
+const business = z
+  .string({ error: 'Select a business' })
+  .regex(/^[0-9a-fA-F]{24}$/, 'Select a business');
+
+/** The cash book: `cash` / `bank` (the original two), a money account id, or a partner's running account. */
+export const cashbookQuerySchema = z.object({
+  business,
+  account: z
+    .string()
+    .regex(
+      /^(cash|bank|partner:[0-9a-fA-F]{24}|[0-9a-fA-F]{24})$/,
+      'Choose one of this business’s money accounts'
+    )
+    .optional(),
+  from: z.string().min(1).optional(),
+  to: z.string().min(1).optional()
+});
+
+/** Where the courier's wallet stands. */
+export const courierWalletQuerySchema = z.object({
+  business,
+  account: objectId('Choose the courier wallet')
+});
+
+/** A page of the courier's wallet, for one tab. `search` is a plain word, never a pattern (the server escapes it). */
+export const courierWalletParcelsQuerySchema = courierWalletQuerySchema.extend({
+  tab: z
+    .enum(COURIER_WALLET_TABS, { error: 'Choose all, paid, upcoming or charges' })
+    .default('all'),
+  search: z.string().trim().max(100, 'Search for up to 100 characters').optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25)
 });

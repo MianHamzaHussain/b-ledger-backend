@@ -221,7 +221,7 @@ test('a tracking number, an order number or a customer finds its parcel', async 
   );
 });
 
-test('only a courier wallet of this business can be read, and a tab must be one we know', async () => {
+test('only a courier wallet of this business can be read', async () => {
   const { biz, courier } = await deliveredParcel();
   const cash = await accountByCode(biz._id, CODES.CASH);
   await assert.rejects(ask(getCourierWallet, biz, cash), /not a courier wallet/);
@@ -235,10 +235,6 @@ test('only a courier wallet of this business can be read, and a tab must be one 
       accessFilter: {}
     }),
     /not a courier wallet/
-  );
-  await assert.rejects(
-    ask(getCourierWalletParcels, biz, wallet, { tab: 'everything' }),
-    /Choose all/
   );
 });
 

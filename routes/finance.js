@@ -6,7 +6,7 @@ import {
   restrictBusinessToScope,
   requirePermission
 } from '../middlewares/permissions.js';
-import { validate } from '../middlewares/validate.js';
+import { validate, validateQuery } from '../middlewares/validate.js';
 import {
   capitalSchema,
   expenseSchema,
@@ -19,7 +19,10 @@ import {
   closeSchema,
   moneyAccountCreateSchema,
   moneyAccountUpdateSchema,
-  transferSchema
+  transferSchema,
+  cashbookQuerySchema,
+  courierWalletQuerySchema,
+  courierWalletParcelsQuerySchema
 } from '../schemas/finance.js';
 import JournalEntry from '../models/JournalEntry.js';
 import Account from '../models/Account.js';
@@ -422,7 +425,7 @@ router.get('/trial-balance', can('reports', 'read'), getTrialBalance);
  *       200: { description: "{ opening, in, out, closing, rows[] } in rupees (and paisa)" }
  *       404: { description: Business outside your scope }
  */
-router.get('/cashbook', can('journal', 'read'), getCashbook);
+router.get('/cashbook', can('journal', 'read'), validateQuery(cashbookQuerySchema), getCashbook);
 
 /**
  * @swagger
@@ -454,8 +457,18 @@ router.get('/cashbook', can('journal', 'read'), getCashbook);
  *       400: { description: Unknown tab }
  *       404: { description: Not a courier wallet of this business }
  */
-router.get('/courier-wallet', can('journal', 'read'), getCourierWallet);
-router.get('/courier-wallet/parcels', can('journal', 'read'), getCourierWalletParcels);
+router.get(
+  '/courier-wallet',
+  can('journal', 'read'),
+  validateQuery(courierWalletQuerySchema),
+  getCourierWallet
+);
+router.get(
+  '/courier-wallet/parcels',
+  can('journal', 'read'),
+  validateQuery(courierWalletParcelsQuerySchema),
+  getCourierWalletParcels
+);
 
 /**
  * @swagger

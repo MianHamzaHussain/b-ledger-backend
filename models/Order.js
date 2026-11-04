@@ -594,6 +594,8 @@ const OrderSchema = new mongoose.Schema(
 );
 
 OrderSchema.index({ business: 1, status: 1 });
+// The courier's wallet reads one courier's parcels by outcome (owed, returned, charged).
+OrderSchema.index({ business: 1, courier: 1, status: 1 });
 OrderSchema.index({ business: 1, createdAt: -1 });
 // A customer's history and the order form's "repeat customer" counts: one customer's orders, newest first.
 OrderSchema.index({ business: 1, customer: 1, createdAt: -1 });

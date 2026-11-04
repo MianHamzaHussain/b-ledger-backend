@@ -180,6 +180,9 @@ export const JOURNAL_SOURCES = {
  * book and home screen can group them, and each can be checked against its own
  * statement (the drawer count, the bank statement, the wallet history).
  */
+/** The tabs of the courier's wallet list. "upcoming" is everything the courier has not yet paid or taken off. */
+export const COURIER_WALLET_TABS = ['all', 'paid', 'upcoming', 'charges'];
+
 export const MONEY_KINDS = {
   CASH: 'cash',
   BANK: 'bank',

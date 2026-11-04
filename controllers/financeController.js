@@ -17,11 +17,7 @@ import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledg
 import { salaryLines } from '../utils/partyPosting.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
 import { cashbook, moneySummary } from '../utils/cashbook.js';
-import {
-  WALLET_TABS,
-  courierWalletParcels,
-  courierWalletSummary
-} from '../utils/courierWalletStatement.js';
+import { courierWalletParcels, courierWalletSummary } from '../utils/courierWalletStatement.js';
 import { undoCourierInvoice } from '../utils/courierInvoice.js';
 import { courierPerformance } from '../utils/courierPerformance.js';
 import {
@@ -755,10 +751,12 @@ const parseDateParam = (value, name, edge = 'start') => {
   return date;
 };
 
-/** The wallet named in the query, if it is one of this business's courier wallets — or an error to hand on. */
+/**
+ * The wallet named in the query, if it is one of this business's courier wallets — or an error to hand on. The query
+ * itself is already checked (validateQuery); what is left is whether THIS caller may see THIS wallet.
+ */
 const courierWalletOf = async (req, next) => {
   const { business, account } = req.query;
-  if (!business) return next(new ErrorResponse('Select a business', 400));
   if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
   const wallet = mongoose.isValidObjectId(account)
     ? await Account.findOne({ _id: account, business, heldByCourier: true })
@@ -800,13 +798,8 @@ export const getCourierWalletParcels = asyncHandler(async (req, res, next) => {
   const wallet = await courierWalletOf(req, next);
   if (!wallet) return;
 
-  const tab = req.query.tab ?? 'all';
-  if (!WALLET_TABS.includes(tab))
-    return next(new ErrorResponse('Choose all, paid, upcoming or charges', 400));
-  const page = Math.max(1, Number(req.query.page) || 1);
-  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
-  const search = String(req.query.search ?? '').slice(0, 100);
-
+  // tab, page and limit are already checked, defaulted and capped by validateQuery.
+  const { tab, search, page = 1, limit = 25 } = req.query;
   const { total, rows } = await courierWalletParcels(req.query.business, wallet, {
     tab,
     search,

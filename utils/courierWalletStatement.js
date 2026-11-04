@@ -20,9 +20,6 @@ import { ORDER_STATUS, PAYMENT_STATUS } from './constants.js';
  * each tab holds) and a PAGE of parcels for one tab, newest first.
  */
 
-/** The tabs on the screen. "upcoming" is everything the courier has not yet paid or taken off. */
-export const WALLET_TABS = ['all', 'paid', 'upcoming', 'charges'];
-
 const FIELDS = [
   'orderNumber',
   'courier',
