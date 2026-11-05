@@ -265,6 +265,7 @@ const recordCourierCharges = async (party, userId, now) => {
  * One pass over every courier that has recording switched on: paid parcels into its wallet, then the charges
  * (returned, and delivered with no cash) out of it. One courier's failure never stops the others.
  */
+// Retired 2026-11: receipts fill the wallet (utils/courierReceipts.js). Kept only to build old state in tests.
 export const recordCourierWallets = async ({ now = new Date() } = {}) => {
   const parties = await Party.find({
     type: PARTY_TYPES.COURIER,

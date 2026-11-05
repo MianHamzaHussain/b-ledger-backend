@@ -1116,9 +1116,10 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
 
 - **The courier's wallet** (R9-6, `utils/courierWallet.js`). Money the courier holds for the shop — a wallet-kind
   money account flagged `Account.heldByCourier` (+ `courier`), made the first time it is needed, one per courier.
-  **Off unless an admin turns on `integration.recordPayments`** (after comparing the first batch with the
-  courier's statement: the courier's call says only paid / not paid, so the amount is **calculated**, not read).
-  When on, about hourly: a delivered, unpaid, COD parcel **whose fee is known** that the courier says it paid is
+  **Retired 2026-11: no job fills it any more.** The courier's call said only paid / not paid, so the amount was
+  **calculated** and drifted from PostEx's real figures; a PostEx receipt (CPR) now fills the wallet, parcel by parcel
+  (below, "Adding a receipt to the wallet"). `recordCourierWallets` and `integration.recordPayments` remain only to describe
+  the old state: this is how the old job worked — a delivered, unpaid, COD parcel **whose fee is known** that the courier says it paid is
   recorded in one entry, **Dr wallet / Cr COD receivable [courier]** for the receivable **as booked at
   delivery** (read from the sale entry, so it clears to exactly zero even if the COD-tax settings changed), the
   parcel is marked paid (`courierSettlement`, so **undoing the entry from the journal reopens it**) and keeps
@@ -1170,7 +1171,7 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   `courierBooking.cprNumber` (claimed atomically before posting, with a lock on the receipt, so two taps cannot double-post) and
   keeps a `previous` snapshot. **Reversing the entry in the journal puts every parcel back** (`undoCourierReceipt`) and its row
   waits again. The server re-reads and re-plans the PDF on apply — it never trusts a client plan. A receipt with no parcel of the
-  business is refused. The hourly `recordCourierWallets` job is retired (Step 4); the receipt is the only writer of the wallet.
+  business is refused. The hourly `recordCourierWallets` job is retired and no longer started from `courierSync`; the receipt is the only writer of the wallet.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 

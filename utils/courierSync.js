@@ -12,7 +12,6 @@ import {
   phaseOf
 } from './couriers/statusWords.js';
 import { checkHeldCities } from './cityWatch.js';
-import { recordCourierWallets } from './courierWallet.js';
 import { adoptTypedParcels } from './couriers/adopt.js';
 
 /**
@@ -31,7 +30,6 @@ import { adoptTypedParcels } from './couriers/adopt.js';
 const EVERY_MS = Math.max(Number(process.env.COURIER_SYNC_SECONDS) || 10 * 60, 10) * 1000;
 const BATCH = 20;
 const CITY_CHECK_MS = 60 * 60 * 1000;
-const WALLET_CHECK_MS = 60 * 60 * 1000;
 const PER_RUN = 300;
 // A parcel that has not moved for this long raises an alert, once.
 const STUCK_MS = 3 * 24 * 60 * 60 * 1000;
@@ -409,7 +407,6 @@ export const runCourierSync = async ({
 export const startCourierSync = ({ everyMs = EVERY_MS, confirm = null } = {}) => {
   let running = false;
   let lastCityCheck = 0;
-  let lastWalletCheck = 0;
   const tick = async () => {
     if (running) return;
     running = true;
@@ -418,13 +415,6 @@ export const startCourierSync = ({ everyMs = EVERY_MS, confirm = null } = {}) =>
       if (Date.now() - lastCityCheck >= CITY_CHECK_MS) {
         lastCityCheck = Date.now();
         await checkHeldCities().catch(err => logger.error({ err }, 'held city check failed'));
-      }
-      // Couriers whose payments an admin chose to record: paid parcels into the wallet, returned parcels' charges out of it.
-      if (Date.now() - lastWalletCheck >= WALLET_CHECK_MS) {
-        lastWalletCheck = Date.now();
-        await recordCourierWallets().catch(err =>
-          logger.error({ err }, 'courier wallet check failed')
-        );
       }
       const t = await runCourierSync({ confirm });
       Object.assign(status, {
