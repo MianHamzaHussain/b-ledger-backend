@@ -1172,6 +1172,13 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   keeps a `previous` snapshot. **Reversing the entry in the journal puts every parcel back** (`undoCourierReceipt`) and its row
   waits again. The server re-reads and re-plans the PDF on apply — it never trusts a client plan. A receipt with no parcel of the
   business is refused. The hourly `recordCourierWallets` job is retired and no longer started from `courierSync`; the receipt is the only writer of the wallet.
+- **"PostEx has paid — add its receipt"** (`utils/courierPayoutAlert.js`, about hourly from the courier tick). PostEx's API
+  says per parcel only paid / not paid and the day (`payment-status`); it **cannot download the receipt** (its `get-invoice`
+  is the airway bill, and `cprNumber_1/2` are only for upfront / reserve payments). So this check **never moves money**: for
+  every connected PostEx courier it asks about delivered, unpaid parcels not on a receipt (40 per pass, rechecked every 3 h),
+  stamps `courierBooking.postexPaidOn` on the paid ones, and rings the bell **once per parcel** (`courier-paid`) with a link to
+  the wallet page — making the wallet first if an older courier has none. The wallet summary's `awaitingReceipt` counts
+  parcels PostEx says it paid whose receipt is not added yet; adding the receipt (it sets `cprNumber`) clears them.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 

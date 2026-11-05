@@ -791,6 +791,7 @@ export const getCourierWallet = asyncHandler(async (req, res, next) => {
       charges: fromPaisa(out.pendingChargesPaisa),
       willGet: fromPaisa(out.willGetPaisa),
       feeUnknown: out.feeUnknown,
+      awaitingReceipt: out.awaitingReceipt,
       counts: out.counts
     }
   });

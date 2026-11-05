@@ -1,3 +1,4 @@
+import { checkCourierPayouts } from './courierPayoutAlert.js';
 import Order from '../models/Order.js';
 import { notify } from './notify.js';
 import ErrorResponse from './errorResponse.js';
@@ -30,6 +31,8 @@ import { adoptTypedParcels } from './couriers/adopt.js';
 const EVERY_MS = Math.max(Number(process.env.COURIER_SYNC_SECONDS) || 10 * 60, 10) * 1000;
 const BATCH = 20;
 const CITY_CHECK_MS = 60 * 60 * 1000;
+// PostEx's payments: about once an hour, ring the bell so its receipt gets added (never posts money).
+const PAYOUT_CHECK_MS = 60 * 60 * 1000;
 const PER_RUN = 300;
 // A parcel that has not moved for this long raises an alert, once.
 const STUCK_MS = 3 * 24 * 60 * 60 * 1000;
@@ -407,6 +410,7 @@ export const runCourierSync = async ({
 export const startCourierSync = ({ everyMs = EVERY_MS, confirm = null } = {}) => {
   let running = false;
   let lastCityCheck = 0;
+  let lastPayoutCheck = 0;
   const tick = async () => {
     if (running) return;
     running = true;
@@ -415,6 +419,12 @@ export const startCourierSync = ({ everyMs = EVERY_MS, confirm = null } = {}) =>
       if (Date.now() - lastCityCheck >= CITY_CHECK_MS) {
         lastCityCheck = Date.now();
         await checkHeldCities().catch(err => logger.error({ err }, 'held city check failed'));
+      }
+      if (Date.now() - lastPayoutCheck >= PAYOUT_CHECK_MS) {
+        lastPayoutCheck = Date.now();
+        await checkCourierPayouts().catch(err =>
+          logger.error({ err }, 'courier payout check failed')
+        );
       }
       const t = await runCourierSync({ confirm });
       Object.assign(status, {
