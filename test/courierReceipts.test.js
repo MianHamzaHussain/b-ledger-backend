@@ -9,7 +9,7 @@ import CourierReceipt from '../models/CourierReceipt.js';
 import { clearCityCache } from '../utils/couriers/booking.js';
 import { recordCourierWallets } from '../utils/courierWallet.js';
 import { courierWalletParcels } from '../utils/courierWalletStatement.js';
-import { importReceipt, previewReceipt } from '../utils/courierReceipts.js';
+import { importReceipt, presentPlan, previewReceipt } from '../utils/courierReceipts.js';
 import { accountBalance } from '../utils/ledger.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import {
@@ -297,4 +297,16 @@ test('the wallet statement shows each parcel with its receipt number and PostEx 
   assert.equal(out.rows[0].kind, 'charge');
   assert.equal(out.rows[0].receipt, 'CPR-TEST2');
   assert.equal(out.rows[0].amountPaisa, -20900);
+});
+
+test('what the screen gets is in rupees, with paisa kept, and carries no journal internals', async () => {
+  const made = await deliveredParcel({ paid: false });
+  const receipt = receiptOf([DELIVERED_ROW(), row('99999999999999', 'returned')]);
+  const out = presentPlan(await add(made, receipt), receipt);
+  assert.equal(out.summary.willAdd, 3631);
+  assert.equal(out.summary.ignoredNet, -209);
+  assert.equal(out.rows[0].difference, -160, 'PostEx paid 160.00 less than the app expected');
+  assert.equal(out.rows[1].outcome, 'ignored');
+  const text = JSON.stringify(out);
+  assert.ok(!text.includes('previous') && !text.includes('lines') && !text.includes('Paisa'));
 });

@@ -23,6 +23,7 @@ import { undoCourierInvoice } from '../utils/courierInvoice.js';
 import {
   importReceipt,
   listReceipts,
+  presentPlan,
   previewReceipt,
   undoCourierReceipt
 } from '../utils/courierReceipts.js';
@@ -926,9 +927,7 @@ export const previewCourierReceipt = asyncHandler(async (req, res, next) => {
   const receipt = await receiptOf(req, next);
   if (!receipt) return;
   const plan = await previewReceipt({ business: req.query.business, courier, receipt });
-  res
-    .status(200)
-    .json({ success: true, data: { receipt: { ...receipt, rows: undefined }, ...plan } });
+  res.status(200).json({ success: true, data: presentPlan(plan, receipt) });
 });
 
 /**
@@ -946,9 +945,7 @@ export const addCourierReceipt = asyncHandler(async (req, res, next) => {
     receipt,
     userId: req.user.id
   });
-  res
-    .status(201)
-    .json({ success: true, data: { receipt: { ...receipt, rows: undefined }, ...plan } });
+  res.status(201).json({ success: true, data: presentPlan(plan, receipt, plan.entry) });
 });
 
 /**
@@ -958,6 +955,8 @@ export const addCourierReceipt = asyncHandler(async (req, res, next) => {
 export const getCourierReceipts = asyncHandler(async (req, res, next) => {
   const courier = await courierOf(req, next);
   if (!courier) return;
-  const data = await listReceipts({ business: req.query.business, courier: courier._id });
+  const data = (await listReceipts({ business: req.query.business, courier: courier._id })).map(
+    d => ({ ...d, net: fromPaisa(d.totals.netPaisa), totals: undefined })
+  );
   res.status(200).json({ success: true, count: data.length, data });
 });

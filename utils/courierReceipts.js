@@ -8,6 +8,7 @@ import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
 import { postEntry } from './ledger.js';
 import { courierWalletFor } from './moneyAccounts.js';
 import { netOwed } from './courierWallet.js';
+import { fromPaisa } from './money.js';
 import { parseBusinessDate } from './pakistanDay.js';
 import { JOURNAL_SOURCES, ORDER_STATUS, PAYMENT_STATUS } from './constants.js';
 import logger from './logger.js';
@@ -562,3 +563,44 @@ export const listReceipts = async ({ business, courier }) => {
     addedAt: d.createdAt
   }));
 };
+
+/**
+ * What the screen gets: rupees (the API's unit) and only what a person needs — never the journal lines or the undo
+ * snapshots the plan carries.
+ */
+export const presentPlan = (plan, receipt, entry = null) => ({
+  receipt: {
+    cprNumber: receipt.cprNumber,
+    cprDate: receipt.cprDate,
+    merchant: receipt.merchant,
+    net: fromPaisa(receipt.totals.netPaisa),
+    delivered: receipt.totals.delivered,
+    returned: receipt.totals.returned
+  },
+  summary: {
+    receiptNet: fromPaisa(plan.summary.receiptNetPaisa),
+    ignoredNet: fromPaisa(plan.summary.ignoredNetPaisa),
+    pendingNet: fromPaisa(plan.summary.pendingNetPaisa),
+    alreadyInWallet: fromPaisa(plan.summary.alreadyInWalletPaisa),
+    willAdd: fromPaisa(plan.summary.willAddPaisa),
+    addedBeforeNet: fromPaisa(plan.summary.addedBeforeNetPaisa),
+    willAddCount: plan.summary.willAddCount,
+    pendingCount: plan.summary.pendingCount,
+    ignoredCount: plan.summary.ignoredCount,
+    addedBeforeCount: plan.summary.addedBeforeCount
+  },
+  rows: plan.rows.map(r => ({
+    tracking: r.tracking,
+    status: r.status,
+    outcome: r.outcome,
+    before: Boolean(r.before),
+    case: r.case ?? null,
+    reason: r.reason ?? null,
+    orderNumber: r.orderNumber ?? null,
+    net: fromPaisa(r.netPaisa),
+    // How far PostEx's figure is from what the app had for the parcel (0 when they agree or there was none).
+    difference: r.outcome === 'applied' && !r.before ? fromPaisa(r.netPaisa - r.appPaisa) : 0
+  })),
+  warnings: plan.warnings,
+  entry: entry ? String(entry._id) : null
+});
