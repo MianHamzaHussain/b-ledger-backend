@@ -22,7 +22,8 @@ import {
   transferSchema,
   cashbookQuerySchema,
   courierWalletQuerySchema,
-  courierWalletParcelsQuerySchema
+  courierWalletParcelsQuerySchema,
+  courierReceiptQuerySchema
 } from '../schemas/finance.js';
 import JournalEntry from '../models/JournalEntry.js';
 import Account from '../models/Account.js';
@@ -60,6 +61,9 @@ import {
   getCashbook,
   getCourierWallet,
   getCourierWalletParcels,
+  getCourierReceipts,
+  previewCourierReceipt,
+  addCourierReceipt,
   getMoneySummary
 } from '../controllers/financeController.js';
 
@@ -468,6 +472,62 @@ router.get(
   can('journal', 'read'),
   validateQuery(courierWalletParcelsQuerySchema),
   getCourierWalletParcels
+);
+
+/**
+ * @swagger
+ * /finance/courier-receipts:
+ *   get:
+ *     summary: The PostEx receipts already added for a courier
+ *     tags: [Finance]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: courier, required: true, schema: { type: string }, description: The courier party id }
+ *     responses:
+ *       200: { description: Receipts newest first, with parcel counts }
+ *       404: { description: Not a courier of this business }
+ *   post:
+ *     summary: Add a PostEx receipt (the PDF as the request body) to the courier's wallet
+ *     tags: [Finance]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/pdf: { schema: { type: string, format: binary } }
+ *     responses:
+ *       201: { description: What was added, what waits and what was ignored }
+ *       400: { description: Not a receipt, or it does not add up }
+ * /finance/courier-receipts/preview:
+ *   post:
+ *     summary: What adding a PostEx receipt would do — changes nothing
+ *     tags: [Finance]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/pdf: { schema: { type: string, format: binary } }
+ *     responses:
+ *       200: { description: Per-parcel plan and totals }
+ *       400: { description: Not a receipt, or it does not add up }
+ */
+const pdfBody = express.raw({ type: 'application/pdf', limit: '8mb' });
+router.get(
+  '/courier-receipts',
+  can('journal', 'read'),
+  validateQuery(courierReceiptQuerySchema),
+  getCourierReceipts
+);
+router.post(
+  '/courier-receipts/preview',
+  can('journal', 'create'),
+  validateQuery(courierReceiptQuerySchema),
+  pdfBody,
+  previewCourierReceipt
+);
+router.post(
+  '/courier-receipts',
+  can('journal', 'create'),
+  validateQuery(courierReceiptQuerySchema),
+  pdfBody,
+  addCourierReceipt
 );
 
 /**

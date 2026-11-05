@@ -1156,6 +1156,21 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   A layout change shows up as a refusal, never a half-read receipt. Amounts are read as text into integer paisa
   (`amountToPaisa`), never as floats. Tests use scrubbed JSON copies of two real receipts (`test/fixtures/postex-cpr-*.json`);
   no PDF is kept in the repository.
+- **Adding a receipt to the wallet** (`utils/courierReceipts.js`; `POST /finance/courier-receipts/preview` and
+  `POST /finance/courier-receipts`, raw `application/pdf` body, `journal:create`; `GET /finance/courier-receipts`). PostEx pays
+  each payout into its **own** wallet, so the courier wallet mirrors it and a parcel's money goes on **only from a receipt**, at
+  PostEx's own figure. Per parcel the importer works out what the wallet should hold (PostEx's net) and posts only the
+  **difference**, so nothing is counted twice. Cases: `paid` (unpaid delivered COD: Dr wallet net · Cr receivable booked · the rest
+  to delivery charges), `topup` (paid earlier by the retired hourly job: only net − what it put on the wallet), `charge` (returned
+  or no-COD parcel with no charge set), `moveCharge` (charge already set and owed on the receivable: moved onto the wallet, the
+  difference to return/delivery charges), `chargeDiff` (already on the wallet). A parcel **not in B Ledger is ignored** (listed
+  with its net, never posted). One B Ledger disagrees with (not delivered/returned yet, already settled by a manual courier
+  invoice into the bank, on another receipt, two orders on one tracking number) is **pending** with the reason in words; fix it
+  and add the same receipt again. One `COURIER_RECEIPT` journal entry dated the receipt's own day; each parcel is tagged
+  `courierBooking.cprNumber` (claimed atomically before posting, with a lock on the receipt, so two taps cannot double-post) and
+  keeps a `previous` snapshot. **Reversing the entry in the journal puts every parcel back** (`undoCourierReceipt`) and its row
+  waits again. The server re-reads and re-plans the PDF on apply — it never trusts a client plan. A receipt with no parcel of the
+  business is refused. The hourly `recordCourierWallets` job is retired (Step 4); the receipt is the only writer of the wallet.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 

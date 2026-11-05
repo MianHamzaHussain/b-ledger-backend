@@ -442,6 +442,8 @@ const OrderSchema = new mongoose.Schema(
           /** The day the courier says it settled this parcel, and what it put into the wallet for it (paisa). */
           settlementDate: { type: Date },
           walletPaisa: { type: Number },
+          /** The PostEx receipt this parcel was settled on (set when the receipt is added to the wallet). */
+          cprNumber: { type: String },
           /** Held while a payment / charge batch is being posted, so two runs cannot post one parcel twice. */
           settleClaim: { type: String },
           settleClaimedAt: { type: Date },

@@ -166,6 +166,8 @@ export const JOURNAL_SOURCES = {
   CUSTOM_COST: 'custom-cost',
   // A courier's invoice: the COD it paid and the charges it billed, by parcel.
   COURIER_INVOICE: 'courier-invoice',
+  // A PostEx receipt (CPR) added to the courier's wallet: what PostEx actually paid and charged, by parcel.
+  COURIER_RECEIPT: 'courier-receipt',
   // Money moved between two of the business's own places (cash to bank, a
   // partner handing over what they collected, …) — no income or cost.
   TRANSFER: 'transfer',

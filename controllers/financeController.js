@@ -18,7 +18,15 @@ import { salaryLines } from '../utils/partyPosting.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
 import { cashbook, moneySummary } from '../utils/cashbook.js';
 import { courierWalletParcels, courierWalletSummary } from '../utils/courierWalletStatement.js';
+import { inScope } from '../utils/scope.js';
 import { undoCourierInvoice } from '../utils/courierInvoice.js';
+import {
+  importReceipt,
+  listReceipts,
+  previewReceipt,
+  undoCourierReceipt
+} from '../utils/courierReceipts.js';
+import { readPostexReceipt } from '../utils/couriers/postexReceipt.js';
 import { courierPerformance } from '../utils/courierPerformance.js';
 import {
   profitAndLoss,
@@ -46,12 +54,6 @@ const amountPaisa = raw => {
 const respondPosted = async (res, params) => {
   const entry = await postEntry(params);
   res.status(201).json({ success: true, data: entry });
-};
-
-/** True when `business` is inside the caller's scope (admins pass). */
-const inScope = (req, business) => {
-  const allowed = req.accessFilter?.business?.$in;
-  return !allowed || allowed.map(String).includes(String(business));
 };
 
 /** The cash-book words for an owner withdrawal, by what it was for. */
@@ -740,6 +742,10 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
   if (entry.source?.kind === JOURNAL_SOURCES.COURIER_INVOICE) {
     await undoCourierInvoice(entry._id);
   }
+  // Undoing a PostEx receipt's entry puts its parcels back as they were, waiting for the receipt again.
+  if (entry.source?.kind === JOURNAL_SOURCES.COURIER_RECEIPT) {
+    await undoCourierReceipt(entry._id);
+  }
   res.status(201).json({ success: true, data: reversal });
 });
 
@@ -889,4 +895,69 @@ export const getMoneySummary = asyncHandler(async (req, res, next) => {
       owedToPartners: fromPaisa(s.owedToPartnersPaisa)
     }
   });
+});
+
+/** The courier (a party) named in the query, if it belongs to the business — or an error to hand on. */
+const courierOf = async (req, next) => {
+  const { business, courier } = req.query;
+  if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
+  const party = await Party.findOne({ _id: courier, business, type: PARTY_TYPES.COURIER });
+  if (!party) return next(new ErrorResponse('That is not a courier of this business', 404));
+  return party;
+};
+
+/** The PDF in the request body, read and checked — or an error saying what is wrong with it. */
+const receiptOf = async (req, next) => {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) {
+    return next(new ErrorResponse('Send the PostEx receipt as a PDF file', 400));
+  }
+  const { receipt, problems } = await readPostexReceipt(req.body);
+  if (!receipt) return next(new ErrorResponse(problems, 400));
+  return receipt;
+};
+
+/**
+ * @desc   Read a PostEx receipt (PDF body) and say what adding it would do — nothing is posted or changed.
+ * @route  POST /api/v1/finance/courier-receipts/preview?business=&courier=   (journal:create — scoped)
+ */
+export const previewCourierReceipt = asyncHandler(async (req, res, next) => {
+  const courier = await courierOf(req, next);
+  if (!courier) return;
+  const receipt = await receiptOf(req, next);
+  if (!receipt) return;
+  const plan = await previewReceipt({ business: req.query.business, courier, receipt });
+  res
+    .status(200)
+    .json({ success: true, data: { receipt: { ...receipt, rows: undefined }, ...plan } });
+});
+
+/**
+ * @desc   Add a PostEx receipt (PDF body) to the courier's wallet, parcel by parcel, with PostEx's own figures.
+ * @route  POST /api/v1/finance/courier-receipts?business=&courier=   (journal:create — scoped)
+ */
+export const addCourierReceipt = asyncHandler(async (req, res, next) => {
+  const courier = await courierOf(req, next);
+  if (!courier) return;
+  const receipt = await receiptOf(req, next);
+  if (!receipt) return;
+  const plan = await importReceipt({
+    business: req.query.business,
+    courier,
+    receipt,
+    userId: req.user.id
+  });
+  res
+    .status(201)
+    .json({ success: true, data: { receipt: { ...receipt, rows: undefined }, ...plan } });
+});
+
+/**
+ * @desc   The receipts already added for a courier, newest first.
+ * @route  GET /api/v1/finance/courier-receipts?business=&courier=   (journal:read — scoped)
+ */
+export const getCourierReceipts = asyncHandler(async (req, res, next) => {
+  const courier = await courierOf(req, next);
+  if (!courier) return;
+  const data = await listReceipts({ business: req.query.business, courier: courier._id });
+  res.status(200).json({ success: true, count: data.length, data });
 });

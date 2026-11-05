@@ -180,3 +180,9 @@ export const courierWalletParcelsQuerySchema = courierWalletQuerySchema.extend({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(25)
 });
+
+/** Which courier a receipt (or the list of receipts) is for. */
+export const courierReceiptQuerySchema = z.object({
+  business,
+  courier: objectId('Choose the courier')
+});
