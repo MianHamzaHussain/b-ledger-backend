@@ -310,3 +310,29 @@ test('what the screen gets is in rupees, with paisa kept, and carries no journal
   const text = JSON.stringify(out);
   assert.ok(!text.includes('previous') && !text.includes('lines') && !text.includes('Paisa'));
 });
+
+test('a failure after the money is posted undoes it, so adding the receipt again never counts it twice', async () => {
+  const made = await deliveredParcel({ paid: false });
+  const receipt = receiptOf([DELIVERED_ROW()]);
+  const realUpdate = CourierReceipt.updateOne.bind(CourierReceipt);
+  // Saving the receipt's rows (the last step, after the entry is posted) fails once.
+  CourierReceipt.updateOne = (filter, update, ...rest) =>
+    update?.$set?.rows
+      ? Promise.reject(new Error('disk full'))
+      : realUpdate(filter, update, ...rest);
+  try {
+    await assert.rejects(add(made, receipt), /disk full/);
+  } finally {
+    CourierReceipt.updateOne = realUpdate;
+  }
+
+  assert.equal(await walletBal(made.biz, made.courier), 0, 'the posted money was undone');
+  assert.equal(await bal(made.biz, CODES.COD_RECEIVABLE), 379100);
+  const order = await Order.findById(made.order._id);
+  assert.equal(order.paymentStatus, 'unpaid');
+  assert.equal(order.courierBooking.cprNumber, undefined);
+  assert.equal(order.courierBooking.walletPaisa, undefined);
+
+  await add(made, receipt);
+  assert.equal(await walletBal(made.biz, made.courier), 363100, 'once, not twice');
+});

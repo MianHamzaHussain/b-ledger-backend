@@ -5,7 +5,7 @@ import JournalEntry from '../models/JournalEntry.js';
 import Order from '../models/Order.js';
 import ErrorResponse from './errorResponse.js';
 import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
-import { postEntry } from './ledger.js';
+import { postEntry, reverseEntry } from './ledger.js';
 import { courierWalletFor } from './moneyAccounts.js';
 import { netOwed } from './courierWallet.js';
 import { fromPaisa } from './money.js';
@@ -426,6 +426,7 @@ export const importReceipt = async ({ business, courier, receipt, userId }) => {
     throw new ErrorResponse('This receipt is being added right now. Try again in a moment.', 409);
 
   let claimed = [];
+  let entry = null;
   try {
     const plan = await planReceipt({ business, courier, receipt, wallet });
     refuseUnrelated(plan, biz?.name ?? 'this business');
@@ -451,7 +452,6 @@ export const importReceipt = async ({ business, courier, receipt, userId }) => {
     }
 
     const lines = claimed.flatMap(r => r.lines);
-    let entry = null;
     if (lines.length) {
       entry = await postEntry({
         business,
@@ -506,12 +506,22 @@ export const importReceipt = async ({ business, courier, receipt, userId }) => {
     );
     return { ...plan, entry };
   } catch (err) {
-    // Nothing posted that matters: free the parcels this run claimed so the receipt can be added again.
+    // Leave nothing half-done. An entry already posted is reversed (otherwise adding the receipt again would post its
+    // money a second time), and every parcel this run claimed goes back exactly as it was, so the receipt can be
+    // added again cleanly.
+    if (entry) {
+      await reverseEntry(entry._id, {
+        userId,
+        memo: `PostEx receipt ${receipt.cprNumber} could not be finished — undone`
+      }).catch(undoErr =>
+        logger.error({ err: undoErr, entry: String(entry._id) }, 'postex receipt: undo failed')
+      );
+    }
     await Promise.all(
       claimed.map(r =>
         Order.updateOne(
           { _id: r.order, 'courierBooking.cprNumber': receipt.cprNumber },
-          { $unset: { 'courierBooking.cprNumber': '' } }
+          restoreUpdate(r.previous)
         )
       )
     );
