@@ -785,7 +785,7 @@ export const getCourierWallet = asyncHandler(async (req, res, next) => {
   res.status(200).json({
     success: true,
     data: {
-      wallet: { _id: wallet._id, name: wallet.name },
+      wallet: { _id: wallet._id, name: wallet.name, courier: wallet.courier },
       inWallet: fromPaisa(out.walletPaisa),
       owed: fromPaisa(out.owedPaisa),
       charges: fromPaisa(out.pendingChargesPaisa),
