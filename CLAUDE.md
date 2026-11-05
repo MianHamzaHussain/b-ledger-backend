@@ -1144,6 +1144,16 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   once by what PostEx already deducted). The wallet's reads use the `{ business, courier, status }` index on `Order`; each
   page also reads the wallet's own journal entries (hourly at most), which is cheap until the history reaches the tens of
   thousands — then keep a per-parcel marker instead of the `$in` list.
+- **Reading a PostEx receipt (CPR)** (`utils/couriers/postexReceipt.js`, dependency `pdfjs-dist`). PostEx has no API for what it
+  actually paid, only the Cash Payment Receipt PDF it releases for each payout. The reader takes the PDF's text **with
+  positions** (a parcel is one band of the table: tracking number at the left, the figures in fixed columns — not the order the
+  text happens to come out in) and returns `{ receipt, problems }`. It **refuses unless the receipt adds up**: every parcel
+  against PostEx's own rule (delivered: COD − shipping − GST − 4 % = net; returned: −(shipping + GST), its COD column is
+  informational and never money), the parcels against the printed Net / Shipping / GST / Deduction totals and counts, no tracking
+  number twice, and Carry forward / Miscellaneous / Adjustments / Upfront charges all zero (those kinds are not handled yet).
+  A layout change shows up as a refusal, never a half-read receipt. Amounts are read as text into integer paisa
+  (`amountToPaisa`), never as floats. Tests use scrubbed JSON copies of two real receipts (`test/fixtures/postex-cpr-*.json`);
+  no PDF is kept in the repository.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 
