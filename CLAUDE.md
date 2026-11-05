@@ -1116,9 +1116,10 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
 
 - **The courier's wallet** (R9-6, `utils/courierWallet.js`). Money the courier holds for the shop — a wallet-kind
   money account flagged `Account.heldByCourier` (+ `courier`), made the first time it is needed, one per courier.
-  **Off unless an admin turns on `integration.recordPayments`** (after comparing the first batch with the
-  courier's statement: the courier's call says only paid / not paid, so the amount is **calculated**, not read).
-  When on, about hourly: a delivered, unpaid, COD parcel **whose fee is known** that the courier says it paid is
+  **Retired 2026-11: no job fills it any more.** The courier's call said only paid / not paid, so the amount was
+  **calculated** and drifted from PostEx's real figures; a PostEx receipt (CPR) now fills the wallet, parcel by parcel
+  (below, "Adding a receipt to the wallet"). `recordCourierWallets` and `integration.recordPayments` remain only to describe
+  the old state: this is how the old job worked — a delivered, unpaid, COD parcel **whose fee is known** that the courier says it paid is
   recorded in one entry, **Dr wallet / Cr COD receivable [courier]** for the receivable **as booked at
   delivery** (read from the sale entry, so it clears to exactly zero even if the COD-tax settings changed), the
   parcel is marked paid (`courierSettlement`, so **undoing the entry from the journal reopens it**) and keeps
@@ -1139,11 +1140,45 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   charges), `charge` (− a return's or a no-cash parcel's charge), `owed` (delivered, not paid yet; blank while the fee is
   unknown) or `charge-pending` — and its amount. "Upcoming" = `owed` + `charge-pending`. `search` is a plain word (order
   number, tracking number or customer), never a pattern. A parcel recorded before `walletPaisa` existed is recomputed
-  from its sale entry (`netOwed`), so no migration. Nothing is posted by reading. **Rollout:** the first hourly pass after
+  from its sale entry (`netOwed`), so no migration. Nothing is posted by reading. **Undoing a wallet entry from the journal fully reopens its parcels** (`undoCourierInvoice`): a paid parcel goes back to unpaid and
+  loses its `walletPaisa`, `settlementDate` and `codSettledAt`; a charge entry clears `walletChargeEntry` / `walletChargedAt`, so the charge
+  is open to be moved again rather than left looking taken. **Rollout:** the first hourly pass after
   this ships posts the charge of every old delivered no-cash parcel whose fee is known (one catch-up, so the wallet drops
   once by what PostEx already deducted). The wallet's reads use the `{ business, courier, status }` index on `Order`; each
   page also reads the wallet's own journal entries (hourly at most), which is cheap until the history reaches the tens of
   thousands — then keep a per-parcel marker instead of the `$in` list.
+- **Reading a PostEx receipt (CPR)** (`utils/couriers/postexReceipt.js`, dependency `pdfjs-dist`). PostEx has no API for what it
+  actually paid, only the Cash Payment Receipt PDF it releases for each payout. The reader takes the PDF's text **with
+  positions** (a parcel is one band of the table: tracking number at the left, the figures in fixed columns — not the order the
+  text happens to come out in) and returns `{ receipt, problems }`. It **refuses unless the receipt adds up**: every parcel
+  against PostEx's own rule (delivered: COD − shipping − GST − 4 % = net; returned: −(shipping + GST), its COD column is
+  informational and never money), the parcels against the printed Net / Shipping / GST / Deduction totals and counts, no tracking
+  number twice, and Carry forward / Miscellaneous / Adjustments / Upfront charges all zero (those kinds are not handled yet).
+  A layout change shows up as a refusal, never a half-read receipt. Amounts are read as text into integer paisa
+  (`amountToPaisa`), never as floats. Tests use scrubbed JSON copies of two real receipts (`test/fixtures/postex-cpr-*.json`);
+  no PDF is kept in the repository.
+- **Adding a receipt to the wallet** (`utils/courierReceipts.js`; `POST /finance/courier-receipts/preview` and
+  `POST /finance/courier-receipts`, raw `application/pdf` body, `journal:create`; `GET /finance/courier-receipts`). PostEx pays
+  each payout into its **own** wallet, so the courier wallet mirrors it and a parcel's money goes on **only from a receipt**, at
+  PostEx's own figure. Per parcel the importer works out what the wallet should hold (PostEx's net) and posts only the
+  **difference**, so nothing is counted twice. Cases: `paid` (unpaid delivered COD: Dr wallet net · Cr receivable booked · the rest
+  to delivery charges), `topup` (paid earlier by the retired hourly job: only net − what it put on the wallet), `charge` (returned
+  or no-COD parcel with no charge set), `moveCharge` (charge already set and owed on the receivable: moved onto the wallet, the
+  difference to return/delivery charges), `chargeDiff` (already on the wallet). A parcel **not in B Ledger is ignored** (listed
+  with its net, never posted). One B Ledger disagrees with (not delivered/returned yet, already settled by a manual courier
+  invoice into the bank, on another receipt, two orders on one tracking number) is **pending** with the reason in words; fix it
+  and add the same receipt again. One `COURIER_RECEIPT` journal entry dated the receipt's own day; each parcel is tagged
+  `courierBooking.cprNumber` (claimed atomically before posting, with a lock on the receipt, so two taps cannot double-post) and
+  keeps a `previous` snapshot. **Reversing the entry in the journal puts every parcel back** (`undoCourierReceipt`) and its row
+  waits again. The server re-reads and re-plans the PDF on apply — it never trusts a client plan. A receipt with no parcel of the
+  business is refused. The hourly `recordCourierWallets` job is retired and no longer started from `courierSync`; the receipt is the only writer of the wallet.
+- **"PostEx has paid — add its receipt"** (`utils/courierPayoutAlert.js`, about hourly from the courier tick). PostEx's API
+  says per parcel only paid / not paid and the day (`payment-status`); it **cannot download the receipt** (its `get-invoice`
+  is the airway bill, and `cprNumber_1/2` are only for upfront / reserve payments). So this check **never moves money**: for
+  every connected PostEx courier it asks about delivered, unpaid parcels not on a receipt (40 per pass, rechecked every 3 h),
+  stamps `courierBooking.postexPaidOn` on the paid ones, and rings the bell **once per parcel** (`courier-paid`) with a link to
+  the wallet page — making the wallet first if an older courier has none. The wallet summary's `awaitingReceipt` counts
+  parcels PostEx says it paid whose receipt is not added yet; adding the receipt (it sets `cprNumber`) clears them.
 
 ### 10.8 Selling without stock, owner withdrawals, idempotent orders, branding
 

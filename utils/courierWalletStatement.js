@@ -36,7 +36,8 @@ const FIELDS = [
   'courierBooking.trackingNumber',
   'courierBooking.walletPaisa',
   'courierBooking.settlementDate',
-  'courierBooking.walletChargeEntry'
+  'courierBooking.walletChargeEntry',
+  'courierBooking.cprNumber'
 ];
 
 const NO_CASH_CHARGE = [
@@ -93,18 +94,26 @@ export const courierWalletSummary = async (business, wallet) => {
   const ids = entries.map(e => e._id);
   const f = kindFilters(ids);
 
-  const [owedOrders, pendingOrders, paidCount, chargesCount, biz, walletPaisa] = await Promise.all([
-    Order.find({ ...base, ...f.owed })
-      .select(FIELDS.join(' '))
-      .lean(),
-    Order.find({ ...base, ...f.pending })
-      .select('status returnChargePaisa deliveryChargePaisa')
-      .lean(),
-    ids.length ? Order.countDocuments({ ...base, ...f.paid }) : 0,
-    ids.length ? Order.countDocuments({ ...base, ...f.charges }) : 0,
-    Business.findById(business).select('codTax').lean(),
-    accountBalance(business, wallet._id)
-  ]);
+  const [owedOrders, pendingOrders, paidCount, chargesCount, biz, walletPaisa, awaitingReceipt] =
+    await Promise.all([
+      Order.find({ ...base, ...f.owed })
+        .select(FIELDS.join(' '))
+        .lean(),
+      Order.find({ ...base, ...f.pending })
+        .select('status returnChargePaisa deliveryChargePaisa')
+        .lean(),
+      ids.length ? Order.countDocuments({ ...base, ...f.paid }) : 0,
+      ids.length ? Order.countDocuments({ ...base, ...f.charges }) : 0,
+      Business.findById(business).select('codTax').lean(),
+      accountBalance(business, wallet._id),
+      // PostEx says it paid these, but its receipt has not been added — the wallet page asks for it.
+      Order.countDocuments({
+        ...base,
+        paymentStatus: PAYMENT_STATUS.UNPAID,
+        'courierBooking.postexPaidOn': { $exists: true },
+        'courierBooking.cprNumber': { $exists: false }
+      })
+    ]);
 
   const sales = await saleEntriesFor(owedOrders);
   let owedPaisa = 0;
@@ -127,6 +136,7 @@ export const courierWalletSummary = async (business, wallet) => {
     pendingChargesPaisa,
     willGetPaisa: walletPaisa + owedPaisa - pendingChargesPaisa,
     feeUnknown,
+    awaitingReceipt,
     counts: { ...counts, all: counts.paid + counts.charges + counts.upcoming }
   };
 };
@@ -221,6 +231,8 @@ export const courierWalletParcels = async (
       order: o._id,
       orderNumber: o.orderNumber,
       tracking: trackingOf(o),
+      // The PostEx receipt that paid or charged this parcel, if one did.
+      receipt: o.courierBooking?.cprNumber ?? null,
       customerName: o.customerName,
       kind,
       reason: kind.startsWith('charge')
