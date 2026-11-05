@@ -8,6 +8,7 @@ import JournalEntry from '../models/JournalEntry.js';
 import CourierReceipt from '../models/CourierReceipt.js';
 import { clearCityCache } from '../utils/couriers/booking.js';
 import { recordCourierWallets } from '../utils/courierWallet.js';
+import { courierWalletParcels } from '../utils/courierWalletStatement.js';
 import { importReceipt, previewReceipt } from '../utils/courierReceipts.js';
 import { accountBalance } from '../utils/ledger.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
@@ -272,4 +273,28 @@ test('routes: a refused file is a 400; an empty body is refused; another busines
     }),
     /Business not found/
   );
+});
+
+test('the wallet statement shows each parcel with its receipt number and PostEx amount', async () => {
+  const made = await deliveredParcel({ paid: false });
+  const paid = made;
+  await add(paid, receiptOf([DELIVERED_ROW()]));
+  const w = await wallet(made.biz, made.courier);
+  const { rows } = await courierWalletParcels(made.biz._id, w, { tab: 'paid', page: 1, limit: 10 });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'paid');
+  assert.equal(rows[0].receipt, 'CPR-TEST1');
+  assert.equal(rows[0].amountPaisa, 363100);
+
+  const returned = await deliveredParcel({ paid: false, record: RETURNED });
+  await add(returned, receiptOf([row('CX-1001', 'returned')], 'CPR-TEST2'));
+  const w2 = await wallet(returned.biz, returned.courier);
+  const out = await courierWalletParcels(returned.biz._id, w2, {
+    tab: 'charges',
+    page: 1,
+    limit: 10
+  });
+  assert.equal(out.rows[0].kind, 'charge');
+  assert.equal(out.rows[0].receipt, 'CPR-TEST2');
+  assert.equal(out.rows[0].amountPaisa, -20900);
 });

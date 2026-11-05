@@ -36,7 +36,8 @@ const FIELDS = [
   'courierBooking.trackingNumber',
   'courierBooking.walletPaisa',
   'courierBooking.settlementDate',
-  'courierBooking.walletChargeEntry'
+  'courierBooking.walletChargeEntry',
+  'courierBooking.cprNumber'
 ];
 
 const NO_CASH_CHARGE = [
@@ -221,6 +222,8 @@ export const courierWalletParcels = async (
       order: o._id,
       orderNumber: o.orderNumber,
       tracking: trackingOf(o),
+      // The PostEx receipt that paid or charged this parcel, if one did.
+      receipt: o.courierBooking?.cprNumber ?? null,
       customerName: o.customerName,
       kind,
       reason: kind.startsWith('charge')
