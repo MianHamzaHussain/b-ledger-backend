@@ -261,9 +261,24 @@ export const recordCourierInvoice = async ({
  * be entered again correctly.
  */
 export const undoCourierInvoice = async entryId => {
+  // A parcel the courier wallet recorded as paid also kept what it put into the wallet and the settlement day;
+  // reopened, it must not still look settled.
   await Order.updateMany(
     { courierSettlement: entryId },
-    { $set: { paymentStatus: PAYMENT_STATUS.UNPAID }, $unset: { courierSettlement: '' } }
+    {
+      $set: { paymentStatus: PAYMENT_STATUS.UNPAID },
+      $unset: {
+        courierSettlement: '',
+        'courierBooking.walletPaisa': '',
+        'courierBooking.settlementDate': '',
+        'courierBooking.codSettledAt': ''
+      }
+    }
+  );
+  // A charge moved onto the wallet and then undone is open to be moved again, not still "charged".
+  await Order.updateMany(
+    { 'courierBooking.walletChargeEntry': entryId },
+    { $unset: { 'courierBooking.walletChargeEntry': '', 'courierBooking.walletChargedAt': '' } }
   );
   await Order.updateMany(
     { deliveryChargeEntry: entryId },

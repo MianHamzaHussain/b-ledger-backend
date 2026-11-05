@@ -1139,7 +1139,9 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   charges), `charge` (− a return's or a no-cash parcel's charge), `owed` (delivered, not paid yet; blank while the fee is
   unknown) or `charge-pending` — and its amount. "Upcoming" = `owed` + `charge-pending`. `search` is a plain word (order
   number, tracking number or customer), never a pattern. A parcel recorded before `walletPaisa` existed is recomputed
-  from its sale entry (`netOwed`), so no migration. Nothing is posted by reading. **Rollout:** the first hourly pass after
+  from its sale entry (`netOwed`), so no migration. Nothing is posted by reading. **Undoing a wallet entry from the journal fully reopens its parcels** (`undoCourierInvoice`): a paid parcel goes back to unpaid and
+  loses its `walletPaisa`, `settlementDate` and `codSettledAt`; a charge entry clears `walletChargeEntry` / `walletChargedAt`, so the charge
+  is open to be moved again rather than left looking taken. **Rollout:** the first hourly pass after
   this ships posts the charge of every old delivered no-cash parcel whose fee is known (one catch-up, so the wallet drops
   once by what PostEx already deducted). The wallet's reads use the `{ business, courier, status }` index on `Order`; each
   page also reads the wallet's own journal entries (hourly at most), which is cheap until the history reaches the tens of

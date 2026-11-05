@@ -215,6 +215,54 @@ test('undoing the entry from the journal puts the parcel back to unpaid', async 
   assert.equal(await balanceOf(biz, await walletOf(biz, courier)), 0);
 });
 
+test('undoing a payment also clears what the parcel kept of it: its wallet amount, its settlement day, its paid time', async () => {
+  const { order, courier } = await deliveredParcel();
+  await recordingOn(await Party.findById(courier._id));
+  await recordCourierWallets();
+  const before = await Order.findById(order._id);
+  assert.equal(before.courierBooking.walletPaisa, 379100);
+  assert.ok(before.courierBooking.codSettledAt);
+
+  await runHandler(reverseJournalEntry, {
+    user: admin,
+    resource: await JournalEntry.findById(before.courierSettlement),
+    body: {}
+  });
+
+  const after = (await Order.findById(order._id)).courierBooking;
+  assert.equal(after.walletPaisa, undefined);
+  assert.equal(after.settlementDate, undefined);
+  assert.equal(after.codSettledAt, undefined);
+});
+
+test('undoing a charge puts it back as not-yet-charged, so it is not left looking taken', async () => {
+  const { order, courier, biz } = await deliveredParcel({ paid: false, record: RETURNED });
+  await recordingOn(await Party.findById(courier._id));
+  await recordCourierWallets();
+  const wallet = await walletOf(biz, courier);
+  const charged = await Order.findById(order._id);
+  assert.equal(await balanceOf(biz, wallet), -13900);
+  assert.ok(charged.courierBooking.walletChargeEntry);
+  assert.ok(charged.courierBooking.walletChargedAt);
+
+  await runHandler(reverseJournalEntry, {
+    user: admin,
+    resource: await JournalEntry.findById(charged.courierBooking.walletChargeEntry),
+    body: {}
+  });
+
+  const after = (await Order.findById(order._id)).courierBooking;
+  assert.equal(after.walletChargeEntry, undefined);
+  assert.equal(after.walletChargedAt, undefined);
+  assert.equal(await balanceOf(biz, wallet), 0, 'the wallet is back to nothing');
+  const receivable = await accountByCode(biz._id, CODES.COD_RECEIVABLE);
+  assert.equal(
+    await accountBalance(biz._id, receivable._id),
+    -13900,
+    'and the charge is the courier’s to deduct again, where the return posted it'
+  );
+});
+
 test('turning recording on needs a saved key, and names who turned it on', async () => {
   fakePostex({});
   const { courier } = await setupOrder();
