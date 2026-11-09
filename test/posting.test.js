@@ -80,3 +80,35 @@ test('a walk-in books the full balance to the customer — no courier taxes', as
   assert.ok(!touched.has(String(delivery)), 'no delivery charge');
   assert.ok(!touched.has(String(wht)), 'no withholding tax');
 });
+
+test('a COD above the order total (courier costs carried on it) still balances, clearing the negative advance', async () => {
+  const biz = await makeBusiness({
+    codTax: { whtPercent: 2, salesTaxPercent: 2, registered: false }
+  });
+  const courier = await makeParty(biz._id, 'courier');
+  const order = {
+    _id: oid(),
+    business: biz._id,
+    orderNumber: '0003',
+    total: 12000,
+    // The customer owes 13,226: the 12,000 replacement plus 1,226 of the courier's costs for both parcels.
+    codAmount: 13226,
+    advanceAmount: 0,
+    courier: courier._id,
+    deliveryChargePaisa: toPaisa(268.25),
+    items: [{ unitCost: 8000, quantity: 1 }]
+  };
+
+  const entry = await postOrderSale(order, userId);
+  assert.equal(sumDebit(entry), sumCredit(entry), 'entry balances');
+  const advances = (await accountByCode(biz._id, CODES.CUSTOMER_ADVANCES))._id;
+  const line = entry.lines.find(l => String(l.account) === String(advances));
+  assert.equal(
+    line.creditPaisa,
+    toPaisa(1226),
+    'the excess over the total clears what was kept back'
+  );
+  const sales = (await accountByCode(biz._id, CODES.SALES))._id;
+  const sale = entry.lines.find(l => String(l.account) === String(sales));
+  assert.equal(sale.creditPaisa, toPaisa(12000), 'the sale itself is still the order total');
+});

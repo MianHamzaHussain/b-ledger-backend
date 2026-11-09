@@ -36,9 +36,10 @@ import { toPaisa } from '../utils/money.js';
 
 /**
  * An exchange doesn't refund the customer — what they paid for the original
- * becomes credit on the replacement, so its COD is only the price difference.
- * What the courier did (collected the COD, charged its fee) stays booked.
- * Suits here sell for 3,000 and cost 1,000.
+ * becomes credit on the replacement, so its COD is the price difference PLUS the courier's costs for both parcels
+ * (the business absorbs none of it). What the courier did (collected the COD, charged its fee) stays booked.
+ * Suits here sell for 3,000 and cost 1,000; the courier's delivery charge is not known yet, so the only cost is the
+ * 4 % COD tax on the original's 3,000 = 120.00 — which makes the like-for-like COD 125 (120 grossed up for its own tax).
  */
 
 before(connect);
@@ -103,7 +104,7 @@ const stockOf = async (ctx, variant) =>
   (await Product.findById(ctx.product._id)).variants[variant].stock;
 const balance = (ctx, account) => accountBalance(ctx.biz._id, account);
 
-test('return first, after the courier paid: its khata stays right and the like-for-like replacement is COD 0', async () => {
+test('return first, after the courier paid: its khata stays right and the like-for-like replacement carries only the courier costs', async () => {
   const ctx = await setup();
   let original = await delivered(ctx);
 
@@ -137,13 +138,14 @@ test('return first, after the courier paid: its khata stays right and the like-f
   assert.equal(original.reversalTrackingId, 'REV1');
   assert.equal(original.status, 'exchanged');
 
-  // Same price, other size: nothing more to collect.
+  // Same price, other size: the customer pays the original's courier tax (120.00), grossed up to the rupee for the
+  // tax on that COD itself = 125.
   const out = await runHandler(createReplacement, {
     resource: original,
     body: orderReplacementSchema.parse({ items: [line(ctx, 1)] })
   });
   const replacement = await Order.findById(out.body.data._id);
-  assert.equal(replacement.codAmount, 0);
+  assert.equal(replacement.codAmount, 125);
   assert.equal(replacement.refundDuePaisa, 0);
   original = await Order.findById(original._id);
   assert.equal(original.refundDuePaisa, 0, 'the credit moved to the replacement');
@@ -157,9 +159,14 @@ test('return first, after the courier paid: its khata stays right and the like-f
   r = await setStatus(r, { status: 'delivered' });
   assert.equal(await balance(ctx, ctx.liability), 0);
   assert.equal(await balance(ctx, ctx.sales), -toPaisa(3000), 'one sale, not two');
+  assert.equal(
+    await balance(ctx, await accountByCode(ctx.biz._id, CODES.CHARGES_KEPT).then(a => a._id)),
+    -toPaisa(125),
+    'the courier costs were kept back from the credit'
+  );
 });
 
-test('a dearer replacement collects the difference; a cheaper one owes a refund', async () => {
+test('a dearer replacement collects the difference and the costs; a cheaper one owes a refund less the costs', async () => {
   const ctx = await setup();
   const first = await delivered(ctx);
   await runHandler(exchangeReturn, { resource: first, body: {} });
@@ -167,7 +174,8 @@ test('a dearer replacement collects the difference; a cheaper one owes a refund'
     resource: await Order.findById(first._id),
     body: orderReplacementSchema.parse({ items: [line(ctx, 1, 3500)] })
   });
-  assert.equal(dearer.body.data.codAmount, 500);
+  // 500 more + the 120.00 tax on the original → 620.00, grossed up for its own tax: 646.
+  assert.equal(dearer.body.data.codAmount, 646);
 
   const second = await delivered(ctx);
   await runHandler(exchangeReturn, { resource: second, body: {} });
@@ -176,6 +184,7 @@ test('a dearer replacement collects the difference; a cheaper one owes a refund'
     body: orderReplacementSchema.parse({ items: [line(ctx, 1, 2600)] })
   });
   assert.equal(cheaper.body.data.codAmount, 0);
+  // The refund is held gross (400.00) and the courier's costs come off it when it is paid.
   assert.equal(cheaper.body.data.refundDuePaisa, toPaisa(400));
 });
 
@@ -196,7 +205,11 @@ test('swap at the door: the replacement goes now, the stock only when the old it
 
   const out = await runHandler(swapOrder, {
     resource: original,
-    body: orderSwapSchema.parse({ items: [line(ctx, 1)], reversalTrackingId: 'REV-SWAP' })
+    body: orderSwapSchema.parse({
+      items: [line(ctx, 1)],
+      reversalTrackingId: 'REV-SWAP',
+      differenceAccount: ctx.cash
+    })
   });
   const replacement = await Order.findById(out.body.data._id);
   original = await Order.findById(original._id);
@@ -222,7 +235,10 @@ test('a swap that runs out of stock leaves the original untouched', async () => 
   await assert.rejects(
     runHandler(swapOrder, {
       resource: original,
-      body: orderSwapSchema.parse({ items: [{ ...line(ctx, 1), quantity: 99 }] })
+      body: orderSwapSchema.parse({
+        items: [{ ...line(ctx, 1), quantity: 99 }],
+        differenceAccount: ctx.cash
+      })
     })
   );
   const fresh = await Order.findById(original._id);
@@ -287,7 +303,7 @@ test('a dearer swap: no COD — the difference is paid to us directly, as an adv
   };
   await assert.rejects(
     runHandler(swapOrder, { resource: original, body: orderSwapSchema.parse(body) }),
-    /pays the difference to you directly/
+    /pays the difference and the courier costs to you directly/
   );
 
   const out = await runHandler(swapOrder, {
@@ -297,10 +313,11 @@ test('a dearer swap: no COD — the difference is paid to us directly, as an adv
   const replacement = await Order.findById(out.body.data._id);
   assert.equal(replacement.codAmount, 0, 'the rider collects nothing');
   assert.equal(replacement.isSwap, true);
-  assert.ok(replacement.customerMoney.some(m => m.kind === 'advance' && m.amountPaisa === 150000));
+  // 1,500 more + the original's 120.00 tax = 1,620.00 paid to us directly; no tax on the swap's own (zero) COD.
+  assert.ok(replacement.customerMoney.some(m => m.kind === 'advance' && m.amountPaisa === 162000));
   assert.equal(
     await balance(ctx, await (async () => (await accountByCode(ctx.biz._id, CODES.CASH))._id)()),
-    150000
+    162000
   );
 });
 
@@ -311,7 +328,11 @@ test('a swap keeps the original courier — at creation and at dispatch', async 
   const out = await runHandler(swapOrder, {
     resource: original,
     // A courier sent anyway is dropped: the schema has no courier for a swap.
-    body: orderSwapSchema.parse({ items: [line(ctx, 1)], courier: String(other._id) })
+    body: orderSwapSchema.parse({
+      items: [line(ctx, 1)],
+      courier: String(other._id),
+      differenceAccount: ctx.cash
+    })
   });
   let replacement = await Order.findById(out.body.data._id);
   assert.equal(String(replacement.courier), String(ctx.courier._id));

@@ -67,6 +67,12 @@ import {
   markCreditMoved
 } from '../utils/exchange.js';
 import {
+  applyExchangeKeep,
+  exchangeKeep,
+  settleCourierCosts,
+  undoExchangeCosts
+} from '../utils/courierCosts.js';
+import {
   ORDER_STATUS,
   ORDER_TRANSITIONS,
   PAYMENT_STATUS,
@@ -642,6 +648,13 @@ const makeReplacement = async (original, body, userId, beforeCreate) => {
       createdBy: userId
     });
     markCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
+    // The customer pays both parcels' courier costs: kept back from the credit now, so the COD carries them.
+    const keep = await exchangeKeep(original, {
+      newTotalPaisa: toPaisa(replacement.total),
+      creditPaisa: credit?.amountPaisa ?? 0,
+      isSwap: Boolean(body.isSwap)
+    });
+    if (keep.owes) await applyExchangeKeep(replacement, keep, userId);
     return replacement;
   } catch (err) {
     await releaseStock(newItems);
@@ -678,7 +691,90 @@ export const exchangeReturn = asyncHandler(async (req, res) => {
  * @route  GET /api/v1/orders/:id/refund-quote  (orders:read — scoped)
  */
 export const getRefundQuote = asyncHandler(async (req, res) => {
-  res.status(200).json({ success: true, data: await refundQuote(req.resource) });
+  const q = await refundQuote(req.resource, {
+    returnBy: req.query.returnBy === 'us' ? 'us' : undefined
+  });
+  res.status(200).json({
+    success: true,
+    data: {
+      paid: fromPaisa(q.paidPaisa),
+      share: fromPaisa(q.sharePaisa),
+      lines: q.lines.map(l => ({
+        label: l.label,
+        amount: fromPaisa(l.amountPaisa),
+        source: l.source,
+        isFinal: l.isFinal,
+        parcel: l.parcel
+      })),
+      totalCost: fromPaisa(q.totalCostPaisa),
+      netRefund: fromPaisa(q.netRefundPaisa),
+      isFinal: q.isFinal,
+      waitingFor: q.waitingFor,
+      settled: q.settled,
+      waived: q.waived,
+      reason: q.reason
+    }
+  });
+});
+
+/**
+ * @desc   What an exchange would cost the customer, before the replacement is made: the price difference plus both
+ *         parcels' courier costs. `owes` true → they pay `cod` (return first) or `pays` (swap); false → they are
+ *         owed money back, less `fixed` (the costs known now) and the replacement's tax on nothing.
+ * @route  GET /api/v1/orders/:id/exchange-quote?total=<replacement total, rupees>&swap=true|false  (orders:read)
+ */
+export const getExchangeQuote = asyncHandler(async (req, res, next) => {
+  const original = req.resource;
+  const total = Number(req.query.total);
+  if (!Number.isFinite(total) || total < 0) {
+    return next(new ErrorResponse('Give the replacement total', 400));
+  }
+  // A delivered original still holds its COD as cash; once returned it is already credit on the order.
+  const creditPaisa =
+    heldPaisaOf(original) +
+    (original.status === ORDER_STATUS.DELIVERED ? toPaisa(original.codAmount) : 0);
+  const isSwap = req.query.swap === 'true';
+  const keep = await exchangeKeep(original, {
+    newTotalPaisa: toPaisa(total),
+    creditPaisa,
+    isSwap
+  });
+  res.status(200).json({
+    success: true,
+    data: {
+      owes: keep.owes,
+      isSwap,
+      credit: fromPaisa(creditPaisa),
+      difference: fromPaisa(keep.diffPaisa),
+      cod: fromPaisa(keep.codPaisa),
+      pays: isSwap && keep.owes ? fromPaisa(keep.basePaisa) : 0,
+      keep: fromPaisa(keep.keepPaisa),
+      knownCosts: fromPaisa(keep.fixedPaisa),
+      // If they are owed money: about this much once PostEx has billed both parcels.
+      estimatedPayout: keep.owes ? 0 : Math.max(0, fromPaisa(-keep.basePaisa)),
+      lines: keep.lines.map(l => ({
+        label: l.label,
+        amount: fromPaisa(l.amountPaisa),
+        source: l.source
+      }))
+    }
+  });
+});
+
+/**
+ * @desc   An admin waives the courier-cost deductions on a refund or exchange (a faulty item): the customer gets
+ *         back everything and the reason is kept on the order.
+ * @route  POST /api/v1/orders/:id/courier-costs/waive  (orders:update — scoped; admin only)
+ */
+export const waiveCourierCosts = asyncHandler(async (req, res) => {
+  const order = req.resource;
+  await settleCourierCosts(order, {
+    userId: req.user.id,
+    user: req.user,
+    waive: true,
+    reason: req.body.reason
+  });
+  res.status(200).json({ success: true, data: order });
 });
 
 /**
@@ -744,17 +840,20 @@ export const swapOrder = asyncHandler(async (req, res, next) => {
       (s, i) => s + toPaisa(i.unitPrice) * i.quantity,
       0
     ) + (req.body.customWork || []).reduce((s, w) => s + toPaisa(w.price), 0);
-  const differencePaisa = newTotal - credit;
+  // What the customer pays directly: the price difference plus both parcels' courier costs.
+  const { owes, basePaisa: differencePaisa } = await exchangeKeep(original, {
+    newTotalPaisa: newTotal,
+    creditPaisa: credit,
+    isSwap: true
+  });
   const differenceMoney =
-    differencePaisa > 0
-      ? req.body.differenceAccount
-        ? await resolveMoney(original.business, { account: req.body.differenceAccount }, req.user)
-        : null
+    owes && req.body.differenceAccount
+      ? await resolveMoney(original.business, { account: req.body.differenceAccount }, req.user)
       : null;
-  if (differencePaisa > 0 && !differenceMoney) {
+  if (owes && !differenceMoney) {
     return next(
       new ErrorResponse(
-        'The customer pays the difference to you directly — choose where it came in',
+        'The customer pays the difference and the courier costs to you directly — choose where it came in',
         400
       )
     );
@@ -1018,6 +1117,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   // A made-from-scratch piece is still a finished piece: into stock, not a loss.
   // Other custom work (an alteration on a stock item) was spent — written off.
   if (status === ORDER_STATUS.CANCELLED || status === ORDER_STATUS.RETURNED) {
+    // An exchange's replacement that never arrives: its costs were fixed assuming it would.
+    await undoExchangeCosts(order, req.user.id);
     if (scratchLines(order).length) {
       await putScratchInStock(order, req.body.scratchPieces, req.user.id);
     } else if (!order.customCostWriteOff) {
@@ -1770,8 +1871,17 @@ export const addOrderAdvance = asyncHandler(async (req, res) => {
 export const addOrderRefund = asyncHandler(async (req, res) => {
   const order = req.resource;
   const money = await orderMoney(order, req);
-  const { amount, date, note } = req.body;
-  await recordRefund(order, { amount, money, date, note, userId: req.user.id });
+  const { amount, date, note, early, reason } = req.body;
+  await recordRefund(order, {
+    amount,
+    money,
+    date,
+    note,
+    userId: req.user.id,
+    user: req.user,
+    early,
+    reason
+  });
   res.status(201).json({ success: true, data: order });
 });
 
@@ -1791,7 +1901,13 @@ export const deleteOrderMoney = asyncHandler(async (req, res) => {
  */
 export const keepOrderCredit = asyncHandler(async (req, res) => {
   const order = req.resource;
-  await keepAsCredit(order, { amount: req.body.amount, userId: req.user.id });
+  await keepAsCredit(order, {
+    amount: req.body.amount,
+    userId: req.user.id,
+    user: req.user,
+    early: req.body.early,
+    reason: req.body.reason
+  });
   res.status(201).json({ success: true, data: order });
 });
 

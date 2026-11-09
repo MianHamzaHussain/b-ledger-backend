@@ -550,7 +550,8 @@ delivery. `utils/customerMoney.js` (`POST /orders/:id/advances`, `/refunds`,
 
 ### 10.2b Exchanges — the customer's payment becomes credit
 
-An exchange never refunds and re-charges. `utils/exchange.js`:
+An exchange never refunds and re-charges. `utils/exchange.js`. **The business never absorbs the courier's costs**
+(`utils/courierCosts.js`, §10.2b-3): the customer's credit is reduced by the costs of **both** parcels.
 
 - **Sale → credit**: Dr Sales / Cr Advances from customers (total). The order
   gets a `transfer-in` row for the COD part, since its advances were already
@@ -585,22 +586,54 @@ An exchange never refunds and re-charges. `utils/exchange.js`:
   - `awaitingReturn` stays set until the old item is received.
 - **Counter sales** aren't exchanged here — only courier parcels.
 
+### 10.2b-3 The courier's costs are recovered (`utils/courierCosts.js`)
+
+One parcel costs its **delivery charge (shipping + GST)** plus the **COD tax on that parcel's COD only** (the business's
+`codTax` WHT + sales tax, the "4 %"). An advance paid to us directly carries no courier tax — that is what PostEx deducts.
+`parcelCost` takes the best figure: PostEx's own **receipt** row (`courierBooking.cprNumber`, matched by order or tracking
+number), then a **courier invoice** (a `deliveryChargeEntry` / `courierSettlement` from a `courier-invoice` or
+`courier-receipt` entry) — both **final** — then the status check's figure (`tracking`, not final), then an estimate.
+`costsFor(order, { asRefund, pickupBy })` lists every cost as plain lines for a refund (own parcel + our pickup when
+`returnShipping.by = 'us'`) or a replacement (the original's parcel, a swap's reversal if PostEx billed one, the
+replacement's own parcel — nothing if cancelled, its return charge if returned).
+
+- **Payout waits for PostEx.** `recordRefund` and `keepAsCredit` call `settleCourierCosts` first on a refunded order or a
+  replacement: if any line is not final the payout is refused ("PostEx has not billed #… yet"). An **admin** may pay
+  early on the estimate (`early` + a `reason`), or **waive** the deductions (`POST /orders/:id/courier-costs/waive`,
+  reason required) — both kept on `order.courierCosts`. Settling posts ONE entry (Dr Advances from customers / Cr Charges
+  kept from refunds) with a `kept` customer-money row per line, **once** (`courierCosts.settledAt`).
+- **Exchange at creation** (`exchangeKeep`, used by `makeReplacement`, `swapOrder` and
+  `GET /orders/:id/exchange-quote?total=&swap=`): `diff` = replacement total − the credit carried; `F` = the original's
+  delivery charge + its tax + the replacement's delivery charge (estimated as the original's); `base = diff + F`.
+  - `base ≤ 0`: the customer is owed money; nothing is kept now, the costs come off the payout once both parcels are billed
+    (16,000 → 12,000 with 268.25 each way: 4,000 − 908.25 − 268.25 = **2,823.50**).
+  - `base > 0`, **return first**: the replacement's COD is `grossUpCod(base)` — whole rupees, covering the 4 % on the COD
+    itself — and `COD − diff` is kept back from the credit at once (`applyExchangeKeep`, `courierCosts.exchange`), so the
+    COD carries it (same price 16,000 → COD 1,226; a 200 difference → 1,018). **A swap at the door** collects nothing, so
+    the customer pays `base` (the difference + the costs, no tax on a zero COD) directly (`differenceAccount`), and `F` is
+    kept back. The replacement's parcel is an **estimate**: the business absorbs any later gap, nothing is re-posted.
+  - A replacement **cancelled or returned** before it is delivered gives its kept costs back (`undoExchangeCosts` reverses
+    the entry); the payout then works out the real costs. Reopening a cancelled replacement does not re-keep them.
+- `postOrderSale` balances a COD above the order's total (costs riding on the COD) by crediting the excess to Advances.
+- Old refunds and exchanges (no `courierCosts`) are never recomputed.
+
 ### 10.2b-2 Refund after delivery (`utils/refundReturn.js`)
 
 A delivered order sent back for the customer's money: status **refunded**.
 
 - It starts like an exchange: the sale becomes credit, and the goods go back to
   stock.
-- **Kept back** (normally the delivery charge + FBR tax, from `/refund-quote`):
-  Dr Advances / Cr Charges kept from refunds (4100). It shows as a `kept`
-  customer-money row.
+- **Courier costs kept back** (§10.2b-3): nothing is typed in any more. At payout the parcel's delivery charge and
+  the COD tax (and our pickup, when `returnBy` is `us`) come off what the customer paid — Dr Advances / Cr Charges kept
+  from refunds (4100), a `kept` customer-money row per cost. `GET /orders/:id/refund-quote` (rupees) lists them, whether
+  each is final, and the net refund.
 - **Return shipping — `returnShipping.by`:**
   - `customer` (normal): their own courier, named for reference only. Setting
     `returnChargePaisa = 0` means it never waits on our invoice. Our agreed share
     of their shipping is Dr Return charges / Cr Advances, a `shipping` row that
     adds to the refund.
-  - `us`: a pickup on our courier, left open for its invoice. Their agreed share
-    is also kept back.
+  - `us`: a pickup on our courier, left open for its invoice; its charge is a
+    courier cost deducted from the refund at payout.
 - The rest is the refund due, paid with the order's **Refund paid** (or kept as
   credit).
 - `kept` / `shipping` rows can't be removed on their own.

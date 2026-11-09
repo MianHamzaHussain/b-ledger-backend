@@ -34,6 +34,7 @@ import {
   orderPartialReturnSchema,
   orderMoneySchema,
   orderCreditSchema,
+  orderWaiveCostsSchema,
   customCostSchema
 } from '../schemas/orders.js';
 import Order from '../models/Order.js';
@@ -45,6 +46,8 @@ import {
   updateOrder,
   exchangeReturn,
   getRefundQuote,
+  getExchangeQuote,
+  waiveCourierCosts,
   refundReturnOrder,
   createReplacement,
   swapOrder,
@@ -592,6 +595,48 @@ router
  *       200: { description: Order now refunded; pay it with Refund paid }
  */
 router.get('/:id/refund-quote', can('orders', 'read'), loadScoped(Order), getRefundQuote);
+
+/**
+ * @swagger
+ * /orders/{id}/exchange-quote:
+ *   get:
+ *     summary: What an exchange would cost the customer — price difference plus both parcels' courier costs
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *       - { in: query, name: total, required: true, schema: { type: number }, description: The replacement's total (rupees) }
+ *       - { in: query, name: swap, schema: { type: boolean }, description: A swap at the door (no COD) }
+ *     responses:
+ *       200: { description: Whether they owe (COD or paid directly) or are owed, the cost lines, the estimate }
+ * /orders/{id}/courier-costs/waive:
+ *   post:
+ *     summary: Admin only — waive the courier-cost deductions on a refund or exchange, with a reason
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: id, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason: { type: string }
+ *     responses:
+ *       200: { description: The order }
+ *       403: { description: Not an admin }
+ */
+router.get('/:id/exchange-quote', can('orders', 'read'), loadScoped(Order), getExchangeQuote);
+router.post(
+  '/:id/courier-costs/waive',
+  can('orders', 'update'),
+  loadScoped(Order),
+  validate(orderWaiveCostsSchema),
+  waiveCourierCosts
+);
 router.post(
   '/:id/refund-return',
   can('orders', 'update'),

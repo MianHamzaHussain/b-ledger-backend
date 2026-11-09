@@ -59,5 +59,8 @@ const CourierReceiptSchema = new mongoose.Schema(
 CourierReceiptSchema.index({ business: 1, courier: 1, cprNumber: 1 }, { unique: true });
 CourierReceiptSchema.index({ business: 1, courier: 1, cprDate: -1 });
 CourierReceiptSchema.index({ entries: 1 }, { sparse: true });
+// A refund or exchange looks up PostEx's own figures for a parcel, by order and by (reversal) tracking number.
+CourierReceiptSchema.index({ business: 1, 'rows.order': 1 });
+CourierReceiptSchema.index({ business: 1, 'rows.tracking': 1 });
 
 export default mongoose.model('CourierReceipt', CourierReceiptSchema);

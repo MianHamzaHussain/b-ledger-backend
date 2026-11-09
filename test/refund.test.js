@@ -7,17 +7,20 @@ import {
   makeBusiness,
   makeProduct,
   makeParty,
-  runHandler
+  runHandler,
+  userId
 } from './helpers/db.js';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import Party from '../models/Party.js';
+import CourierReceipt from '../models/CourierReceipt.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { accountBalance } from '../utils/ledger.js';
 import {
   createOrder,
   updateOrderStatus,
   addCustomCost,
+  addOrderAdvance,
   addOrderRefund,
   getRefundQuote,
   refundReturnOrder
@@ -31,11 +34,12 @@ import {
   customCostSchema
 } from '../schemas/orders.js';
 import { courierInvoiceSchema } from '../schemas/parties.js';
+import { settleCourierCosts } from '../utils/courierCosts.js';
 
 /**
  * Delivered, then sent back for a refund: the goods come back into stock and the
- * sale becomes money owed back — less what's kept (delivery charge and tax,
- * normally). The customer usually ships it back on their own courier, which
+ * sale becomes money owed back — less the courier's costs (delivery charge and COD tax), taken off only once
+ * PostEx has billed them (or by an admin paying early). The customer usually ships it back on their own courier, which
  * never reaches our invoice. Suits sell for 3,000 and cost 1,000; COD tax is
  * 2% + 2%.
  *
@@ -118,20 +122,62 @@ const refund = async (order, body) =>
 
 const stock = async ctx => (await Product.findById(ctx.product._id)).variants[0].stock;
 
-test('the quote keeps the delivery charge (once billed) and the FBR tax', async () => {
+const ADMIN = { id: userId, role: { fullAccess: true } };
+const STAFF = { id: userId, role: { fullAccess: false, permissions: [] } };
+
+/** PostEx's receipt for this order: delivery 200.00 (shipping 170.00 + GST 30.00) and 4 % of the 3,000 COD = 120.00. */
+const billed = (ctx, order) =>
+  CourierReceipt.create({
+    business: ctx.biz._id,
+    courier: ctx.courier._id,
+    cprNumber: `CPR-${order.orderNumber}`,
+    cprDate: new Date(),
+    rows: [
+      {
+        tracking: order.trackingId,
+        status: 'delivered',
+        codPaisa: 300000,
+        shippingPaisa: 17000,
+        gstPaisa: 3000,
+        deductionPaisa: 12000,
+        netPaisa: 268000,
+        order: order._id,
+        outcome: 'applied'
+      }
+    ]
+  });
+
+const pay = (order, amount, ctx, extra = {}, user) =>
+  runHandler(addOrderRefund, {
+    resource: order,
+    ...(user ? { user } : {}),
+    body: orderMoneySchema.parse({ amount, account: ctx.cash, ...extra })
+  });
+
+test('the quote lists the courier costs: delivery charge and the 4 % tax on the COD only', async () => {
   const ctx = await setup();
   const unbilled = await deliver(ctx, await newOrder(ctx));
-  let q = (await runHandler(getRefundQuote, { resource: unbilled })).body.data;
-  assert.equal(q.deliveryChargePaisa, null);
-  assert.equal(q.taxPaisa, 12000); // 4% of 3,000
-  assert.equal(q.keepPaisa, 12000);
+  let q = (await runHandler(getRefundQuote, { resource: unbilled, query: {} })).body.data;
+  assert.equal(q.paid, 3000);
+  assert.equal(q.totalCost, 120, 'no delivery charge yet, tax is 4 % of 3,000');
+  assert.equal(q.isFinal, false);
 
-  const billed = await deliver(ctx, await newOrder(ctx), 200);
-  q = (await runHandler(getRefundQuote, { resource: billed })).body.data;
-  assert.equal(q.keepPaisa, 32000);
+  const tracked = await deliver(ctx, await newOrder(ctx), 200);
+  q = (await runHandler(getRefundQuote, { resource: tracked, query: {} })).body.data;
+  assert.equal(q.totalCost, 320);
+  assert.equal(q.netRefund, 2680);
+  assert.equal(q.isFinal, false, 'the status check is not PostEx’s receipt');
+
+  await billed(ctx, tracked);
+  q = (await runHandler(getRefundQuote, { resource: tracked, query: {} })).body.data;
+  assert.equal(q.isFinal, true);
+  assert.deepEqual(
+    q.lines.map(l => l.amount),
+    [200, 120]
+  );
 });
 
-test('sent back on their own courier: stock back, refund due less what is kept, nothing on our invoice', async () => {
+test('sent back on their own courier: nothing is paid until PostEx has billed; then the costs come off', async () => {
   const ctx = await setup();
   let order = await deliver(ctx, await newOrder(ctx), 200);
   const stockBefore = await stock(ctx);
@@ -139,56 +185,154 @@ test('sent back on their own courier: stock back, refund due less what is kept, 
   order = await refund(order, {
     returnBy: 'customer',
     returnCourierName: 'Leopards',
-    reversalTrackingId: 'LP123',
-    keep: 320
+    reversalTrackingId: 'LP123'
   });
-
   assert.equal(order.status, 'refunded');
   assert.equal(await stock(ctx), stockBefore + 1);
-  assert.equal(order.refundDuePaisa, 268000);
+  assert.equal(order.refundDuePaisa, 300000, 'the whole payment is held until the costs are known');
   assert.equal(order.returnChargePaisa, 0); // closed: never billed to us
   assert.equal(order.returnShipping.courierName, 'Leopards');
-  assert.equal(await net(ctx, CODES.CHARGES_KEPT), -32000);
-  assert.equal(await net(ctx, CODES.SALES), 0);
+  assert.equal(await net(ctx, CODES.CHARGES_KEPT), 0, 'nothing is kept back at the return');
 
-  order = Order.hydrate(
-    (
-      await runHandler(addOrderRefund, {
-        resource: order,
-        body: orderMoneySchema.parse({ amount: 2680, account: ctx.cash })
-      })
-    ).body.data
-  );
+  await assert.rejects(pay(order, 2680, ctx), /has not billed/);
+
+  await billed(ctx, order);
+  order = Order.hydrate((await pay(order, 2680, ctx)).body.data);
   assert.equal(order.refundDuePaisa, 0);
+  assert.equal(
+    await net(ctx, CODES.CHARGES_KEPT),
+    -32000,
+    'delivery 200.00 + tax 120.00 kept back'
+  );
+  assert.equal(await net(ctx, CODES.SALES), 0);
   assert.equal(await net(ctx, CODES.CUSTOMER_ADVANCES), 0);
+  const fresh = await Order.findById(order._id);
+  assert.equal(fresh.courierCosts.lines.length, 2);
+  assert.equal(fresh.customerMoney.filter(m => m.kind === 'kept').length, 2);
+});
+
+test('paying twice settles the costs once', async () => {
+  const ctx = await setup();
+  let order = await deliver(ctx, await newOrder(ctx), 200);
+  order = await refund(order, { returnBy: 'customer' });
+  await billed(ctx, order);
+  order = Order.hydrate((await pay(order, 1000, ctx)).body.data);
+  order = Order.hydrate((await pay(order, 1680, ctx)).body.data);
+  assert.equal(await net(ctx, CODES.CHARGES_KEPT), -32000, 'kept back once, not twice');
+  assert.equal(order.refundDuePaisa, 0);
 });
 
 test('we pay part of their shipping: it is added to the refund and is our return cost', async () => {
   const ctx = await setup();
   let order = await deliver(ctx, await newOrder(ctx), 200);
-  order = await refund(order, { returnBy: 'customer', keep: 320, shippingShare: 150 });
-  assert.equal(order.refundDuePaisa, 283000);
+  order = await refund(order, { returnBy: 'customer', shippingShare: 150 });
+  assert.equal(order.refundDuePaisa, 315000);
   assert.equal(await net(ctx, CODES.RETURN_CHARGES), 15000);
+  await billed(ctx, order);
+  order = Order.hydrate((await pay(order, 2830, ctx)).body.data);
+  assert.equal(order.refundDuePaisa, 0);
 });
 
-test('our pickup: its charge waits for the invoice, and their share is kept back', async () => {
+test('our pickup: its charge is a courier cost too, and waits for PostEx', async () => {
   const ctx = await setup();
   let order = await deliver(ctx, await newOrder(ctx), 200);
-  order = await refund(order, {
-    returnBy: 'us',
-    reversalTrackingId: 'REV9',
-    keep: 320,
-    shippingShare: 100
-  });
+  order = await refund(order, { returnBy: 'us', reversalTrackingId: 'REV9' });
   assert.equal(order.returnChargePaisa, undefined); // open on the invoice
-  assert.equal(order.refundDuePaisa, 258000);
-  assert.equal(await net(ctx, CODES.CHARGES_KEPT), -42000);
+  const q = (await runHandler(getRefundQuote, { resource: order, query: {} })).body.data;
+  // delivery 200.00 + tax 120.00 + the pickup, estimated at the delivery charge 200.00
+  assert.equal(q.totalCost, 520);
+  assert.deepEqual(q.waitingFor.sort(), ['#' + order.orderNumber, 'return'].sort());
+  await assert.rejects(pay(order, 100, ctx), /has not billed/);
+});
+
+test('only an admin can pay before PostEx has billed, and must say why', async () => {
+  const ctx = await setup();
+  let order = await deliver(ctx, await newOrder(ctx), 200);
+  order = await refund(order, { returnBy: 'customer' });
+
+  await assert.rejects(
+    pay(order, 2680, ctx, { early: true, reason: 'customer waiting' }, STAFF),
+    /Only an admin/
+  );
+  await assert.rejects(pay(order, 2680, ctx, { early: true }, ADMIN), /Say why/);
+
+  order = Order.hydrate(
+    (await pay(order, 2680, ctx, { early: true, reason: 'customer waiting' }, ADMIN)).body.data
+  );
+  assert.equal(order.refundDuePaisa, 0);
+  assert.equal(await net(ctx, CODES.CHARGES_KEPT), -32000, 'the estimate is what was kept');
+  const fresh = await Order.findById(order._id);
+  assert.equal(fresh.courierCosts.early, true);
+  assert.equal(fresh.courierCosts.reason, 'customer waiting');
+});
+
+test('a refund can be waived by an admin: nothing is kept back', async () => {
+  const ctx = await setup();
+  let order = await deliver(ctx, await newOrder(ctx), 200);
+  order = await refund(order, { returnBy: 'customer' });
+  await assert.rejects(
+    settleCourierCosts(order, { userId, user: STAFF, waive: true, reason: 'faulty item' }),
+    /Only an admin/
+  );
+  await settleCourierCosts(order, { userId, user: ADMIN, waive: true, reason: 'faulty item' });
+  order = await Order.findById(order._id);
+  assert.equal(order.refundDuePaisa, 300000);
+  assert.equal(order.courierCosts.waived, true);
+  order = Order.hydrate((await pay(order, 3000, ctx)).body.data);
+  assert.equal(order.refundDuePaisa, 0);
+  assert.equal(await net(ctx, CODES.CHARGES_KEPT), 0);
+});
+
+test('a real case: Rs 1,000 advance + Rs 14,000 COD, PostEx billed 268.25 and 560.00 tax → Rs 14,171.75 back', async () => {
+  const ctx = await setup();
+  const big = await newOrder(ctx, {
+    items: [
+      {
+        product: String(ctx.product._id),
+        variantId: String(ctx.product.variants[0]._id),
+        quantity: 1,
+        unitPrice: 15000
+      }
+    ]
+  });
+  await runHandler(addOrderAdvance, {
+    resource: big,
+    body: orderMoneySchema.parse({ amount: 1000, account: ctx.cash })
+  });
+  let order = await deliver(ctx, await Order.findById(big._id), 268.25);
+  assert.equal(order.codAmount, 14000);
+  order = await refund(order, { returnBy: 'customer' });
+  assert.equal(order.refundDuePaisa, 1500000);
+
+  await CourierReceipt.create({
+    business: ctx.biz._id,
+    courier: ctx.courier._id,
+    cprNumber: 'CPR-REAL',
+    cprDate: new Date(),
+    rows: [
+      {
+        tracking: order.trackingId,
+        status: 'delivered',
+        codPaisa: 1400000,
+        shippingPaisa: 23300,
+        gstPaisa: 3525,
+        deductionPaisa: 56000,
+        netPaisa: 1317175,
+        order: order._id,
+        outcome: 'applied'
+      }
+    ]
+  });
+  const q = (await runHandler(getRefundQuote, { resource: order, query: {} })).body.data;
+  assert.equal(q.netRefund, 14171.75, 'the tax is on the 14,000 COD, not the 1,000 advance');
+  order = Order.hydrate((await pay(order, 14171.75, ctx)).body.data);
+  assert.equal(order.refundDuePaisa, 0);
 });
 
 test('a refunded order whose COD the courier has not paid can still be settled on its invoice', async () => {
   const ctx = await setup();
   let order = await deliver(ctx, await newOrder(ctx), 200);
-  order = await refund(order, { returnBy: 'customer', keep: 320 });
+  order = await refund(order, { returnBy: 'customer' });
   await runHandler(createCourierInvoice, {
     resource: await Party.findById(ctx.courier._id),
     body: courierInvoiceSchema.parse({
@@ -198,15 +342,6 @@ test('a refunded order whose COD the courier has not paid can still be settled o
     })
   });
   assert.equal((await Order.findById(order._id)).paymentStatus, 'paid');
-});
-
-test('can not keep back more than the customer paid', async () => {
-  const ctx = await setup();
-  const order = await deliver(ctx, await newOrder(ctx));
-  await assert.rejects(
-    refund(order, { returnBy: 'customer', keep: 3500 }),
-    /more than the customer paid/
-  );
 });
 
 // ── Made from scratch ──

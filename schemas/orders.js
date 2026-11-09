@@ -148,9 +148,7 @@ export const orderRefundReturnSchema = z.object({
   /** Their courier's name, for reference — never on our invoice. */
   returnCourierName: z.string().trim().max(60).optional(),
   reversalTrackingId: z.string().trim().max(60).optional(),
-  /** Held back from the refund — normally the delivery charge and tax. */
-  keep: z.coerce.number().min(0, 'Can not be negative').default(0),
-  /** Our part of their shipping (customer), or their part of our pickup (us). */
+  /** Our part of the customer's own return shipping (only when they ship it back on their courier). */
   shippingShare: z.coerce.number().min(0, 'Can not be negative').optional(),
   scratchPieces: z.array(scratchPiece).max(20).optional(),
   note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
@@ -292,7 +290,10 @@ export const orderMoneySchema = z.object({
   amount: z.coerce.number().positive('Must be more than 0'),
   account: z.string().min(1, 'Choose where the money went'),
   date: z.coerce.date().optional(),
-  note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
+  note: z.string().trim().max(300, 'Keep the note under 300 characters').optional(),
+  /** A refund before PostEx has billed every parcel: an admin only, and the reason is required. */
+  early: z.boolean().optional(),
+  reason: z.string().trim().max(300, 'Keep the reason under 300 characters').optional()
 });
 
 /** A failed delivery attempt — the reason from a fixed list, and an optional note. */
@@ -306,7 +307,14 @@ export const orderTrackingSchema = z.object({
 });
 
 export const orderCreditSchema = z.object({
-  amount: z.coerce.number().positive('Must be more than 0')
+  amount: z.coerce.number().positive('Must be more than 0'),
+  early: z.boolean().optional(),
+  reason: z.string().trim().max(300, 'Keep the reason under 300 characters').optional()
+});
+
+/** An admin waives the courier-cost deductions on an order (a faulty item, say). The reason is kept. */
+export const orderWaiveCostsSchema = z.object({
+  reason: z.string().trim().min(3, 'Say why the deductions are waived').max(300)
 });
 
 /** Paid for (what, how much, from where, to whom) — or taken from the material store. */
