@@ -3,12 +3,17 @@ import asyncHandler from '../middlewares/asyncHandler.js';
 import ErrorResponse from '../utils/errorResponse.js';
 import Business from '../models/Business.js';
 import Order from '../models/Order.js';
+import Party from '../models/Party.js';
 import {
   businessModels,
   countBusinessData,
+  countKept,
   labelOf,
+  resetFilter,
   snapshotBusiness
 } from '../utils/businessData.js';
+import { KIND_WORDS, clearLedger, planLedgerClear } from '../utils/ledgerClear.js';
+import { fromPaisa } from '../utils/money.js';
 import logger from '../utils/logger.js';
 import { PAKISTAN_CITIES } from '../utils/cities.js';
 
@@ -42,6 +47,7 @@ export const resetPreview = asyncHandler(async (req, res) => {
     data: {
       business: { _id: business._id, name: business.name, isProtected: business.isProtected },
       counts: await countBusinessData(business._id),
+      kept: await countKept(business._id),
       lastOrderAt: lastOrder?.createdAt ?? null
     }
   });
@@ -76,13 +82,96 @@ export const resetData = asyncHandler(async (req, res, next) => {
 
   const cleared = {};
   for (const model of businessModels()) {
-    const { deletedCount } = await model.deleteMany({ business: business._id });
+    const filter = resetFilter(model, business._id);
+    if (!filter) continue; // the Shopify connection stays
+    const { deletedCount } = await model.deleteMany(filter);
     cleared[labelOf(model)] = deletedCount;
   }
+  // The money accounts are gone, so a connected courier's saved "where it pays" points at nothing.
+  await Party.updateMany(
+    { business: business._id, 'integration.provider': { $exists: true } },
+    { $unset: { defaultMoneyAccount: 1 } }
+  );
 
   logger.warn(
     { userId: req.user.id, business: String(business._id), name: business.name, cleared, snapshot },
     'business data reset'
   );
   res.status(200).json({ success: true, data: { cleared } });
+});
+
+const ledgerClearOn = () => process.env.ALLOW_LEDGER_CLEAR === 'true';
+
+/** The plan in plain words and rupees — what the screen shows before anyone types the name. */
+const present = plan => ({
+  entries: plan.count,
+  byKind: Object.entries(plan.countsByKind).map(([kind, count]) => ({
+    kind,
+    label: KIND_WORDS[kind] ?? kind,
+    count
+  })),
+  periodLocks: plan.periodLocks,
+  balances: plan.balances.map(b => ({
+    kind: b.kind,
+    id: b.id,
+    name: b.name,
+    partyType: b.partyType ?? null,
+    now: fromPaisa(b.nowPaisa),
+    after: fromPaisa(b.afterPaisa)
+  }))
+});
+
+/**
+ * @desc   What clearing the HAND-ENTERED money of one business would delete, and every money account's and khata
+ *         person's balance now -> after. Reads only.
+ * @route  GET /api/v1/system/ledger-clear-preview?business=<id>  (admin only)
+ */
+export const ledgerClearPreview = asyncHandler(async (req, res) => {
+  const business = await loadBusiness(req.query.business);
+  res.status(200).json({
+    success: true,
+    data: {
+      business: { _id: business._id, name: business.name, isProtected: business.isProtected },
+      enabled: ledgerClearOn(),
+      ...present(await planLedgerClear(business._id))
+    }
+  });
+});
+
+/**
+ * @desc   Delete the entries a person typed by hand (expenses, payments, transfers, capital, salaries, opening
+ *         balances, manual entries) and the period locks of ONE business. Orders, customer advances and refunds,
+ *         courier invoices, PostEx receipts, the PostEx wallet and every connection stay. Allowed on a protected
+ *         business, but only when the server opts in (ALLOW_LEDGER_CLEAR=true) and the exact name is typed; a copy
+ *         of what is deleted is written first.
+ * @route  POST /api/v1/system/ledger-clear  (admin only)
+ */
+export const ledgerClear = asyncHandler(async (req, res, next) => {
+  if (!ledgerClearOn()) {
+    return next(new ErrorResponse('Clearing the ledger is switched off on this server', 403));
+  }
+  const business = await loadBusiness(req.body.business);
+  if (req.body.confirmName.trim() !== business.name) {
+    return next(new ErrorResponse(`Type the business name exactly: ${business.name}`, 400));
+  }
+  const out = await clearLedger({ business: business._id, userId: req.user.id });
+  res.status(200).json({
+    success: true,
+    data: {
+      deleted: out.deleted,
+      periodLocks: out.periodLocks,
+      byKind: Object.entries(out.countsByKind).map(([kind, count]) => ({
+        kind,
+        label: KIND_WORDS[kind] ?? kind,
+        count
+      })),
+      balances: out.balances.map(b => ({
+        kind: b.kind,
+        id: b.id,
+        name: b.name,
+        now: fromPaisa(b.nowPaisa),
+        after: fromPaisa(b.afterPaisa)
+      }))
+    }
+  });
 });

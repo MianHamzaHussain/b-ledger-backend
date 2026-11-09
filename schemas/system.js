@@ -5,3 +5,9 @@ export const resetSchema = z.object({
   business: z.string().min(1, 'Choose a business'),
   confirmName: z.string().min(1, 'Type the business name to confirm')
 });
+
+/** Clear one business's hand-entered money — the typed name must match the business exactly. */
+export const ledgerClearSchema = z.object({
+  business: z.string().min(1, 'Choose a business'),
+  confirmName: z.string().min(1, 'Type the business name to confirm')
+});
