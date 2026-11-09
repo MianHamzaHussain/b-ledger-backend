@@ -158,22 +158,22 @@ test('the quote lists the courier costs: delivery charge and the 4 % tax on the 
   const ctx = await setup();
   const unbilled = await deliver(ctx, await newOrder(ctx));
   let q = (await runHandler(getRefundQuote, { resource: unbilled, query: {} })).body.data;
-  assert.equal(q.paidPaisa, 300000);
-  assert.equal(q.totalCostPaisa, 12000, 'no delivery charge yet, tax is 4 % of 3,000');
+  assert.equal(q.paid, 3000);
+  assert.equal(q.totalCost, 120, 'no delivery charge yet, tax is 4 % of 3,000');
   assert.equal(q.isFinal, false);
 
   const tracked = await deliver(ctx, await newOrder(ctx), 200);
   q = (await runHandler(getRefundQuote, { resource: tracked, query: {} })).body.data;
-  assert.equal(q.totalCostPaisa, 32000);
-  assert.equal(q.netRefundPaisa, 268000);
+  assert.equal(q.totalCost, 320);
+  assert.equal(q.netRefund, 2680);
   assert.equal(q.isFinal, false, 'the status check is not PostEx’s receipt');
 
   await billed(ctx, tracked);
   q = (await runHandler(getRefundQuote, { resource: tracked, query: {} })).body.data;
   assert.equal(q.isFinal, true);
   assert.deepEqual(
-    q.lines.map(l => l.amountPaisa),
-    [20000, 12000]
+    q.lines.map(l => l.amount),
+    [200, 120]
   );
 });
 
@@ -240,7 +240,7 @@ test('our pickup: its charge is a courier cost too, and waits for PostEx', async
   assert.equal(order.returnChargePaisa, undefined); // open on the invoice
   const q = (await runHandler(getRefundQuote, { resource: order, query: {} })).body.data;
   // delivery 200.00 + tax 120.00 + the pickup, estimated at the delivery charge 200.00
-  assert.equal(q.totalCostPaisa, 52000);
+  assert.equal(q.totalCost, 520);
   assert.deepEqual(q.waitingFor.sort(), ['#' + order.orderNumber, 'return'].sort());
   await assert.rejects(pay(order, 100, ctx), /has not billed/);
 });
@@ -324,7 +324,7 @@ test('a real case: Rs 1,000 advance + Rs 14,000 COD, PostEx billed 268.25 and 56
     ]
   });
   const q = (await runHandler(getRefundQuote, { resource: order, query: {} })).body.data;
-  assert.equal(q.netRefundPaisa, 1417175, 'the tax is on the 14,000 COD, not the 1,000 advance');
+  assert.equal(q.netRefund, 14171.75, 'the tax is on the 14,000 COD, not the 1,000 advance');
   order = Order.hydrate((await pay(order, 14171.75, ctx)).body.data);
   assert.equal(order.refundDuePaisa, 0);
 });

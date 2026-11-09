@@ -51,11 +51,7 @@ const assertRefundable = order => {
  * Once settled the lines are the ones that were kept back.
  */
 export const refundQuote = async (order, { returnBy } = {}) => {
-  const paidPaisa = toPaisa(order.total);
-  // Our agreed share of the customer's own return shipping is paid back on top (kind `shipping`).
-  const sharePaisa = (order.customerMoney || [])
-    .filter(m => m.kind === 'shipping')
-    .reduce((sum, m) => sum + m.amountPaisa, 0);
+  const isReplacement = Boolean(order.exchangeOf);
   const settled = order.courierCosts?.settledAt;
   const costs = settled
     ? {
@@ -64,13 +60,22 @@ export const refundQuote = async (order, { returnBy } = {}) => {
         isFinal: true,
         waitingFor: []
       }
-    : await costsFor(order, { asRefund: true, pickupBy: returnBy });
+    : await costsFor(order, { asRefund: !isReplacement, pickupBy: returnBy });
+  // A refunded order owes back everything the customer paid. A replacement owes back what its credit leaves after
+  // the replacement's own price (its refund due) — before the costs, which are taken off at payout.
+  const paidPaisa = isReplacement
+    ? order.refundDuePaisa + (settled && !order.courierCosts.waived ? costs.totalPaisa : 0)
+    : toPaisa(order.total);
+  // Our agreed share of the customer's own return shipping is paid back on top (kind `shipping`).
+  const sharePaisa = (order.customerMoney || [])
+    .filter(m => m.kind === 'shipping')
+    .reduce((sum, m) => sum + m.amountPaisa, 0);
   return {
     paidPaisa,
     sharePaisa,
     lines: costs.lines,
     totalCostPaisa: costs.totalPaisa,
-    netRefundPaisa: paidPaisa + sharePaisa - costs.totalPaisa,
+    netRefundPaisa: paidPaisa + (isReplacement ? 0 : sharePaisa) - costs.totalPaisa,
     isFinal: costs.isFinal,
     waitingFor: costs.waitingFor,
     settled: Boolean(settled),

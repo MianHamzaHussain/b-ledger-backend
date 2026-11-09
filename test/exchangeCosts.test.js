@@ -7,7 +7,8 @@ import {
   makeBusiness,
   makeProduct,
   makeParty,
-  runHandler
+  runHandler,
+  userId
 } from './helpers/db.js';
 import Order from '../models/Order.js';
 import CourierReceipt from '../models/CourierReceipt.js';
@@ -20,7 +21,9 @@ import {
   exchangeReturn,
   createReplacement,
   swapOrder,
-  addOrderRefund
+  addOrderRefund,
+  getExchangeQuote,
+  waiveCourierCosts
 } from '../controllers/orderController.js';
 import {
   orderCreateSchema,
@@ -227,4 +230,59 @@ test('a replacement cancelled before it goes out gives its costs back — the or
     1200000,
     'the customer is owed the whole credit before costs'
   );
+});
+
+test('the quote says what the customer will owe or be owed, before the replacement is made', async () => {
+  const ctx = await setup();
+  const original = await delivered(ctx, 16000);
+  const quote = async (total, swap = false) =>
+    (
+      await runHandler(getExchangeQuote, {
+        resource: original,
+        query: { total: String(total), swap: String(swap) }
+      })
+    ).body.data;
+
+  const cheaper = await quote(12000);
+  assert.equal(cheaper.owes, false);
+  assert.equal(cheaper.estimatedPayout, 2823.5, '4,000 − 908.25 − 268.25');
+
+  const same = await quote(16000);
+  assert.equal(same.owes, true);
+  assert.equal(same.cod, 1226);
+  assert.equal(same.keep, 1226);
+  assert.ok(same.lines.length >= 4);
+
+  const swap = await quote(16000, true);
+  assert.equal(swap.cod, 0);
+  assert.equal(swap.pays, 1176.5, 'both parcels, the tax only on the original');
+
+  await assert.rejects(
+    runHandler(getExchangeQuote, { resource: original, query: { total: 'x' } }),
+    /replacement total/
+  );
+});
+
+test('only an admin can waive the deductions, and the reason is kept', async () => {
+  const ctx = await setup();
+  const original = await delivered(ctx, 16000);
+  const replacement = await exchange(ctx, original, 12000);
+  const staff = { id: userId, role: { fullAccess: false, permissions: [] } };
+  const admin = { id: userId, role: { fullAccess: true } };
+  await assert.rejects(
+    runHandler(waiveCourierCosts, {
+      resource: replacement,
+      user: staff,
+      body: { reason: 'faulty' }
+    }),
+    /Only an admin/
+  );
+  await runHandler(waiveCourierCosts, {
+    resource: replacement,
+    user: admin,
+    body: { reason: 'faulty item' }
+  });
+  const fresh = await Order.findById(replacement._id);
+  assert.equal(fresh.courierCosts.waived, true);
+  assert.equal(fresh.courierCosts.reason, 'faulty item');
 });

@@ -354,7 +354,7 @@ export const exchangeKeep = async (original, { newTotalPaisa, creditPaisa, isSwa
   const fixedPaisa = orig.deliveryPaisa + orig.taxPaisa + estimatePaisa;
   const basePaisa = diffPaisa + fixedPaisa;
   if (basePaisa <= 0) {
-    return { owes: false, basePaisa, codPaisa: 0, keepPaisa: 0, lines: [], diffPaisa };
+    return { owes: false, basePaisa, codPaisa: 0, keepPaisa: 0, lines: [], diffPaisa, fixedPaisa };
   }
 
   const percent = taxPercentOf(codTax);
@@ -394,6 +394,7 @@ export const exchangeKeep = async (original, { newTotalPaisa, creditPaisa, isSwa
     codPaisa,
     keepPaisa,
     diffPaisa,
+    fixedPaisa,
     lines: lines.filter(l => l.amountPaisa > 0)
   };
 };
