@@ -145,6 +145,16 @@ export const postOrderSale = async (order, userId) => {
         );
       }
     }
+    // A COD above the order's total carries courier costs recovered from the customer (an exchange or refund took
+    // them off what the order holds, below zero). The excess clears that negative balance, or the entry would not
+    // balance: the debits above add up to the COD, the sale credits only its total.
+    if (!isCounter && codPaisa > totalPaisa) {
+      lines.push({
+        account: (await acc(CODES.CUSTOMER_ADVANCES))._id,
+        label,
+        creditPaisa: codPaisa - totalPaisa
+      });
+    }
     if (advancePaisa > 0) {
       const account = isCounter
         ? order.counterAccount || (await acc(CODES.CASH))._id
