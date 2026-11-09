@@ -1,11 +1,11 @@
-import Business from '../models/Business.js';
 import ErrorResponse from './errorResponse.js';
 import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
 import { postEntry } from './ledger.js';
-import { computeRemittance, orderLabel } from './orderPosting.js';
+import { orderLabel } from './orderPosting.js';
+import { costsFor } from './courierCosts.js';
 import { toPaisa } from './money.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
-import { heldPaisaOf, isCounterSale } from '../models/Order.js';
+import { isCounterSale } from '../models/Order.js';
 import { convertSaleToCredit, receiveReturnedGoods } from './exchange.js';
 import { putScratchInStock } from './scratchStock.js';
 
@@ -17,15 +17,14 @@ import { putScratchInStock } from './scratchStock.js';
  *
  *   sale → credit        Dr Sales               Cr Advances from customers
  *   goods back           Dr Inventory           Cr COGS
- *   kept back            Dr Advances            Cr Charges kept from refunds
+ *   courier costs kept   Dr Advances            Cr Charges kept from refunds   (at payout, see courierCosts.js)
  *   our shipping share   Dr Return charges      Cr Advances
  *
  * What's left in Advances is the refund due, paid with the order's "Refund paid".
  *
  * Normally the customer ships it back on their own courier — named here only for
  * reference; it never appears on our invoice. Rarely we book the pickup on our
- * courier (charged on its invoice). Either side may agree to carry part of the
- * other's cost.
+ * courier (charged on its invoice, and deducted from the refund).
  */
 
 /** Only a delivered courier parcel is refunded here — a counter sale is settled at the counter. */
@@ -46,24 +45,37 @@ const assertRefundable = order => {
 };
 
 /**
- * What's normally kept back: the courier's delivery charge (if billed yet) and
- * the FBR taxes withheld on the COD. The charge often isn't known until the
- * courier's invoice, so the caller shows it as unknown and the owner types it.
+ * What a refund would pay back and why: everything the customer paid, less the courier's costs for the parcels
+ * (utils/courierCosts.js) — the delivery charge and the COD tax, and the pickup when WE booked it on our courier.
+ * `isFinal` is false until PostEx has billed every parcel; the payout waits for it (or an admin pays early).
+ * Once settled the lines are the ones that were kept back.
  */
-export const refundQuote = async order => {
-  const business = await Business.findById(order.business).select('codTax');
-  const { whtPaisa, salesTaxPaisa } = computeRemittance(
-    toPaisa(order.codAmount),
-    order.deliveryChargePaisa ?? 0,
-    business?.codTax || {}
-  );
-  const taxPaisa = whtPaisa + salesTaxPaisa;
-  const deliveryChargePaisa = order.deliveryChargePaisa ?? null;
+export const refundQuote = async (order, { returnBy } = {}) => {
+  const paidPaisa = toPaisa(order.total);
+  // Our agreed share of the customer's own return shipping is paid back on top (kind `shipping`).
+  const sharePaisa = (order.customerMoney || [])
+    .filter(m => m.kind === 'shipping')
+    .reduce((sum, m) => sum + m.amountPaisa, 0);
+  const settled = order.courierCosts?.settledAt;
+  const costs = settled
+    ? {
+        lines: (order.courierCosts.lines || []).map(l => ({ ...l, isFinal: true })),
+        totalPaisa: (order.courierCosts.lines || []).reduce((sum, l) => sum + l.amountPaisa, 0),
+        isFinal: true,
+        waitingFor: []
+      }
+    : await costsFor(order, { asRefund: true, pickupBy: returnBy });
   return {
-    paidPaisa: toPaisa(order.total),
-    deliveryChargePaisa,
-    taxPaisa,
-    keepPaisa: (deliveryChargePaisa ?? 0) + taxPaisa
+    paidPaisa,
+    sharePaisa,
+    lines: costs.lines,
+    totalCostPaisa: costs.totalPaisa,
+    netRefundPaisa: paidPaisa + sharePaisa - costs.totalPaisa,
+    isFinal: costs.isFinal,
+    waitingFor: costs.waitingFor,
+    settled: Boolean(settled),
+    waived: Boolean(order.courierCosts?.waived),
+    reason: order.courierCosts?.reason ?? null
   };
 };
 
@@ -86,15 +98,15 @@ const postCustomerMoneyEntry = async (order, { memo, debit, credit, amountPaisa,
 };
 
 /**
- * Record the item coming back for a refund. `keep` (rupees) is held back from
- * the refund; `shippingShare` is our part of the customer's shipping (returnBy
- * customer) or their part of our pickup (returnBy us).
+ * Record the item coming back for a refund. Nothing is typed in to hold back: the courier's costs are taken off by
+ * `settleCourierCosts` at payout, once PostEx has billed them. `shippingShare` (rupees) is only our part of the
+ * customer's OWN return shipping, paid back on top.
  */
 export const refundReturn = async (order, body, userId) => {
   assertRefundable(order);
   const { returnBy, returnCourierName, reversalTrackingId, scratchPieces } = body;
-  const keepPaisa = toPaisa(body.keep ?? 0);
-  const sharePaisa = toPaisa(body.shippingShare ?? 0);
+  // Only our share of the customer's OWN return shipping is typed. The courier's costs come from PostEx.
+  const sharePaisa = returnBy === 'customer' ? toPaisa(body.shippingShare ?? 0) : 0;
 
   await ensureChart(order.business);
   await convertSaleToCredit(order, userId, 'Refund');
@@ -102,35 +114,7 @@ export const refundReturn = async (order, body, userId) => {
   // Delivered, so a made-from-scratch piece's cost is in COGS — it comes back out.
   await putScratchInStock(order, scratchPieces, userId, { fromCogs: true });
 
-  const heldPaisa = heldPaisaOf(order);
-  const theirSharePaisa = returnBy === 'us' ? sharePaisa : 0;
-  if (keepPaisa + theirSharePaisa > heldPaisa) {
-    throw new ErrorResponse('You can not keep back more than the customer paid', 400);
-  }
-
-  const kept = [
-    { amountPaisa: keepPaisa, accountName: 'delivery charge & tax' },
-    { amountPaisa: theirSharePaisa, accountName: 'their share of the return pickup' }
-  ];
-  for (const k of kept) {
-    if (k.amountPaisa <= 0) continue;
-    const entry = await postCustomerMoneyEntry(order, {
-      memo: `Refund — ${k.accountName}`,
-      debit: CODES.CUSTOMER_ADVANCES,
-      credit: CODES.CHARGES_KEPT,
-      amountPaisa: k.amountPaisa,
-      userId
-    });
-    order.customerMoney.push({
-      kind: 'kept',
-      ...k,
-      date: new Date(),
-      entry: entry._id,
-      by: userId
-    });
-  }
-
-  if (returnBy === 'customer' && sharePaisa > 0) {
+  if (sharePaisa > 0) {
     const entry = await postCustomerMoneyEntry(order, {
       memo: 'Refund — our share of return shipping',
       debit: CODES.RETURN_CHARGES,

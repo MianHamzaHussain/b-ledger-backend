@@ -2,7 +2,10 @@ import Business from '../models/Business.js';
 import CourierReceipt from '../models/CourierReceipt.js';
 import JournalEntry from '../models/JournalEntry.js';
 import Order from '../models/Order.js';
-import { computeRemittance } from './orderPosting.js';
+import ErrorResponse from './errorResponse.js';
+import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
+import { postEntry } from './ledger.js';
+import { computeRemittance, orderLabel } from './orderPosting.js';
 import { toPaisa } from './money.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 
@@ -116,10 +119,11 @@ const lineOf = (label, amountPaisa, cost, parcel) => ({
  *   a replacement      → the original's parcel, the swap's reversal if PostEx billed one, and its own parcel
  * Anything else has none. Lines with a zero amount are left out.
  */
-export const costsFor = async order => {
+export const costsFor = async (order, { asRefund = false, pickupBy } = {}) => {
   const business = await Business.findById(order.business).select('codTax').lean();
   const codTax = business?.codTax || {};
-  const isRefund = order.status === ORDER_STATUS.REFUNDED;
+  // `asRefund` prices a delivered order that is about to be refunded (the quote), before it is marked refunded.
+  const isRefund = asRefund || order.status === ORDER_STATUS.REFUNDED;
   const original = order.exchangeOf ? await Order.findById(order.exchangeOf).lean() : null;
   if (!isRefund && !original) return { lines: [], totalPaisa: 0, isFinal: true, waitingFor: [] };
 
@@ -160,7 +164,7 @@ export const costsFor = async order => {
 
   if (isRefund) {
     // Only a pickup we booked on our own courier costs us; the customer's own courier is theirs.
-    if (order.returnShipping?.by === 'us') {
+    if ((pickupBy ?? order.returnShipping?.by) === 'us') {
       const row = reversalTracking ? rows.byTracking.get(reversalTracking) : null;
       const cost = row
         ? { deliveryPaisa: row.shippingPaisa + row.gstPaisa, source: 'receipt', isFinal: true }
@@ -203,4 +207,100 @@ export const costsFor = async order => {
   const totalPaisa = lines.reduce((sum, l) => sum + l.amountPaisa, 0);
   const waitingFor = [...new Set(lines.filter(l => !l.isFinal).map(l => l.parcel))];
   return { lines, totalPaisa, isFinal: waitingFor.length === 0, waitingFor };
+};
+
+/** Only a refunded order or a replacement has courier costs to take off what is paid back. */
+export const needsCostSettlement = order =>
+  order.status === ORDER_STATUS.REFUNDED || Boolean(order.exchangeOf);
+
+const isAdmin = user => Boolean(user?.role?.fullAccess);
+
+/**
+ * Take the courier's costs off what the customer is owed, once, before any payout. A cost is only taken when PostEx
+ * (or a courier invoice) has billed it; until then the payout waits. An admin may pay early on the estimate, or waive
+ * the deductions, each with a reason. Posts ONE entry (Dr Advances from customers / Cr Charges kept from refunds) and
+ * leaves a `kept` row per cost on the order, so what the customer is told adds up to what was booked.
+ */
+export const settleCourierCosts = async (
+  order,
+  { userId, user, early = false, waive = false, reason }
+) => {
+  if (!needsCostSettlement(order) || order.courierCosts?.settledAt) return order;
+  const why = String(reason ?? '').trim();
+
+  if (waive) {
+    if (!isAdmin(user)) throw new ErrorResponse('Only an admin can waive the deductions', 403);
+    if (!why) throw new ErrorResponse('Say why the deductions are waived', 400);
+    order.courierCosts = { settledAt: new Date(), waived: true, reason: why, lines: [] };
+    order.updatedBy = userId;
+    await order.save();
+    return order;
+  }
+
+  const costs = await costsFor(order);
+  if (!costs.isFinal) {
+    if (!early) {
+      throw new ErrorResponse(
+        `PostEx has not billed ${costs.waitingFor.join(', ')} yet — add its receipt first, or ask an admin to pay early`,
+        400
+      );
+    }
+    if (!isAdmin(user)) {
+      throw new ErrorResponse('Only an admin can pay before PostEx has billed', 403);
+    }
+    if (!why) throw new ErrorResponse('Say why this is paid before PostEx has billed', 400);
+  }
+
+  const lines = costs.lines.filter(l => l.amountPaisa > 0);
+  const totalPaisa = lines.reduce((sum, l) => sum + l.amountPaisa, 0);
+  if (totalPaisa > order.refundDuePaisa) {
+    throw new ErrorResponse(
+      'The courier costs are more than what is due back — they belong on the replacement instead',
+      400
+    );
+  }
+
+  let entry = null;
+  if (totalPaisa > 0) {
+    await ensureChart(order.business);
+    const label = `${orderLabel(order)} · ${order.customerName}`;
+    entry = await postEntry({
+      business: order.business,
+      memo: `Courier costs kept back — ${label}`,
+      source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
+      lines: [
+        {
+          account: (await accountByCode(order.business, CODES.CUSTOMER_ADVANCES))._id,
+          label,
+          debitPaisa: totalPaisa
+        },
+        {
+          account: (await accountByCode(order.business, CODES.CHARGES_KEPT))._id,
+          label,
+          creditPaisa: totalPaisa
+        }
+      ],
+      userId
+    });
+    for (const line of lines) {
+      order.customerMoney.push({
+        kind: 'kept',
+        amountPaisa: line.amountPaisa,
+        accountName: line.label,
+        date: new Date(),
+        entry: entry._id,
+        by: userId
+      });
+    }
+  }
+  order.courierCosts = {
+    settledAt: new Date(),
+    early: !costs.isFinal,
+    reason: costs.isFinal ? undefined : why,
+    lines: lines.map(({ label, amountPaisa, source }) => ({ label, amountPaisa, source }))
+  };
+  order.updatedBy = userId;
+  // Saving re-derives what is due back, so the payout that follows is checked against the net.
+  await order.save();
+  return order;
 };

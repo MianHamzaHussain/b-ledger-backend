@@ -678,7 +678,12 @@ export const exchangeReturn = asyncHandler(async (req, res) => {
  * @route  GET /api/v1/orders/:id/refund-quote  (orders:read — scoped)
  */
 export const getRefundQuote = asyncHandler(async (req, res) => {
-  res.status(200).json({ success: true, data: await refundQuote(req.resource) });
+  res.status(200).json({
+    success: true,
+    data: await refundQuote(req.resource, {
+      returnBy: req.query.returnBy === 'us' ? 'us' : undefined
+    })
+  });
 });
 
 /**
@@ -1770,8 +1775,17 @@ export const addOrderAdvance = asyncHandler(async (req, res) => {
 export const addOrderRefund = asyncHandler(async (req, res) => {
   const order = req.resource;
   const money = await orderMoney(order, req);
-  const { amount, date, note } = req.body;
-  await recordRefund(order, { amount, money, date, note, userId: req.user.id });
+  const { amount, date, note, early, reason } = req.body;
+  await recordRefund(order, {
+    amount,
+    money,
+    date,
+    note,
+    userId: req.user.id,
+    user: req.user,
+    early,
+    reason
+  });
   res.status(201).json({ success: true, data: order });
 });
 
@@ -1791,7 +1805,13 @@ export const deleteOrderMoney = asyncHandler(async (req, res) => {
  */
 export const keepOrderCredit = asyncHandler(async (req, res) => {
   const order = req.resource;
-  await keepAsCredit(order, { amount: req.body.amount, userId: req.user.id });
+  await keepAsCredit(order, {
+    amount: req.body.amount,
+    userId: req.user.id,
+    user: req.user,
+    early: req.body.early,
+    reason: req.body.reason
+  });
   res.status(201).json({ success: true, data: order });
 });
 

@@ -7,6 +7,7 @@ import { BEFORE_DISPATCH, JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 import { isCounterSale, heldPaisaOf } from '../models/Order.js';
 import { upsertCustomerParty } from './customerParty.js';
 import { logActivity } from './orderActivity.js';
+import { settleCourierCosts } from './courierCosts.js';
 
 /**
  * Money that passes directly between the customer and us on an order — an
@@ -93,12 +94,17 @@ export const recordAdvance = async (order, { amount, money, date, note, userId }
 };
 
 /** Pay the customer back — at most what is due to them. */
-export const recordRefund = async (order, { amount, money, date, note, userId }) => {
+export const recordRefund = async (
+  order,
+  { amount, money, date, note, userId, user, early, reason }
+) => {
   // The parcel is still out: it may yet come back, and the customer is refunded
   // once it's delivered (or returned) — never while the courier has it.
   if (order.status === ORDER_STATUS.DISPATCHED) {
     throw new ErrorResponse('Refund it once the parcel is delivered or returned', 400);
   }
+  // A refund, or what an exchange leaves over, is paid only after the courier's costs are taken off it.
+  await settleCourierCosts(order, { userId, user, early, reason });
   const amountPaisa = toPaisa(amount);
   if (amountPaisa > order.refundDuePaisa) {
     throw new ErrorResponse(
@@ -195,10 +201,11 @@ const rowOf = (kind, amountPaisa, money, { date, note, entry, userId }) => ({
 });
 
 /** Keep what's due as credit on the customer's khata instead of paying it back. */
-export const keepAsCredit = async (order, { amount, userId }) => {
+export const keepAsCredit = async (order, { amount, userId, user, early, reason }) => {
   if (!NOT_SOLD.has(order.status)) {
     throw new ErrorResponse('Only a cancelled or returned order can keep money as credit', 400);
   }
+  await settleCourierCosts(order, { userId, user, early, reason });
   const amountPaisa = toPaisa(amount);
   if (amountPaisa <= 0 || amountPaisa > order.refundDuePaisa) {
     throw new ErrorResponse('Nothing that much is due back on this order', 400);

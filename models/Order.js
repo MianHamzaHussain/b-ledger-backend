@@ -565,6 +565,23 @@ const OrderSchema = new mongoose.Schema(
       sharePaisa: { type: Number, min: 0 }
     },
     /**
+     * The courier's costs kept back from what the customer gets back on a refund or an exchange (utils/courierCosts.js).
+     * Set once, when they are settled: from PostEx's own figures, or an admin's estimate (`early`), or not at all (`waived`).
+     */
+    courierCosts: {
+      settledAt: { type: Date },
+      early: { type: Boolean },
+      waived: { type: Boolean },
+      reason: { type: String, trim: true, maxlength: 300 },
+      lines: [
+        {
+          label: { type: String },
+          amountPaisa: { type: Number },
+          source: { type: String }
+        }
+      ]
+    },
+    /**
      * Made-from-scratch pieces that went into stock when the order was cancelled,
      * returned or refunded — each its own product, so a later customer can buy it.
      * Reopening the order takes them back out (if still unsold).
