@@ -18,6 +18,7 @@ import '../models/Party.js';
 import '../models/PeriodLock.js';
 import '../models/Product.js';
 import '../models/ProductionBatch.js';
+import '../models/ShopifyConnection.js';
 
 /** Plain words for the reset screen — keyed by model name. */
 const LABELS = {
@@ -50,13 +51,34 @@ export const businessModels = () =>
 
 export const labelOf = model => LABELS[model.modelName] || model.modelName;
 
+/**
+ * What a full reset deletes of each model — or null for a model it leaves alone. A business keeps its Shopify
+ * connection and every courier that has a saved connection (the PostEx key), so nothing has to be connected again; its
+ * users, roles and categories carry no `business` and are never touched.
+ */
+export const resetFilter = (model, business) => {
+  if (model.modelName === 'ShopifyConnection') return null;
+  if (model.modelName === 'Party') return { business, 'integration.provider': { $exists: false } };
+  return { business };
+};
+
 /** How many records of each kind a business holds — what a reset would delete. */
 export const countBusinessData = async business => {
   const counts = {};
   for (const model of businessModels()) {
-    counts[labelOf(model)] = await model.countDocuments({ business });
+    const filter = resetFilter(model, business);
+    if (filter) counts[labelOf(model)] = await model.countDocuments(filter);
   }
   return counts;
+};
+
+/** What a full reset leaves in place, so the screen can say it: the Shopify connection, the connected couriers. */
+export const countKept = async business => {
+  const [shopify, couriers] = await Promise.all([
+    mongoose.model('ShopifyConnection').countDocuments({ business }),
+    mongoose.model('Party').countDocuments({ business, 'integration.provider': { $exists: true } })
+  ]);
+  return { shopifyConnections: shopify, connectedCouriers: couriers };
 };
 
 const KEEP_SNAPSHOTS = 10;

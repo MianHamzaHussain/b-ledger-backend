@@ -1367,7 +1367,22 @@ cost more the longer it waits.
   `utils/businessData.js`), keeps the business, users, roles, categories and the order
   counter, and writes a JSON-lines copy to `ops/reset-snapshots/` first (gitignored; holds
   customer data). `GET /system/reset-preview` shows the counts. Remove the flag and the
-  feature before real go-live.
+  feature before real go-live. **It keeps the Shopify connection and every courier that has
+  a saved connection** (`integration.provider` — the PostEx key), so nothing needs connecting
+  again; the courier's saved "where it pays" account is cleared with the accounts.
+- **`POST /system/ledger-clear` clears the HAND-ENTERED money of one business and keeps its
+  orders** (Round 14, `utils/ledgerClear.js`). Every entry has two sides, so deleting an order's
+  sale but keeping its payment would break the books; instead only what a person typed goes —
+  `HAND_KINDS`: manual, capital, expense, payment, salary, transfer, opening, asset, loan,
+  depreciation, closing — plus the **period locks**. Kept: everything the system posts (sales,
+  `order-advance` / `order-refund`, courier invoices, PostEx receipts, goods, materials,
+  production, consignments), a **transfer that touches a courier wallet** (a PostEx withdrawal:
+  its balance must not move) and a **payment tagged to a customer's khata**. A reversal carries
+  its original's kind, so the pair is deleted together (refused if it would split). Own switch
+  `ALLOW_LEDGER_CLEAR=true`, **allowed on a protected business**, exact name typed, a
+  `<business>-ledger-<stamp>.jsonl` copy of exactly what is deleted written first (refused if it
+  cannot be). `GET /system/ledger-clear-preview` lists what goes by kind and every money account's
+  and khata person's balance **now → after**. Admin only. Turn the flag on for the day, then remove it.
 
 - **Rotate the VAPID keypair per environment.** A fresh pair is in the local
   envs; the one committed to the old repository is public — never reuse it.
