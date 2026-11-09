@@ -4,7 +4,7 @@ import JournalEntry from '../models/JournalEntry.js';
 import Order from '../models/Order.js';
 import ErrorResponse from './errorResponse.js';
 import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
-import { postEntry } from './ledger.js';
+import { postEntry, reverseEntry } from './ledger.js';
 import { computeRemittance, orderLabel } from './orderPosting.js';
 import { toPaisa } from './money.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
@@ -188,18 +188,35 @@ export const costsFor = async (order, { asRefund = false, pickupBy } = {}) => {
         'return'
       );
     }
-    // The replacement: until it has its own charge, it is estimated at the original's; it is only final once
+    // The replacement. A cancelled one never went out, so it costs nothing; a returned one costs its return
+    // charge; otherwise, until it has its own charge, it is estimated at the original's and only final once
     // it is delivered and billed.
-    const own = costOf(order, first.deliveryPaisa);
-    const delivered = [
-      ORDER_STATUS.DELIVERED,
-      ORDER_STATUS.REFUNDED,
-      ORDER_STATUS.EXCHANGED
-    ].includes(order.status);
-    const cost = { ...own, isFinal: own.isFinal && delivered };
     const name = `#${order.orderNumber}`;
-    add(`Delivery charge — parcel ${name}`, cost.deliveryPaisa, cost, name);
-    add(`${taxPercentOf(codTax)} % tax on COD — parcel ${name}`, cost.taxPaisa, cost, name);
+    if (order.status === ORDER_STATUS.RETURNED) {
+      const row = rows.byOrder.get(String(order._id));
+      const cost = row
+        ? { deliveryPaisa: row.shippingPaisa + row.gstPaisa, source: 'receipt', isFinal: true }
+        : {
+            deliveryPaisa: order.returnChargePaisa ?? 0,
+            source: order.returnChargeEntry
+              ? 'invoice'
+              : order.returnChargePaisa != null
+                ? 'tracking'
+                : 'estimate',
+            isFinal: Boolean(order.returnChargeEntry)
+          };
+      add(`Return charge — parcel ${name}`, cost.deliveryPaisa, cost, name);
+    } else if (order.status !== ORDER_STATUS.CANCELLED) {
+      const own = costOf(order, first.deliveryPaisa);
+      const delivered = [
+        ORDER_STATUS.DELIVERED,
+        ORDER_STATUS.REFUNDED,
+        ORDER_STATUS.EXCHANGED
+      ].includes(order.status);
+      const cost = { ...own, isFinal: own.isFinal && delivered };
+      add(`Delivery charge — parcel ${name}`, cost.deliveryPaisa, cost, name);
+      add(`${taxPercentOf(codTax)} % tax on COD — parcel ${name}`, cost.taxPaisa, cost, name);
+    }
   }
 
   // The parcel lines were added once for parcels[0]; for an exchange the loop above added the original and now the
@@ -303,4 +320,147 @@ export const settleCourierCosts = async (
   // Saving re-derives what is due back, so the payout that follows is checked against the net.
   await order.save();
   return order;
+};
+
+/**
+ * An exchange's money at the moment the replacement is made. The customer pays the price difference PLUS the
+ * courier's costs for both parcels, so the business absorbs none of it:
+ *
+ *   diff = replacement total − the credit carried from the original      (negative: the customer is owed money)
+ *   F    = original delivery charge + its COD tax + the replacement's delivery charge (estimated as the original's)
+ *   base = diff + F
+ *
+ * base ≤ 0   the customer is owed money back; nothing is kept now. The costs come off the payout (settleCourierCosts),
+ *            once PostEx has billed both parcels.
+ * base > 0   the customer owes it.
+ *   return-first → on the replacement's COD, grossed up so that after the tax on the COD itself it still covers
+ *                  base, in whole rupees. What is kept back from the credit is COD − diff (every cost + rounding).
+ *   swap at the door → no COD (the rider collects nothing): the customer pays `base` directly, and what is kept
+ *                  back is F (the replacement has no COD, so no tax on it).
+ * The replacement's parcel is only an estimate until PostEx bills it; the business absorbs any small gap.
+ */
+export const exchangeKeep = async (original, { newTotalPaisa, creditPaisa, isSwap = false }) => {
+  const business = await Business.findById(original.business).select('codTax').lean();
+  const codTax = business?.codTax || {};
+  const rows = await loadReceiptRows(original.business, [original._id], []);
+  const invoiced = await invoiceBacked([original]);
+  const orig = parcelCost(original, {
+    codTax,
+    receiptRow: rows.byOrder.get(String(original._id)),
+    fromInvoice: invoiced.has(String(original._id))
+  });
+  const estimatePaisa = orig.deliveryPaisa;
+  const diffPaisa = newTotalPaisa - creditPaisa;
+  const fixedPaisa = orig.deliveryPaisa + orig.taxPaisa + estimatePaisa;
+  const basePaisa = diffPaisa + fixedPaisa;
+  if (basePaisa <= 0) {
+    return { owes: false, basePaisa, codPaisa: 0, keepPaisa: 0, lines: [], diffPaisa };
+  }
+
+  const percent = taxPercentOf(codTax);
+  const codPaisa = isSwap ? 0 : grossUpCod(basePaisa, percent);
+  const replacementTaxPaisa = isSwap ? 0 : Math.round((codPaisa * percent) / 100);
+  const keepPaisa = isSwap ? fixedPaisa : codPaisa - diffPaisa;
+  const name = `#${original.orderNumber}`;
+  const lines = [
+    {
+      label: `Delivery charge — parcel ${name}`,
+      amountPaisa: orig.deliveryPaisa,
+      source: orig.source
+    },
+    {
+      label: `${percent} % tax on COD — parcel ${name}`,
+      amountPaisa: orig.taxPaisa,
+      source: orig.source
+    },
+    {
+      label: 'Delivery charge — replacement parcel',
+      amountPaisa: estimatePaisa,
+      source: 'estimate'
+    },
+    {
+      label: `${percent} % tax on COD — replacement parcel`,
+      amountPaisa: replacementTaxPaisa,
+      source: 'estimate'
+    }
+  ];
+  // Whole-rupee rounding of the COD: a few paisa more than the costs, still the customer's to pay.
+  const roundingPaisa = keepPaisa - lines.reduce((sum, l) => sum + l.amountPaisa, 0);
+  if (roundingPaisa > 0)
+    lines.push({ label: 'Rounding to the rupee', amountPaisa: roundingPaisa, source: 'estimate' });
+  return {
+    owes: true,
+    basePaisa,
+    codPaisa,
+    keepPaisa,
+    diffPaisa,
+    lines: lines.filter(l => l.amountPaisa > 0)
+  };
+};
+
+/**
+ * Keep an exchange's costs back from the credit on the replacement, at once, so its COD (or what the customer pays
+ * directly) carries them. Fixed at the estimate: the business absorbs any later gap (nothing is re-posted).
+ */
+export const applyExchangeKeep = async (replacement, keep, userId) => {
+  if (!(keep.keepPaisa > 0)) return replacement;
+  await ensureChart(replacement.business);
+  const label = `${orderLabel(replacement)} · ${replacement.customerName}`;
+  const entry = await postEntry({
+    business: replacement.business,
+    memo: `Exchange — courier costs kept back — ${label}`,
+    source: { kind: JOURNAL_SOURCES.ORDER, ref: String(replacement._id) },
+    lines: [
+      {
+        account: (await accountByCode(replacement.business, CODES.CUSTOMER_ADVANCES))._id,
+        label,
+        debitPaisa: keep.keepPaisa
+      },
+      {
+        account: (await accountByCode(replacement.business, CODES.CHARGES_KEPT))._id,
+        label,
+        creditPaisa: keep.keepPaisa
+      }
+    ],
+    userId
+  });
+  for (const line of keep.lines) {
+    replacement.customerMoney.push({
+      kind: 'kept',
+      amountPaisa: line.amountPaisa,
+      accountName: line.label,
+      date: new Date(),
+      entry: entry._id,
+      by: userId
+    });
+  }
+  replacement.courierCosts = {
+    settledAt: new Date(),
+    early: true,
+    exchange: true,
+    reason: 'Exchange — the costs ride on this order',
+    lines: keep.lines
+  };
+  // Saving re-derives the COD: the credit is now smaller by the costs, so the customer's COD is bigger.
+  await replacement.save();
+  return replacement;
+};
+
+/**
+ * A replacement that never reached the customer (cancelled, or sent back): its exchange costs were fixed on the
+ * assumption it would be delivered. Reverse them and clear the settlement, so the payout works out the real costs.
+ */
+export const undoExchangeCosts = async (order, userId) => {
+  if (!order.courierCosts?.exchange) return;
+  const entries = [
+    ...new Set(
+      order.customerMoney.filter(m => m.kind === 'kept' && m.entry).map(m => String(m.entry))
+    )
+  ];
+  for (const id of entries) {
+    // eslint-disable-next-line no-await-in-loop
+    await reverseEntry(id, { userId, memo: 'Exchange not completed — courier costs released' });
+  }
+  order.customerMoney = order.customerMoney.filter(m => m.kind !== 'kept');
+  order.set('courierCosts', undefined);
 };

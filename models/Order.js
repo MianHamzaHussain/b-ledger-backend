@@ -571,6 +571,8 @@ const OrderSchema = new mongoose.Schema(
     courierCosts: {
       settledAt: { type: Date },
       early: { type: Boolean },
+      /** Taken at once when an exchange's replacement was made (its costs ride on the replacement's COD). */
+      exchange: { type: Boolean },
       waived: { type: Boolean },
       reason: { type: String, trim: true, maxlength: 300 },
       lines: [

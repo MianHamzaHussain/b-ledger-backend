@@ -66,6 +66,7 @@ import {
   creditForReplacement,
   markCreditMoved
 } from '../utils/exchange.js';
+import { applyExchangeKeep, exchangeKeep, undoExchangeCosts } from '../utils/courierCosts.js';
 import {
   ORDER_STATUS,
   ORDER_TRANSITIONS,
@@ -642,6 +643,13 @@ const makeReplacement = async (original, body, userId, beforeCreate) => {
       createdBy: userId
     });
     markCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
+    // The customer pays both parcels' courier costs: kept back from the credit now, so the COD carries them.
+    const keep = await exchangeKeep(original, {
+      newTotalPaisa: toPaisa(replacement.total),
+      creditPaisa: credit?.amountPaisa ?? 0,
+      isSwap: Boolean(body.isSwap)
+    });
+    if (keep.owes) await applyExchangeKeep(replacement, keep, userId);
     return replacement;
   } catch (err) {
     await releaseStock(newItems);
@@ -749,17 +757,20 @@ export const swapOrder = asyncHandler(async (req, res, next) => {
       (s, i) => s + toPaisa(i.unitPrice) * i.quantity,
       0
     ) + (req.body.customWork || []).reduce((s, w) => s + toPaisa(w.price), 0);
-  const differencePaisa = newTotal - credit;
+  // What the customer pays directly: the price difference plus both parcels' courier costs.
+  const { owes, basePaisa: differencePaisa } = await exchangeKeep(original, {
+    newTotalPaisa: newTotal,
+    creditPaisa: credit,
+    isSwap: true
+  });
   const differenceMoney =
-    differencePaisa > 0
-      ? req.body.differenceAccount
-        ? await resolveMoney(original.business, { account: req.body.differenceAccount }, req.user)
-        : null
+    owes && req.body.differenceAccount
+      ? await resolveMoney(original.business, { account: req.body.differenceAccount }, req.user)
       : null;
-  if (differencePaisa > 0 && !differenceMoney) {
+  if (owes && !differenceMoney) {
     return next(
       new ErrorResponse(
-        'The customer pays the difference to you directly — choose where it came in',
+        'The customer pays the difference and the courier costs to you directly — choose where it came in',
         400
       )
     );
@@ -1023,6 +1034,8 @@ export const updateOrderStatus = asyncHandler(async (req, res, next) => {
   // A made-from-scratch piece is still a finished piece: into stock, not a loss.
   // Other custom work (an alteration on a stock item) was spent — written off.
   if (status === ORDER_STATUS.CANCELLED || status === ORDER_STATUS.RETURNED) {
+    // An exchange's replacement that never arrives: its costs were fixed assuming it would.
+    await undoExchangeCosts(order, req.user.id);
     if (scratchLines(order).length) {
       await putScratchInStock(order, req.body.scratchPieces, req.user.id);
     } else if (!order.customCostWriteOff) {
