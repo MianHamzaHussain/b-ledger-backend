@@ -86,7 +86,7 @@ export const createCrudHandlers = ({ model, protectedFields = [], beforeDelete, 
  */
 /** Minimal English pluralizer — enough for resource labels. */
 const pluralize = word => {
-  if (/[^aeiou]y$/i.test(word)) return `${word.slice(0, -1)}ies`; // subcategory → subcategories
+  if (/[^aeiou]y$/i.test(word)) return `${word.slice(0, -1)}ies`; // category → categories
   if (/(s|x|z|ch|sh)$/i.test(word)) return `${word}es`; // business → businesses
   return `${word}s`;
 };

@@ -1,6 +1,8 @@
 import GoodsReceipt from '../models/GoodsReceipt.js';
 import Product from '../models/Product.js';
+import Business from '../models/Business.js';
 import ErrorResponse from './errorResponse.js';
+import { isCategoryOf, NOT_THIS_BUSINESS } from './businessCategories.js';
 import { accountByCode, CODES, ensureChart } from './chartOfAccounts.js';
 import { postEntry, reverseEntry } from './ledger.js';
 import { weightedAverageCost } from './inventory.js';
@@ -124,15 +126,23 @@ export const receiveGoods = async ({
   // ── Build the lines (validates every one before anything is written) ──────
   const lines = [];
   const newArticles = []; // { product doc, built lines } created at apply time
+  let businessDoc; // loaded once, only if an article names a category
   for (const raw of rawLines) {
     if (raw.newProduct) {
+      const { category } = raw.newProduct;
+      if (category) {
+        businessDoc ??= await Business.findById(business).select('categories category').lean();
+        if (!isCategoryOf(businessDoc, category)) {
+          throw new ErrorResponse(`${NOT_THIS_BUSINESS} for ${raw.newProduct.name}`, 400);
+        }
+      }
       const built = raw.newProduct.variants.map(v => ({
         variantLabel: v.label,
         salePrice: v.salePrice,
         quantity: v.quantity,
         unitCostPaisa: v.unitCostPaisa
       }));
-      newArticles.push({ name: raw.newProduct.name, built });
+      newArticles.push({ name: raw.newProduct.name, category, built });
     } else {
       lines.push(await resolveExistingLine(business, raw));
     }
@@ -211,6 +221,7 @@ export const receiveGoods = async ({
       const product = await Product.create({
         business,
         name: article.name,
+        category: article.category, // none → the business's default (Product hook)
         createdBy: userId,
         variants: article.built.map(v => ({
           label: v.variantLabel,

@@ -13,8 +13,8 @@ import { createCrudHandlers } from '../utils/crudController.js';
  * `restrictBusinessToScope` on the routes.
  *
  * Article number generation, per-SKU barcode generation and variant validation
- * live in the model's hooks. Category is derived from the business, so the
- * client can't set it (`protectedFields`).
+ * live in the model's hooks. The category is chosen from the business's own and
+ * checked by the model; left out, it is the business's first.
  *
  * @route  GET    /api/v1/products      (products:read — scoped)
  * @route  GET    /api/v1/products/:id  (products:read — scoped)
@@ -24,7 +24,6 @@ import { createCrudHandlers } from '../utils/crudController.js';
  */
 const handlers = createCrudHandlers({
   model: Product,
-  protectedFields: ['category'],
   populate: [{ path: 'category', select: 'name status' }]
 });
 
@@ -53,12 +52,13 @@ export const createProduct = asyncHandler(async (req, res, next) => {
  */
 export const updateProduct = asyncHandler(async (req, res) => {
   const product = req.resource;
-  const { name, lowStockThreshold, status, variants, allowOversell } = req.body;
+  const { name, lowStockThreshold, status, variants, allowOversell, category } = req.body;
 
   const renamed = name != null && name !== product.name;
   if (name != null) product.name = name;
   if (lowStockThreshold != null) product.lowStockThreshold = lowStockThreshold;
   if (status != null) product.status = status;
+  if (category != null) product.category = category; // the model checks it is the business's
   if (typeof allowOversell === 'boolean') product.allowOversell = allowOversell;
 
   if (Array.isArray(variants)) {

@@ -40,7 +40,8 @@ router.use(protect);
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: query, name: search,   schema: { type: string } }
- *       - { in: query, name: category, schema: { type: string }, description: Category ObjectId }
+ *       - { in: query, name: categories, schema: { type: string }, description: "Category ObjectId — businesses that sell in it" }
+ *       - { in: query, name: category, schema: { type: string }, description: "Deprecated — only the first category" }
  *       - { in: query, name: status,   schema: { type: string, enum: [active, inactive] } }
  *       - { in: query, name: page,     schema: { type: integer } }
  *       - { in: query, name: limit,    schema: { type: integer } }
@@ -58,7 +59,7 @@ router.use(protect);
  *           schema: { $ref: '#/components/schemas/Business' }
  *           example:
  *             name: Acme Clothing
- *             category: 60d0fe4f5311236168a109cc
+ *             categories: [60d0fe4f5311236168a109cc]   # first = default; the old single `category` still works (deprecated)
  *             storeLink: https://acme-clothing.myshopify.com
  *             facebookLink: https://facebook.com/acmeclothing
  *             instagramLink: https://instagram.com/acmeclothing
@@ -75,7 +76,10 @@ router
     // courier accounts, tax profile — comes from the detail-by-id endpoint.
     advancedResults(
       Business,
-      { path: 'category', select: 'name status' },
+      [
+        { path: 'category', select: 'name status' },
+        { path: 'categories', select: 'name status' }
+      ],
       ['name', 'storeLink', 'whatsappNumber'],
       BUSINESS_LIST_FIELDS
     ),

@@ -82,6 +82,7 @@ export const putScratchInStock = async (order, pieces = [], userId, { fromCogs =
       variant.salePrice = salePrice;
       product.updatedBy = userId;
     } else {
+      // No category named: a customised piece goes to the business's default (the Product hook).
       product = new Product({
         business: order.business,
         name,

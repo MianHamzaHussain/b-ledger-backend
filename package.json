@@ -15,6 +15,7 @@
     "backfill:cities": "node --env-file=.env scripts/backfillCities.mjs",
     "normalize:phones": "node --env-file=.env scripts/normalizeCustomerPhones.mjs",
     "migrate:integrations": "node --env-file=.env scripts/migrateIntegrations.mjs",
+    "migrate:categories": "node --env-file=.env scripts/backfillBusinessCategories.mjs",
     "postex:stages": "node --env-file=.env scripts/postexStages.mjs",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "lint": "oxlint .",

@@ -64,7 +64,6 @@ export async function makeBusiness(extra = {}) {
 export const makeProduct = (business, variants) =>
   Product.create({
     business,
-    category: oid(),
     name: 'Test Product',
     createdBy: userId,
     variants: variants || [{ label: 'M', costPrice: 1000, salePrice: 2000, stock: 50 }]

@@ -137,6 +137,7 @@ export const createGoodsReceipt = asyncHandler(async (req, res, next) => {
       ? {
           newProduct: {
             name: line.newProduct.name,
+            category: line.newProduct.category,
             variants: line.newProduct.variants.map(v => ({
               label: v.label,
               salePrice: v.salePrice,
