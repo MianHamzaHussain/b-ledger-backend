@@ -18,6 +18,8 @@ const existingLine = z.object({
 /** An article this delivery creates — its sizes, prices and what arrived. */
 const newArticleLine = z.object({
   newProduct: z.object({
+    // One of the business's categories; left out, the article goes in its first.
+    category: z.string().optional(),
     name: z
       .string()
       .trim()

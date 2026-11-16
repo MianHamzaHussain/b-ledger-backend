@@ -11,6 +11,7 @@ import {
   oid,
   userId
 } from './helpers/db.js';
+import Category from '../models/Category.js';
 import Product from '../models/Product.js';
 import GoodsReceipt from '../models/GoodsReceipt.js';
 import JournalEntry from '../models/JournalEntry.js';
@@ -673,4 +674,43 @@ test('what was delivered in total is a cost: it vanishes without See costs, the 
   assert.equal(reply.data[0].totalCostPaisa, undefined);
   assert.equal(reply.data[0].deliveries, 1);
   assert.equal(reply.data[0].name, 'Bilal Fabrics');
+});
+
+test('a new article can choose one of the business categories; none → the default; a foreign one is refused untouched', async () => {
+  const [clothing, lehnga, shoes] = await Category.create([
+    { name: 'Clothing' },
+    { name: 'Lehnga' },
+    { name: 'Shoes' }
+  ]);
+  const biz = await makeBusiness({ categories: [clothing._id, lehnga._id] });
+  const supplier = await makeParty(biz._id, 'supplier', { name: 'Bilal Fabrics' });
+  const ctx = { biz, supplier };
+  const article = (name, category) => ({
+    newProduct: {
+      name,
+      ...(category ? { category: String(category) } : {}),
+      variants: [{ label: 'M', salePrice: 5000, quantity: 2, unitCost: 3000 }]
+    }
+  });
+  const categoryOf = async receipt =>
+    String((await Product.findById(receipt.lines[0].product)).category);
+
+  assert.equal(
+    await categoryOf(await receive(ctx, { lines: [article('Bridal', lehnga._id)] })),
+    String(lehnga._id)
+  );
+  assert.equal(
+    await categoryOf(await receive(ctx, { lines: [article('Plain')] })),
+    String(clothing._id),
+    'the default'
+  );
+
+  const products = await Product.countDocuments();
+  const entries = await JournalEntry.countDocuments();
+  await assert.rejects(
+    receive(ctx, { lines: [article('Sneaker', shoes._id)] }),
+    /Choose one of this business's categories for Sneaker/
+  );
+  assert.equal(await Product.countDocuments(), products, 'no article made');
+  assert.equal(await JournalEntry.countDocuments(), entries, 'nothing posted');
 });
