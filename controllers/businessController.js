@@ -2,6 +2,7 @@ import Business from '../models/Business.js';
 import asyncHandler from '../middlewares/asyncHandler.js';
 import { gettingStarted } from '../utils/gettingStarted.js';
 import { createCrudHandlers } from '../utils/crudController.js';
+import { blockRemovedCategoriesInUse } from '../utils/businessCategories.js';
 
 /**
  * Businesses — standard CRUD.
@@ -20,16 +21,30 @@ import { createCrudHandlers } from '../utils/crudController.js';
 const handlers = createCrudHandlers({
   model: Business,
   // variantOptions so the product form can offer the category's variant menu.
-  populate: { path: 'category', select: 'name status variantOptions' }
+  populate: [
+    { path: 'category', select: 'name status variantOptions' },
+    { path: 'categories', select: 'name status variantOptions' }
+  ]
 });
 
 export const {
   getAll: getBusinesses,
   getOne: getBusiness,
   create: createBusiness,
-  update: updateBusiness,
   remove: deleteBusiness
 } = handlers;
+
+/**
+ * @desc   Update a business. A category an article is still in can not be taken away.
+ * @route  PUT /api/v1/businesses/:id  (businesses:update — scoped)
+ */
+export const updateBusiness = asyncHandler(async (req, res, next) => {
+  if (Array.isArray(req.body.categories)) {
+    const blocked = await blockRemovedCategoriesInUse(req.resource, req.body.categories);
+    if (blocked) return next(blocked);
+  }
+  return handlers.update(req, res, next);
+});
 
 /**
  * @desc   The getting-started checklist for a business — each step's done flag.

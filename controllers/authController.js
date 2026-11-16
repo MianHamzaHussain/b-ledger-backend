@@ -105,7 +105,10 @@ export const getMe = asyncHandler(async (req, res, next) => {
       path: 'assignedBusinesses',
       select: 'name category logo brandColor',
       // variantOptions so the product form can offer the category's variant menu.
-      populate: { path: 'category', select: 'name variantOptions' }
+      populate: [
+        { path: 'category', select: 'name variantOptions' },
+        { path: 'categories', select: 'name variantOptions' }
+      ]
     });
 
   res.status(200).json({ success: true, data: user });

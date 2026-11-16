@@ -36,15 +36,29 @@ const BusinessSchema = new mongoose.Schema(
       maxlength: [100, 'Name can not be more than 100 characters']
     },
     /**
-     * Named `category`, not `categoryId` — ref fields are named for the model
-     * they point at (see CLAUDE.md §4), matching `role` on User. Populated, it
-     * is the category object.
+     * What this business sells. The FIRST is the default: a new article with no category chosen goes there
+     * (a delivery's new article, a customised piece put into stock, an older app version). Each article is in
+     * exactly one of these, and its size menu is that category's.
      */
-    category: {
-      type: mongoose.Schema.ObjectId,
-      ref: 'Category',
-      required: [true, 'Please select a category']
+    categories: {
+      type: [{ type: mongoose.Schema.ObjectId, ref: 'Category' }],
+      default: undefined, // a legacy document without the field stays distinguishable from an empty list
+      validate: [
+        {
+          validator: list => Array.isArray(list) && list.length >= 1,
+          message: 'Please select at least one category'
+        },
+        {
+          validator: list => !list || list.length <= 20,
+          message: 'A business can have at most 20 categories'
+        }
+      ]
     },
+    /**
+     * DEPRECATED (round 15): a mirror of `categories[0]` for app versions from before a business could have
+     * several. Kept in step by the validate hook below; never set it in new code. Removed in the contract round.
+     */
+    category: { type: mongoose.Schema.ObjectId, ref: 'Category' },
     /**
      * The brand's logo as a small `data:` image kept right on the business (the
      * browser resizes it first), so there is no file storage to run or back up apart
@@ -122,6 +136,23 @@ const BusinessSchema = new mongoose.Schema(
 
 /** Matches the common list query: active businesses, sorted by name. */
 BusinessSchema.index({ status: 1, name: 1 });
-BusinessSchema.index({ category: 1 });
+BusinessSchema.index({ category: 1 }); // TODO(contract round): drop with the legacy field
+BusinessSchema.index({ categories: 1 });
+
+/**
+ * The only place `categories` and the legacy `category` are reconciled. An older app that changes just
+ * `category` moves it to the front; a legacy document or create fills `categories` from it; duplicates go.
+ */
+BusinessSchema.pre('validate', function () {
+  const legacyOnly = this.isModified('category') && !this.isModified('categories');
+  let list = (this.categories ?? []).map(String);
+  if (legacyOnly && this.category) {
+    list = [String(this.category), ...list.filter(id => id !== String(this.category))];
+  } else if (list.length === 0 && this.category) {
+    list = [String(this.category)];
+  }
+  this.categories = [...new Set(list)];
+  this.category = this.categories[0];
+});
 
 export default mongoose.model('Business', BusinessSchema);

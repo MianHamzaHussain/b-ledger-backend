@@ -75,7 +75,7 @@ export const getPresence = asyncHandler(async (req, res) => {
 export const getUser = asyncHandler(async (req, res, next) => {
   const user = await User.findById(req.params.id)
     .populate('role', 'name description')
-    .populate('assignedBusinesses', 'name category');
+    .populate('assignedBusinesses', 'name category categories');
 
   if (!user) {
     return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));

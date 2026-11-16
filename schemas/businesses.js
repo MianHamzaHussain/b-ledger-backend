@@ -34,9 +34,16 @@ const codTax = z
   })
   .optional();
 
-export const businessCreateSchema = z.object({
+const categories = z
+  .array(id)
+  .min(1, 'Please select at least one category')
+  .max(20, 'A business can have at most 20 categories');
+
+const businessFields = z.object({
   name: z.string().trim().min(1, 'Please add a business name'),
-  category: id,
+  // What it sells — the first is the default. `category` is the older single field, still accepted (deprecated).
+  categories: categories.optional(),
+  category: id.optional(),
   storeLink: link,
   facebookLink: link,
   instagramLink: link,
@@ -51,5 +58,10 @@ export const businessCreateSchema = z.object({
   status: z.enum(['active', 'inactive']).optional()
 });
 
+export const businessCreateSchema = businessFields.refine(b => b.categories || b.category, {
+  message: 'Please select at least one category',
+  path: ['categories']
+});
+
 // Update leaves every field optional — a PUT may touch just one.
-export const businessUpdateSchema = businessCreateSchema.partial();
+export const businessUpdateSchema = businessFields.partial();
