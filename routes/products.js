@@ -42,8 +42,8 @@ router.use(hideCosts);
  *     summary: Create a product
  *     tags: [Products]
  *     description: >
- *       Article number and each variant's barcode are auto-generated. Variants
- *       are validated against the chosen subcategory's attributes.
+ *       Article number and each variant's barcode are auto-generated. `category` is
+ *       one of the business's categories; left out, it is the business's first.
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       required: true

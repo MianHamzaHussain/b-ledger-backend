@@ -58,7 +58,6 @@ beforeEach(async () => {
   actor = await User.findById(actor._id).populate('role');
   product = await Product.create({
     business: biz._id,
-    category: oid(),
     name: 'BEIGE MEHFIL',
     createdBy: userId,
     variants: [
@@ -584,7 +583,6 @@ test('a held order says why: no such item, two with the name, or no such size', 
 
   await Product.create({
     business: biz._id,
-    category: oid(),
     name: 'Beige Mehfil',
     createdBy: userId,
     variants: [{ label: 'M', costPrice: 0, salePrice: 1, stock: 1 }]

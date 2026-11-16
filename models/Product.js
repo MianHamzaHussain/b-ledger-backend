@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { resolveProductCategory } from '../utils/businessCategories.js';
 
 /**
  * One sellable SKU. Cost, sale price, stock and barcode live HERE, never on the
@@ -68,7 +69,10 @@ const ProductSchema = new mongoose.Schema(
       ref: 'Business',
       required: [true, 'Please select a business']
     },
-    /** Derived from the business (a business has one category); client can't set it. */
+    /**
+     * Which of its business's categories this article is in; its size menu is that category's. Defaults to the
+     * business's first (its default) and must be one of the business's own.
+     */
     category: {
       type: mongoose.Schema.ObjectId,
       ref: 'Category',
@@ -136,6 +140,7 @@ const ProductSchema = new mongoose.Schema(
 ProductSchema.index({ 'variants.barcode': 1 }, { unique: true, sparse: true });
 ProductSchema.index({ business: 1, name: 1 });
 ProductSchema.index({ business: 1, status: 1 });
+ProductSchema.index({ business: 1, category: 1 });
 
 /** No-confusion alphabet (no O/0, I/1). 4 chars ≈ 1.5M codes. */
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -161,20 +166,19 @@ ProductSchema.statics.generateBarcode = async function () {
 };
 
 /**
- * Derive the category from the business, require ≥1 variant, and keep variant
+ * Check the category against the business, require ≥1 variant, and keep variant
  * names distinct within the product (so you don't add "M" twice).
  */
 ProductSchema.pre('validate', async function () {
-  // Category is the business's — derived, never taken from the client (the
-  // controller strips it). A business has one category, fixed once its business
-  // is chosen; asking would only let the two diverge.
-  if (this.business && !this.category) {
-    const biz = await mongoose.model('Business').findById(this.business).select('category');
-    if (!biz) {
-      this.invalidate('business', 'Business not found');
+  // Checked only when new, missing or changed, so a stock or price save on an older article never trips on it.
+  // A category that could not even be read as an id is already an error; filling the default would hide it.
+  if (this.errors?.category) return;
+  if (this.business && (this.isNew || !this.category || this.isModified('category'))) {
+    const problem = await resolveProductCategory(this);
+    if (problem) {
+      this.invalidate(problem.path, problem.message);
       return;
     }
-    this.category = biz.category;
   }
 
   const variants = this.variants || [];

@@ -1,11 +1,15 @@
 import Category from '../models/Category.js';
 import Business from '../models/Business.js';
-import { createCrudHandlers, blockIfReferencedBy } from '../utils/crudController.js';
+import Product from '../models/Product.js';
+import {
+  createCrudHandlers,
+  blockIfReferencedBy,
+  blockIfAnyReference
+} from '../utils/crudController.js';
 
 /**
  * Categories — standard CRUD. A category is refused deletion while any business
- * still points at it (products inherit their category from the business, so the
- * business guard covers products transitively).
+ * lists it or any article is in it.
  *
  * @route  GET    /api/v1/categories      (categories:read)
  * @route  GET    /api/v1/categories/:id  (categories:read)
@@ -15,7 +19,12 @@ import { createCrudHandlers, blockIfReferencedBy } from '../utils/crudController
  */
 const handlers = createCrudHandlers({
   model: Category,
-  beforeDelete: blockIfReferencedBy(Business, 'category', 'business')
+  beforeDelete: blockIfAnyReference([
+    blockIfReferencedBy(Business, 'categories', 'business'),
+    // TODO(contract round): drop with the legacy field. Covers a business not yet backfilled.
+    blockIfReferencedBy(Business, 'category', 'business'),
+    blockIfReferencedBy(Product, 'category', 'article')
+  ])
 });
 
 export const {
