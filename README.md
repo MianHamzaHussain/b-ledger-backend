@@ -212,15 +212,16 @@ other roles and users from the app.
 
 ## Scripts
 
-| Command          | Purpose                                                  |
-| ---------------- | -------------------------------------------------------- |
-| `npm run dev`    | Development server with hot reload.                      |
-| `npm start`      | Production server.                                       |
-| `npm run seed`   | Create Admin role + first admin (idempotent).            |
-| `npm test`       | `node:test` suite against a throwaway Mongo (see below). |
-| `npm run lint`   | oxlint.                                                  |
-| `npm run format` | Prettier write. `format:check` verifies without writing. |
-| `npm run check`  | lint + format check + tests — **run before pushing**.    |
+| Command                      | Purpose                                                                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `npm run dev`                | Development server with hot reload.                                                                                           |
+| `npm start`                  | Production server.                                                                                                            |
+| `npm run seed`               | Create Admin role + first admin (idempotent).                                                                                 |
+| `npm test`                   | `node:test` suite against a throwaway Mongo (see below).                                                                      |
+| `npm run migrate:categories` | One-off (Round 15): fills `categories` on older businesses. Dry run; add `-- --apply` to write. Delete in the contract round. |
+| `npm run lint`               | oxlint.                                                                                                                       |
+| `npm run format`             | Prettier write. `format:check` verifies without writing.                                                                      |
+| `npm run check`              | lint + format check + tests — **run before pushing**.                                                                         |
 
 ---
 
