@@ -6,6 +6,7 @@ import Category from '../models/Category.js';
 import Product from '../models/Product.js';
 import { createProduct, updateProduct } from '../controllers/productController.js';
 import { deleteCategory } from '../controllers/categoryController.js';
+import advancedResults from '../middlewares/advancedResults.js';
 
 /**
  * An article is in exactly one of its business's categories: chosen, or the business's first; anything else is
@@ -115,4 +116,27 @@ test('a category can not be deleted while a business lists it (even second) or a
   await assert.rejects(del(lonely), /article still uses this/);
   await del(free);
   assert.equal(await Category.exists({ _id: free._id }), null);
+});
+
+test('the real list route filters by ?category= (advancedResults)', async () => {
+  const ctx = await setup();
+  await create(ctx);
+  await create(ctx, { name: 'Bridal', category: String(ctx.lehnga._id) });
+  const req = {
+    query: { business: String(ctx.biz._id), category: String(ctx.lehnga._id) },
+    accessFilter: {}
+  };
+  const res = {};
+  await new Promise((resolve, reject) =>
+    advancedResults(
+      Product,
+      null,
+      ['name'],
+      'name category'
+    )(req, res, err => (err ? reject(err) : resolve()))
+  );
+  assert.deepEqual(
+    res.advancedResults.data.map(p => p.name),
+    ['Bridal']
+  );
 });

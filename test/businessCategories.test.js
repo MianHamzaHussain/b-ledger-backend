@@ -8,6 +8,9 @@ import { categoriesOf, isCategoryOf } from '../utils/businessCategories.js';
 import { updateBusiness } from '../controllers/businessController.js';
 import { businessCreateSchema } from '../schemas/businesses.js';
 import { backfillBusinessCategories } from '../utils/backfillBusinessCategories.js';
+import Role from '../models/Role.js';
+import User from '../models/User.js';
+import { getMe } from '../controllers/authController.js';
 
 /**
  * A business sells in one or more categories (the first is the default); `category` is a deprecated mirror of the
@@ -136,4 +139,29 @@ test('backfill: dry run counts, apply fills only the old ones, a second run find
   }
   assert.deepEqual(ids((await Business.findById(modern._id)).categories), ids([B, C]));
   assert.deepEqual(await backfillBusinessCategories({ apply: true }), { businesses: 0 });
+});
+
+test('/auth/me gives staff every category of their businesses, with sizes (not only the first)', async () => {
+  const [clothing, lehnga] = await Category.create([
+    { name: 'Clothing', variantOptions: ['S', 'M'] },
+    { name: 'Lehnga', variantOptions: ['M', 'Custom'] }
+  ]);
+  const biz = await make({ categories: [clothing._id, lehnga._id] });
+  const role = await Role.create({ name: 'Staff', permissions: [] });
+  const staff = await User.create({
+    name: 'Ali',
+    email: 'ali@b-ledger.pk',
+    phone: '+923001234567',
+    password: 'password1',
+    role: role._id,
+    assignedBusinesses: [biz._id]
+  });
+  const out = await runHandler(getMe, { user: { id: staff._id } });
+  const [assigned] = out.body.data.assignedBusinesses;
+  assert.deepEqual(
+    assigned.categories.map(c => c.name),
+    ['Clothing', 'Lehnga']
+  );
+  assert.deepEqual(assigned.categories[1].variantOptions, ['M', 'Custom']);
+  assert.equal(assigned.category.name, 'Clothing', 'the old field still there for older apps');
 });
