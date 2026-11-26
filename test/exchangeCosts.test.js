@@ -35,12 +35,13 @@ import {
 } from '../schemas/orders.js';
 
 /**
- * An exchange recovers the courier's costs for BOTH parcels — the business absorbs none of it. Worked example (owner):
- * a 16,000 order exchanged for a 12,000 one, each parcel charged 268.25, 4 % tax on the COD.
- *   original  268.25 + 4 % × 16,000 (640.00) = 908.25      replacement  268.25 + 0 (no COD)
- *   payout    4,000 − 908.25 − 268.25 = Rs 2,823.50
- * A customer who owes (same price, dearer, or a small difference) pays it on the replacement's COD, in whole
- * rupees grossed up so the 4 % on that COD itself is covered.
+ * An exchange charges the customer the price difference + the NEW parcel's courier cost — what the exchange adds.
+ * The original parcel's delivery and COD tax are the normal cost of that sale, so they are not charged again (rule
+ * agreed with the owner 2026-11-26). Worked example: a 16,000 order exchanged for a 12,000 one, each parcel 268.25.
+ *   payout    4,000 − 268.25 (the replacement, no COD so no tax) = Rs 3,731.75
+ * A customer who owes (same price, dearer, or a small difference) pays it on the replacement's COD, in whole rupees
+ * grossed up so the 4 % on that COD itself is covered: same price → 268.25 → COD 280.
+ * A replacement made before the rule (no `exchangeCostRule`) keeps the old one: both parcels.
  */
 before(connect);
 after(disconnect);
@@ -124,7 +125,7 @@ const exchange = async (ctx, original, price) => {
 
 const keptNet = async ctx => accountBalance(ctx.biz._id, await ctx.acc(CODES.CHARGES_KEPT));
 
-test('16,000 → 12,000: the customer is owed 4,000 less both parcels’ costs = 2,823.50', async () => {
+test('16,000 → 12,000: the customer is owed 4,000 less the new parcel’s cost = 3,731.75', async () => {
   const ctx = await setup();
   const original = await delivered(ctx, 16000);
   let replacement = await exchange(ctx, original, 12000);
@@ -132,8 +133,9 @@ test('16,000 → 12,000: the customer is owed 4,000 less both parcels’ costs =
   assert.equal(
     replacement.refundDuePaisa,
     400000,
-    'held gross until PostEx has billed both parcels'
+    'held gross until PostEx has billed the new parcel'
   );
+  assert.equal(replacement.exchangeCostRule, 'new-parcel');
 
   replacement = await setStatus(replacement, {
     status: 'dispatched',
@@ -145,24 +147,49 @@ test('16,000 → 12,000: the customer is owed 4,000 less both parcels’ costs =
   const pay = () =>
     runHandler(addOrderRefund, {
       resource: replacement,
-      body: orderMoneySchema.parse({ amount: 2823.5, account: ctx.cash })
+      body: orderMoneySchema.parse({ amount: 3731.75, account: ctx.cash })
     });
   await assert.rejects(pay(), /has not billed/);
 
-  await receiptFor(ctx, await Order.findById(original._id), 1600000);
+  // Only the new parcel's bill is waited for — the original's is not a cost of the exchange.
   await receiptFor(ctx, replacement, 0);
   const out = await pay();
   assert.equal(out.body.data.refundDuePaisa, 0);
-  // 908.25 for the original + 268.25 for the replacement were kept back.
+  assert.equal(await keptNet(ctx), -26825, 'only the new parcel’s 268.25 was kept back');
+});
+
+test('a replacement made before the new rule keeps the old one: both parcels come off', async () => {
+  const ctx = await setup();
+  const original = await delivered(ctx, 16000);
+  let replacement = await exchange(ctx, original, 12000);
+  // As stored by the old code: no rule on the replacement.
+  await Order.collection.updateOne({ _id: replacement._id }, { $unset: { exchangeCostRule: '' } });
+  replacement = await Order.findById(replacement._id);
+  replacement = await setStatus(replacement, {
+    status: 'dispatched',
+    courier: String(ctx.courier._id),
+    trackingId: 'TRK-OLD'
+  });
+  replacement = await setStatus(replacement, { status: 'delivered', deliveryCharge: 268.25 });
+  await receiptFor(ctx, replacement, 0);
+  const pay = () =>
+    runHandler(addOrderRefund, {
+      resource: replacement,
+      body: orderMoneySchema.parse({ amount: 2823.5, account: ctx.cash })
+    });
+  await assert.rejects(pay(), /has not billed/, 'the old rule still waits for the original’s bill');
+  await receiptFor(ctx, await Order.findById(original._id), 1600000);
+  await pay();
+  // 908.25 for the original + 268.25 for the replacement, as before.
   assert.equal(await keptNet(ctx), -117650);
 });
 
-test('12,000 → 16,000: the customer pays 4,000 + both costs on the COD (5,226)', async () => {
+test('12,000 → 16,000: the customer pays 4,000 + the new parcel’s cost on the COD (4,447)', async () => {
   const ctx = await setup();
   const original = await delivered(ctx, 12000);
   const replacement = await exchange(ctx, original, 16000);
-  // original: 268.25 + 480.00 tax; replacement estimate 268.25 → 4,000 + 1,016.50 = 5,016.50, grossed up for 4 %.
-  assert.equal(replacement.codAmount, 5226);
+  // 4,000 + the replacement's 268.25 = 4,268.25, grossed up for the 4 % on the COD itself.
+  assert.equal(replacement.codAmount, 4447);
   assert.equal(replacement.refundDuePaisa, 0);
   assert.equal(replacement.courierCosts.exchange, true);
   assert.equal(replacement.courierCosts.settledAt instanceof Date, true);
@@ -182,22 +209,31 @@ test('12,000 → 16,000: the customer pays 4,000 + both costs on the COD (5,226)
   assert.equal(await accountBalance(ctx.biz._id, await ctx.acc(CODES.CUSTOMER_ADVANCES)), 0);
 });
 
-test('16,000 → 16,000: the customer pays both costs, COD 1,226', async () => {
+test('16,000 → 16,000: the customer pays only the new parcel’s cost, COD 280', async () => {
   const ctx = await setup();
   const original = await delivered(ctx, 16000);
   const replacement = await exchange(ctx, original, 16000);
-  assert.equal(replacement.codAmount, 1226);
+  // 268.25 grossed up for the 4 % on the COD itself.
+  assert.equal(replacement.codAmount, 280);
 });
 
-test('16,000 → 15,800: a difference smaller than the costs goes on the COD, 1,018', async () => {
+test('15,000 → 15,300 (the owner’s case): COD 592, not 1,497', async () => {
+  const ctx = await setup();
+  const original = await delivered(ctx, 15000);
+  const replacement = await exchange(ctx, original, 15300);
+  // 300 + 268.25 = 568.25 → grossed up for 4 %.
+  assert.equal(replacement.codAmount, 592);
+});
+
+test('16,000 → 15,800: a difference smaller than the new parcel’s cost goes on the COD, 72', async () => {
   const ctx = await setup();
   const original = await delivered(ctx, 16000);
   const replacement = await exchange(ctx, original, 15800);
-  // −200 + 908.25 + 268.25 = 976.50 → grossed up for 4 %.
-  assert.equal(replacement.codAmount, 1018);
+  // −200 + 268.25 = 68.25 → grossed up for 4 %.
+  assert.equal(replacement.codAmount, 72);
 });
 
-test('a dearer swap: the customer pays the difference and both costs directly; no COD', async () => {
+test('a dearer swap: the customer pays the difference and the new parcel’s cost directly; no COD', async () => {
   const ctx = await setup();
   const original = await delivered(ctx, 12000);
   const body = { items: [line(ctx, 16000, 1)] };
@@ -211,12 +247,12 @@ test('a dearer swap: the customer pays the difference and both costs directly; n
   });
   const replacement = await Order.findById(out.body.data._id);
   assert.equal(replacement.codAmount, 0, 'the rider collects nothing on a swap');
-  // 4,000 + original 268.25 + 480.00 + the swap's own 268.25 (no COD, so no tax on it) = 5,016.50, paid to us.
+  // 4,000 + the swap's own 268.25 (no COD, so no tax on it) = 4,268.25, paid to us.
   const advance = replacement.customerMoney.find(m => m.kind === 'advance');
-  assert.equal(advance.amountPaisa, 501650);
+  assert.equal(advance.amountPaisa, 426825);
 });
 
-test('a replacement cancelled before it goes out gives its costs back — the original’s still come off the refund', async () => {
+test('a replacement cancelled before it goes out gives its costs back', async () => {
   const ctx = await setup();
   const original = await delivered(ctx, 12000);
   let replacement = await exchange(ctx, original, 16000);
@@ -246,17 +282,19 @@ test('the quote says what the customer will owe or be owed, before the replaceme
 
   const cheaper = await quote(12000);
   assert.equal(cheaper.owes, false);
-  assert.equal(cheaper.estimatedPayout, 2823.5, '4,000 − 908.25 − 268.25');
+  assert.equal(cheaper.estimatedPayout, 3731.75, '4,000 − 268.25');
 
   const same = await quote(16000);
   assert.equal(same.owes, true);
-  assert.equal(same.cod, 1226);
-  assert.equal(same.keep, 1226);
-  assert.ok(same.lines.length >= 4);
+  assert.equal(same.cod, 280);
+  assert.equal(same.keep, 280);
+  // The new parcel's delivery, its 4 % and the rounding — never the original's.
+  assert.ok(same.lines.every(l => !l.label.includes(`#${original.orderNumber}`)));
+  assert.ok(same.lines.some(l => l.label === 'Delivery charge — replacement parcel'));
 
   const swap = await quote(16000, true);
   assert.equal(swap.cod, 0);
-  assert.equal(swap.pays, 1176.5, 'both parcels, the tax only on the original');
+  assert.equal(swap.pays, 268.25, 'the new parcel only, no tax on a zero COD');
 
   await assert.rejects(
     runHandler(getExchangeQuote, { resource: original, query: { total: 'x' } }),

@@ -7,7 +7,7 @@ import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
 import { postEntry, reverseEntry } from './ledger.js';
 import { computeRemittance, orderLabel } from './orderPosting.js';
 import { toPaisa } from './money.js';
-import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
+import { EXCHANGE_COST_RULE, JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 
 /**
  * What the courier charges for a customer's parcels — so a refund or an exchange can recover it instead of the
@@ -116,7 +116,8 @@ const lineOf = (label, amountPaisa, cost, parcel) => ({
 /**
  * Every courier cost to recover for this order, as plain lines.
  *   a refunded order   → its own parcel (+ the return pickup when WE booked it on our courier)
- *   a replacement      → the original's parcel, the swap's reversal if PostEx billed one, and its own parcel
+ *   a replacement      → its own parcel and the swap's reversal if PostEx billed one (one made before
+ *                        2026-11-26, with no `exchangeCostRule`, also the original's parcel — the old rule)
  * Anything else has none. Lines with a zero amount are left out.
  */
 export const costsFor = async (order, { asRefund = false, pickupBy } = {}) => {
@@ -160,7 +161,10 @@ export const costsFor = async (order, { asRefund = false, pickupBy } = {}) => {
     return cost;
   };
 
-  const first = parcelLines(parcels[0], 0);
+  // A replacement made under the new rule pays only its own parcel: the original's is not a line, it only gives the
+  // estimate for the replacement's delivery charge. One made before keeps the old rule (both parcels).
+  const originalCharged = isRefund || order.exchangeCostRule !== EXCHANGE_COST_RULE.NEW_PARCEL;
+  const first = originalCharged ? parcelLines(parcels[0], 0) : costOf(parcels[0], 0);
 
   if (isRefund) {
     // Only a pickup we booked on our own courier costs us; the customer's own courier is theirs.
@@ -324,14 +328,16 @@ export const settleCourierCosts = async (
 
 /**
  * An exchange's money at the moment the replacement is made. The customer pays the price difference PLUS the
- * courier's costs for both parcels, so the business absorbs none of it:
+ * REPLACEMENT parcel's courier cost — the extra the exchange causes. The original parcel's delivery charge and COD tax
+ * are the normal cost of that sale (a sale with no exchange bears them too), so they are not charged again
+ * (EXCHANGE_COST_RULE.NEW_PARCEL, agreed with the owner 2026-11-26):
  *
  *   diff = replacement total − the credit carried from the original      (negative: the customer is owed money)
- *   F    = original delivery charge + its COD tax + the replacement's delivery charge (estimated as the original's)
+ *   F    = the replacement's delivery charge (estimated as the original's, until PostEx bills it)
  *   base = diff + F
  *
  * base ≤ 0   the customer is owed money back; nothing is kept now. The costs come off the payout (settleCourierCosts),
- *            once PostEx has billed both parcels.
+ *            once PostEx has billed the replacement.
  * base > 0   the customer owes it.
  *   return-first → on the replacement's COD, grossed up so that after the tax on the COD itself it still covers
  *                  base, in whole rupees. What is kept back from the credit is COD − diff (every cost + rounding).
@@ -349,9 +355,10 @@ export const exchangeKeep = async (original, { newTotalPaisa, creditPaisa, isSwa
     receiptRow: rows.byOrder.get(String(original._id)),
     fromInvoice: invoiced.has(String(original._id))
   });
+  // The original parcel only gives the estimate for the replacement's delivery charge — it is not charged again.
   const estimatePaisa = orig.deliveryPaisa;
   const diffPaisa = newTotalPaisa - creditPaisa;
-  const fixedPaisa = orig.deliveryPaisa + orig.taxPaisa + estimatePaisa;
+  const fixedPaisa = estimatePaisa;
   const basePaisa = diffPaisa + fixedPaisa;
   if (basePaisa <= 0) {
     return { owes: false, basePaisa, codPaisa: 0, keepPaisa: 0, lines: [], diffPaisa, fixedPaisa };
@@ -361,18 +368,7 @@ export const exchangeKeep = async (original, { newTotalPaisa, creditPaisa, isSwa
   const codPaisa = isSwap ? 0 : grossUpCod(basePaisa, percent);
   const replacementTaxPaisa = isSwap ? 0 : Math.round((codPaisa * percent) / 100);
   const keepPaisa = isSwap ? fixedPaisa : codPaisa - diffPaisa;
-  const name = `#${original.orderNumber}`;
   const lines = [
-    {
-      label: `Delivery charge — parcel ${name}`,
-      amountPaisa: orig.deliveryPaisa,
-      source: orig.source
-    },
-    {
-      label: `${percent} % tax on COD — parcel ${name}`,
-      amountPaisa: orig.taxPaisa,
-      source: orig.source
-    },
     {
       label: 'Delivery charge — replacement parcel',
       amountPaisa: estimatePaisa,

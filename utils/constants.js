@@ -30,6 +30,16 @@ export const BUSINESS_CATEGORIES = {
   OTHER: 'other'
 };
 
+/**
+ * Which courier costs an exchange's customer pays (`Order.exchangeCostRule`, set on the replacement when it is made).
+ * NEW_PARCEL (from 2026-11-26): the price difference + the REPLACEMENT parcel's own cost (and a swap's billed
+ * reversal) — the original parcel's delivery and COD tax are the normal cost of that sale, which the business always
+ * bears. A replacement with no rule was made under the old rule (both parcels) and keeps it.
+ */
+export const EXCHANGE_COST_RULE = {
+  NEW_PARCEL: 'new-parcel'
+};
+
 /** Order fulfillment lifecycle. Payment is a separate axis (see PAYMENT_STATUS). */
 export const ORDER_STATUS = {
   // Every new order starts here: it has been taken and is waiting for the confirmation call.

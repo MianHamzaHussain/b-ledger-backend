@@ -36,10 +36,10 @@ import { toPaisa } from '../utils/money.js';
 
 /**
  * An exchange doesn't refund the customer — what they paid for the original
- * becomes credit on the replacement, so its COD is the price difference PLUS the courier's costs for both parcels
- * (the business absorbs none of it). What the courier did (collected the COD, charged its fee) stays booked.
- * Suits here sell for 3,000 and cost 1,000; the courier's delivery charge is not known yet, so the only cost is the
- * 4 % COD tax on the original's 3,000 = 120.00 — which makes the like-for-like COD 125 (120 grossed up for its own tax).
+ * becomes credit on the replacement, so its COD is the price difference PLUS the new parcel's courier cost
+ * — the original parcel's own delivery and tax are the cost of that sale and are not charged again. What the courier
+ * did (collected the COD, charged its fee) stays booked. Suits here sell for 3,000 and cost 1,000; the courier's
+ * delivery charge is not known yet, so the new parcel is estimated at 0: a like-for-like replacement carries no COD.
  */
 
 before(connect);
@@ -138,14 +138,13 @@ test('return first, after the courier paid: its khata stays right and the like-f
   assert.equal(original.reversalTrackingId, 'REV1');
   assert.equal(original.status, 'exchanged');
 
-  // Same price, other size: the customer pays the original's courier tax (120.00), grossed up to the rupee for the
-  // tax on that COD itself = 125.
+  // Same price, other size, and no delivery charge known to estimate the new parcel by: nothing to collect.
   const out = await runHandler(createReplacement, {
     resource: original,
     body: orderReplacementSchema.parse({ items: [line(ctx, 1)] })
   });
   const replacement = await Order.findById(out.body.data._id);
-  assert.equal(replacement.codAmount, 125);
+  assert.equal(replacement.codAmount, 0);
   assert.equal(replacement.refundDuePaisa, 0);
   original = await Order.findById(original._id);
   assert.equal(original.refundDuePaisa, 0, 'the credit moved to the replacement');
@@ -161,8 +160,8 @@ test('return first, after the courier paid: its khata stays right and the like-f
   assert.equal(await balance(ctx, ctx.sales), -toPaisa(3000), 'one sale, not two');
   assert.equal(
     await balance(ctx, await accountByCode(ctx.biz._id, CODES.CHARGES_KEPT).then(a => a._id)),
-    -toPaisa(125),
-    'the courier costs were kept back from the credit'
+    0,
+    'nothing was kept back — the original parcel is not charged again'
   );
 });
 
@@ -174,8 +173,8 @@ test('a dearer replacement collects the difference and the costs; a cheaper one 
     resource: await Order.findById(first._id),
     body: orderReplacementSchema.parse({ items: [line(ctx, 1, 3500)] })
   });
-  // 500 more + the 120.00 tax on the original → 620.00, grossed up for its own tax: 646.
-  assert.equal(dearer.body.data.codAmount, 646);
+  // 500 more (the new parcel estimated at 0), grossed up for the tax on that COD itself: 521.
+  assert.equal(dearer.body.data.codAmount, 521);
 
   const second = await delivered(ctx);
   await runHandler(exchangeReturn, { resource: second, body: {} });
@@ -313,11 +312,11 @@ test('a dearer swap: no COD — the difference is paid to us directly, as an adv
   const replacement = await Order.findById(out.body.data._id);
   assert.equal(replacement.codAmount, 0, 'the rider collects nothing');
   assert.equal(replacement.isSwap, true);
-  // 1,500 more + the original's 120.00 tax = 1,620.00 paid to us directly; no tax on the swap's own (zero) COD.
-  assert.ok(replacement.customerMoney.some(m => m.kind === 'advance' && m.amountPaisa === 162000));
+  // 1,500 more paid to us directly; no tax on the swap's own (zero) COD, and the original is not charged again.
+  assert.ok(replacement.customerMoney.some(m => m.kind === 'advance' && m.amountPaisa === 150000));
   assert.equal(
     await balance(ctx, await (async () => (await accountByCode(ctx.biz._id, CODES.CASH))._id)()),
-    162000
+    150000
   );
 });
 
