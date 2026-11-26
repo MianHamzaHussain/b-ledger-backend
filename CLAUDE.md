@@ -597,7 +597,9 @@ number), then a **courier invoice** (a `deliveryChargeEntry` / `courierSettlemen
 `returnShipping.by = 'us'`) or a replacement (its own parcel — nothing if cancelled, its return charge if returned —
 and a swap's reversal if PostEx billed one). **`Order.exchangeCostRule`** says which rule a replacement was made under:
 `new-parcel` (`EXCHANGE_COST_RULE.NEW_PARCEL`, every replacement from 2026-11-26) charges only that; absent = made before,
-under the old rule, which also charged **the original's parcel** — kept for those, so a quote already given never changes.
+under the old rule, which also charged **the original's parcel** — kept for those, so a quote already given never changes. The one-off `npm run reprice:exchanges` (`utils/repriceExchanges.js`, dry run, then `-- --apply`) re-works the old-rule
+replacements that are **not dispatched yet** (their COD is not on a slip): it reverses the kept-back entry, keeps the new
+parcel's cost again and notes it on the timeline. Dispatched ones and swaps are left alone. Delete it once run.
 
 - **Payout waits for PostEx.** `recordRefund` and `keepAsCredit` call `settleCourierCosts` first on a refunded order or a
   replacement: if any line is not final the payout is refused ("PostEx has not billed #… yet"). An **admin** may pay
