@@ -55,7 +55,11 @@ export const refundQuote = async (order, { returnBy } = {}) => {
   const settled = order.courierCosts?.settledAt;
   const costs = settled
     ? {
-        lines: (order.courierCosts.lines || []).map(l => ({ ...l, isFinal: true })),
+        // Saved lines are subdocuments: spreading one copies Mongoose internals, not its label and amount.
+        lines: (order.courierCosts.lines || []).map(l => ({
+          ...(l.toObject?.() ?? l),
+          isFinal: true
+        })),
         totalPaisa: (order.courierCosts.lines || []).reduce((sum, l) => sum + l.amountPaisa, 0),
         isFinal: true,
         waitingFor: []

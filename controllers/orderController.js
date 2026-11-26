@@ -79,7 +79,8 @@ import {
   PARTY_TYPES,
   SALES_CHANNELS,
   NOTIFICATION_TYPES,
-  BEFORE_DISPATCH
+  BEFORE_DISPATCH,
+  EXCHANGE_COST_RULE
 } from '../utils/constants.js';
 
 /**
@@ -645,10 +646,11 @@ const makeReplacement = async (original, body, userId, beforeCreate) => {
       customerMoney: credit ? [credit] : [],
       exchangeOf: original._id,
       isSwap: Boolean(body.isSwap),
+      exchangeCostRule: EXCHANGE_COST_RULE.NEW_PARCEL,
       createdBy: userId
     });
     markCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
-    // The customer pays both parcels' courier costs: kept back from the credit now, so the COD carries them.
+    // The customer pays the new parcel's courier cost: kept back from the credit now, so the COD carries it.
     const keep = await exchangeKeep(original, {
       newTotalPaisa: toPaisa(replacement.total),
       creditPaisa: credit?.amountPaisa ?? 0,
@@ -718,8 +720,8 @@ export const getRefundQuote = asyncHandler(async (req, res) => {
 });
 
 /**
- * @desc   What an exchange would cost the customer, before the replacement is made: the price difference plus both
- *         parcels' courier costs. `owes` true → they pay `cod` (return first) or `pays` (swap); false → they are
+ * @desc   What an exchange would cost the customer, before the replacement is made: the price difference plus the
+ *         new parcel's courier cost. `owes` true → they pay `cod` (return first) or `pays` (swap); false → they are
  *         owed money back, less `fixed` (the costs known now) and the replacement's tax on nothing.
  * @route  GET /api/v1/orders/:id/exchange-quote?total=<replacement total, rupees>&swap=true|false  (orders:read)
  */
@@ -750,7 +752,7 @@ export const getExchangeQuote = asyncHandler(async (req, res, next) => {
       pays: isSwap && keep.owes ? fromPaisa(keep.basePaisa) : 0,
       keep: fromPaisa(keep.keepPaisa),
       knownCosts: fromPaisa(keep.fixedPaisa),
-      // If they are owed money: about this much once PostEx has billed both parcels.
+      // If they are owed money: about this much once PostEx has billed the new parcel.
       estimatedPayout: keep.owes ? 0 : Math.max(0, fromPaisa(-keep.basePaisa)),
       lines: keep.lines.map(l => ({
         label: l.label,
@@ -840,7 +842,7 @@ export const swapOrder = asyncHandler(async (req, res, next) => {
       (s, i) => s + toPaisa(i.unitPrice) * i.quantity,
       0
     ) + (req.body.customWork || []).reduce((s, w) => s + toPaisa(w.price), 0);
-  // What the customer pays directly: the price difference plus both parcels' courier costs.
+  // What the customer pays directly: the price difference plus the new parcel's courier cost.
   const { owes, basePaisa: differencePaisa } = await exchangeKeep(original, {
     newTotalPaisa: newTotal,
     creditPaisa: credit,

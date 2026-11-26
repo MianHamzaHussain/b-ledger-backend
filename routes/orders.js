@@ -600,7 +600,7 @@ router.get('/:id/refund-quote', can('orders', 'read'), loadScoped(Order), getRef
  * @swagger
  * /orders/{id}/exchange-quote:
  *   get:
- *     summary: What an exchange would cost the customer — price difference plus both parcels' courier costs
+ *     summary: What an exchange would cost the customer — price difference plus the new parcel's courier cost
  *     tags: [Orders]
  *     security: [{ bearerAuth: [] }]
  *     parameters:

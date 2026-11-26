@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import {
   ATTEMPT_REASONS,
+  EXCHANGE_COST_RULE,
   ORDER_STATUS,
   PAYMENT_STATUS,
   SALES_CHANNELS
@@ -544,6 +545,11 @@ const OrderSchema = new mongoose.Schema(
      * any difference is paid to us directly, as an advance.
      */
     isSwap: { type: Boolean, default: false },
+    /**
+     * On a replacement: which courier costs the customer pays (utils/constants EXCHANGE_COST_RULE). Absent = made
+     * before 2026-11-26 under the old rule (both parcels), which it keeps — an old quote never changes.
+     */
+    exchangeCostRule: { type: String, enum: Object.values(EXCHANGE_COST_RULE) },
     /** On the original order: the replacement created for it. */
     exchangedFor: { type: mongoose.Schema.ObjectId, ref: 'Order' },
     /**

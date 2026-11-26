@@ -91,7 +91,7 @@ test('a COD above the order total (courier costs carried on it) still balances, 
     business: biz._id,
     orderNumber: '0003',
     total: 12000,
-    // The customer owes 13,226: the 12,000 replacement plus 1,226 of the courier's costs for both parcels.
+    // The customer owes 13,226: the 12,000 replacement plus 1,226 of courier costs carried on the COD.
     codAmount: 13226,
     advanceAmount: 0,
     courier: courier._id,
