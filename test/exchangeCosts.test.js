@@ -23,7 +23,8 @@ import {
   swapOrder,
   addOrderRefund,
   getExchangeQuote,
-  waiveCourierCosts
+  waiveCourierCosts,
+  getRefundQuote
 } from '../controllers/orderController.js';
 import {
   orderCreateSchema,
@@ -285,4 +286,19 @@ test('only an admin can waive the deductions, and the reason is kept', async () 
   const fresh = await Order.findById(replacement._id);
   assert.equal(fresh.courierCosts.waived, true);
   assert.equal(fresh.courierCosts.reason, 'faulty item');
+});
+
+test('a settled exchange shows each cost kept back with its name and amount, not blank rows of 0', async () => {
+  const ctx = await setup();
+  const original = await delivered(ctx, 12000);
+  const replacement = await exchange(ctx, original, 16000);
+  const quote = (await runHandler(getRefundQuote, { resource: replacement, query: {} })).body.data;
+  assert.equal(quote.settled, true);
+  assert.ok(quote.lines.length >= 3);
+  for (const line of quote.lines) {
+    assert.ok(line.label, 'every line has its name');
+    assert.ok(line.amount > 0, `${line.label} has its amount`);
+  }
+  const sum = quote.lines.reduce((s, l) => s + l.amount, 0);
+  assert.equal(Math.round(sum * 100), Math.round(quote.totalCost * 100));
 });
