@@ -88,6 +88,10 @@ export const parcelProblems = (order, courier = 'PostEx') => {
   if (!order.city?.trim()) {
     problems.push('Add the customer’s city on the order before booking a courier');
   }
+  // A reversal: the rider hands the new parcel over and takes the old one — it collects nothing, so a COD would be wrong.
+  if (order.isSwap && order.codAmount > 0) {
+    problems.push('A swap at the door carries no COD — the customer pays before it goes');
+  }
   return problems;
 };
 
@@ -114,7 +118,8 @@ export const parcelFor = (order, pickupAddressCode, { names, remarks, courier } 
     invoiceDivision: 1,
     items: Math.max(1, pieces),
     pickupAddressCode,
-    orderType: 'Normal'
+    // PostEx's own type for a swap at the door: the rider is told to take the old parcel back in the same visit.
+    orderType: order.isSwap ? 'Replacement' : 'Normal'
   };
 };
 
@@ -323,6 +328,10 @@ export const previewParcel = async (order, courierId, { remarks } = {}) => {
     deliveryAddress: order.deliveryAddress ?? '',
     amount: order.codAmount,
     pieces: parcel?.items ?? 0,
+    // Said in words: a swap goes as a Replacement, so the rider takes the old parcel back.
+    parcelType: order.isSwap
+      ? 'Replacement — the rider hands this over and takes the old parcel back'
+      : 'Normal',
     pickup: party.integration?.pickupAddressLabel ?? '',
     problems,
     // One tap to fix a near-miss spelling: what the courier lists that looks like the typed city.

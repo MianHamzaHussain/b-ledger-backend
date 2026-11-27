@@ -1,6 +1,6 @@
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { connect, clear, disconnect, makeBusiness, runHandler, oid, userId } from './helpers/db.js';
+import { connect, clear, disconnect, makeBusiness, runHandler, userId } from './helpers/db.js';
 import Account from '../models/Account.js';
 import JournalEntry from '../models/JournalEntry.js';
 import financeRouter from '../routes/finance.js';

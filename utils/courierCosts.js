@@ -345,9 +345,51 @@ export const settleCourierCosts = async (
  *                  back is F (the replacement has no COD, so no tax on it).
  * The replacement's parcel is only an estimate until PostEx bills it; the business absorbs any small gap.
  */
+/**
+ * The delivery charge was AGREED with the customer (Rs 300, 500…): they pay exactly that on top of the price difference,
+ * whatever the courier will really cost. Return first, it is on the replacement's COD (rounded up to the rupee, the number
+ * written on the parcel); a swap carries no COD, so they pay it in advance. What the courier is expected to cost
+ * (`costPaisa`: the delivery charge, plus the tax on the COD) is covered first — the rest is the shop's extra income, and
+ * a charge below the cost is the shop's to bear (nothing is booked for that now; the real charge reaches profit when
+ * PostEx bills it). Settled at once: nothing waits for PostEx, and a cheaper replacement is owed back immediately.
+ */
+const agreedKeep = ({ estimatePaisa, diffPaisa, percent, isSwap, agreedPaisa }) => {
+  const basePaisa = diffPaisa + agreedPaisa;
+  const owes = basePaisa > 0;
+  const codPaisa = isSwap || !owes ? 0 : Math.ceil(basePaisa / 100) * 100;
+  // A swap customer, or one who is owed money, pays exactly the agreed charge; a COD is rounded up to the rupee.
+  const keepPaisa = isSwap || !owes ? agreedPaisa : codPaisa - diffPaisa;
+  const costPaisa = estimatePaisa + (isSwap ? 0 : Math.round((codPaisa * percent) / 100));
+  const recoveredPaisa = Math.min(keepPaisa, costPaisa);
+  const extraPaisa = keepPaisa - recoveredPaisa;
+  const lines = [
+    {
+      label: 'Delivery charge agreed with the customer',
+      amountPaisa: recoveredPaisa,
+      source: 'agreed'
+    },
+    { label: 'Extra delivery charge', amountPaisa: extraPaisa, source: 'agreed', income: true }
+  ].filter(l => l.amountPaisa > 0);
+  return {
+    owes,
+    agreed: true,
+    basePaisa,
+    codPaisa,
+    keepPaisa,
+    diffPaisa,
+    fixedPaisa: estimatePaisa,
+    costPaisa,
+    recoveredPaisa,
+    extraPaisa,
+    shopPaysPaisa: Math.max(0, costPaisa - keepPaisa),
+    owedBackPaisa: Math.max(0, -basePaisa),
+    lines
+  };
+};
+
 export const exchangeKeep = async (
   original,
-  { newTotalPaisa, creditPaisa, isSwap = false, freeCourier = false }
+  { newTotalPaisa, creditPaisa, isSwap = false, freeCourier = false, agreedPaisa = 0 }
 ) => {
   const business = await Business.findById(original.business).select('codTax').lean();
   const codTax = business?.codTax || {};
@@ -361,6 +403,15 @@ export const exchangeKeep = async (
   // The original parcel only gives the estimate for the replacement's delivery charge — it is not charged again.
   const estimatePaisa = orig.deliveryPaisa;
   const diffPaisa = newTotalPaisa - creditPaisa;
+  if (agreedPaisa > 0 && !freeCourier) {
+    return agreedKeep({
+      estimatePaisa,
+      diffPaisa,
+      percent: taxPercentOf(codTax),
+      isSwap,
+      agreedPaisa
+    });
+  }
   // The shop paid for the courier ('free delivery'): the customer owes the price difference and nothing more.
   const fixedPaisa = freeCourier ? 0 : estimatePaisa;
   const basePaisa = diffPaisa + fixedPaisa;
@@ -410,9 +461,14 @@ export const applyExchangeKeep = async (replacement, keep, userId) => {
   if (!(keep.keepPaisa > 0)) return replacement;
   await ensureChart(replacement.business);
   const label = `${orderLabel(replacement)} · ${replacement.customerName}`;
+  // What an agreed charge brings in beyond the courier's cost is delivery income, not "charges kept".
+  const extraPaisa = keep.lines.filter(l => l.income).reduce((sum, l) => sum + l.amountPaisa, 0);
+  const keptPaisa = keep.keepPaisa - extraPaisa;
   const entry = await postEntry({
     business: replacement.business,
-    memo: `Exchange — courier costs kept back — ${label}`,
+    memo: keep.agreed
+      ? `Exchange — delivery charge agreed with the customer — ${label}`
+      : `Exchange — courier costs kept back — ${label}`,
     source: { kind: JOURNAL_SOURCES.ORDER, ref: String(replacement._id) },
     lines: [
       {
@@ -420,11 +476,24 @@ export const applyExchangeKeep = async (replacement, keep, userId) => {
         label,
         debitPaisa: keep.keepPaisa
       },
-      {
-        account: (await accountByCode(replacement.business, CODES.CHARGES_KEPT))._id,
-        label,
-        creditPaisa: keep.keepPaisa
-      }
+      ...(keptPaisa > 0
+        ? [
+            {
+              account: (await accountByCode(replacement.business, CODES.CHARGES_KEPT))._id,
+              label,
+              creditPaisa: keptPaisa
+            }
+          ]
+        : []),
+      ...(extraPaisa > 0
+        ? [
+            {
+              account: (await accountByCode(replacement.business, CODES.DELIVERY_INCOME))._id,
+              label,
+              creditPaisa: extraPaisa
+            }
+          ]
+        : [])
     ],
     userId
   });
@@ -440,10 +509,16 @@ export const applyExchangeKeep = async (replacement, keep, userId) => {
   }
   replacement.courierCosts = {
     settledAt: new Date(),
-    early: true,
+    early: !keep.agreed,
     exchange: true,
-    reason: 'Exchange — the costs ride on this order',
-    lines: keep.lines
+    reason: keep.agreed
+      ? 'Exchange — delivery charge agreed with the customer'
+      : 'Exchange — the costs ride on this order',
+    lines: keep.lines.map(({ label: text, amountPaisa, source }) => ({
+      label: text,
+      amountPaisa,
+      source
+    }))
   };
   // Saving re-derives the COD: the credit is now smaller by the costs, so the customer's COD is bigger.
   await replacement.save();
@@ -459,31 +534,6 @@ export const waiveExchangeCosts = async (order, reason, userId) => {
   order.courierCosts = { settledAt: new Date(), waived: true, reason, lines: [] };
   order.updatedBy = userId;
   await order.save();
-};
-
-/**
- * A swap customer paid more than the courier costs (they handed over Rs 500 for a Rs 398.75 delivery): the extra is the
- * shop's, booked straight to Delivery charged to customers — Dr the money account / Cr income. It never becomes an
- * advance, so the replacement still reads as paid exactly its price.
- */
-export const recordExtraDeliveryIncome = async (order, { extraPaisa, money, userId }) => {
-  if (!(extraPaisa > 0)) return null;
-  await ensureChart(order.business);
-  const label = `${orderLabel(order)} · ${order.customerName}`;
-  return postEntry({
-    business: order.business,
-    memo: `Extra delivery charge — ${label}`,
-    source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
-    lines: [
-      { account: money.account, label, debitPaisa: extraPaisa },
-      {
-        account: (await accountByCode(order.business, CODES.DELIVERY_INCOME))._id,
-        label,
-        creditPaisa: extraPaisa
-      }
-    ],
-    userId
-  });
 };
 
 /**

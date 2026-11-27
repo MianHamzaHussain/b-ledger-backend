@@ -143,7 +143,7 @@ export const creditForReplacement = (original, userId) => {
  * — not the Exchanged status — is how a replacement finds what it is replacing.
  */
 export const pendingExchangeRows = order =>
-  (order.returnedItems ?? []).filter(r => r.forExchange && !r.replacement);
+  (order.returnedItems ?? []).filter(r => r.forExchange && !r.replacement && !r.dropped);
 
 /** What those pending rows are worth to the customer, in paisa. */
 export const pendingCreditPaisa = order =>

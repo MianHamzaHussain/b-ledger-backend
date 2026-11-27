@@ -33,6 +33,7 @@ import {
   orderAirwayBillsSchema,
   orderPartialReturnSchema,
   orderMoneySchema,
+  orderRefundSchema,
   orderCreditSchema,
   orderWaiveCostsSchema,
   customCostSchema
@@ -609,8 +610,9 @@ router.get('/:id/refund-quote', can('orders', 'read'), loadScoped(Order), getRef
  *       - { in: query, name: swap, schema: { type: boolean }, description: A swap at the door (no COD) }
  *       - { in: query, name: lines, schema: { type: string }, description: "Only some items: <lineId>:<qty>,… — the credit is just their price" }
  *       - { in: query, name: free, schema: { type: boolean }, description: The shop pays the courier (the customer owes only the difference) }
+ *       - { in: query, name: charge, schema: { type: number }, description: "The delivery charge agreed with the customer (rupees); not with free" }
  *     responses:
- *       200: { description: Whether they owe (COD or paid directly) or are owed, the cost lines, the estimate }
+ *       200: { description: "Whether they owe (COD or paid directly) or are owed, the cost lines, the estimate; with an agreed charge also owedBack, costs, extra and shopPays" }
  * /orders/{id}/courier-costs/waive:
  *   post:
  *     summary: Admin only — waive the courier-cost deductions on a refund or exchange, with a reason
@@ -706,8 +708,10 @@ router.post(
  *       carries (its COD is the price difference). The old item comes back on the
  *       courier's reversal tracking number; its stock returns on receive-return.
  *       Body may carry `lines` (only some items are swapped; the rest is kept and stays Delivered),
- *       `amountReceived` (what the customer handed over — at least what is due; the extra is the shop's
- *       delivery income) and `freeCourier` + `freeReason` (the shop pays the courier).
+ *       and the delivery charge for the new parcel: nothing (the usual estimate), `deliveryCharge` (rupees, the
+ *       charge agreed with the customer — beyond the courier's cost it is delivery income), or `freeCourier` +
+ *       `freeReason` (the shop pays the courier). The COD is always 0; what is due is paid in advance into
+ *       `differenceAccount`. A TCS courier is refused (no reversal there); PostEx books it as a Replacement.
  *     tags: [Orders]
  *     security: [{ bearerAuth: [] }]
  *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
@@ -964,6 +968,9 @@ router.put(
  * /orders/{id}/refunds:
  *   post:
  *     summary: Record money paid back to the customer (at most the refund due)
+ *     description: >
+ *       While some items wait for a replacement their credit is not a refund: it is refused unless
+ *       `dropExchange` is true, and then the amount must be exactly that credit — the exchange ends.
  *     tags: [Orders]
  *     security: [{ bearerAuth: [] }]
  *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
@@ -988,7 +995,7 @@ router.post(
   '/:id/refunds',
   can('orders', 'update'),
   loadScoped(Order),
-  validate(orderMoneySchema),
+  validate(orderRefundSchema),
   addOrderRefund
 );
 router.delete(

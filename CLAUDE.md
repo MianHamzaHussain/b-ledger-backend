@@ -606,14 +606,33 @@ charged again (owner's rule, 2026-11-26; before it, both parcels were charged).
     back on the shelf (`takeBackPieces`). If creating the replacement fails the credit entry and rows are undone;
   - the rest can be exchanged later (even every remaining piece); a line can't go back more than is left.
     `partialReturn` (a refund of some items) is the same steps (`pickLines`, `creditPieces`, `takeBackPieces`), unchanged.
-- **What a swap customer pays** (`swap`, Round 16). Due = price difference + the new parcel's cost (`exchangeKeep`). The
-  customer hands over `amountReceived` (default: exactly what is due; **at least** what is due, else 400). What is due is an
-  advance on the replacement, so its COD stays 0; **anything beyond it is the shop's** — Dr the money account / Cr **Delivery
-  charged to customers (4200)** (`recordExtraDeliveryIncome`), never an advance, so the replacement still reads as paid
-  exactly its price. (If that replacement is later cancelled the extra is not refunded automatically — a person does it.)
-  **Free delivery** (`freeCourier` + a required `freeReason`, swap and replacement): the shop pays the courier — the new
-  parcel's cost is 0 for the customer (a return-first COD is the plain difference, nothing grossed up) and the replacement's
-  costs are waived (`waiveExchangeCosts`), so no payout is ever reduced by them; the reason is on the timeline.
+- **The delivery charge for the new parcel — three choices** (Round 16b; `exchange-return` → `exchange-replacement`, `swap`,
+  and `exchange-quote?charge=`). **Usual** (neither field): the estimate, as above. **Agreed** (`deliveryCharge`, rupees, more
+  than 0): the customer pays the price difference plus exactly that. **Free** (`freeCourier` + a required `freeReason`): the
+  shop pays the courier, the customer pays only the difference, the replacement's costs are waived (`waiveExchangeCosts`) and
+  the reason is on the timeline. Agreed with free is a 400 ("Choose one").
+  - **Agreed, item came back first:** COD = the difference + the charge, rounded **up to the rupee** (the number written on the
+    parcel). **Agreed, swap:** COD is **always 0** (the rider collects nothing, and PostEx's own rule for a reversal); the customer
+    pays `max(0, difference + charge)` to us in advance (`differenceAccount`, required when something is due).
+  - **Booked once, at creation** (`agreedKeep` → `applyExchangeKeep`): Dr Advances / Cr Charges kept (4100) for what covers the
+    courier's expected cost (delivery charge, plus the COD tax on a COD) / Cr **Delivery charged to customers (4200)** for the
+    rest — the shop's extra income. A charge **below** the cost books only what was charged; the shop bears the gap (the real
+    charge reaches profit when PostEx bills it). `courierCosts` is marked settled at once, so **nothing waits for PostEx** and a
+    cheaper replacement (difference less the charge) is payable immediately. Cancelling the replacement releases it
+    (`undoExchangeCosts`) like the usual rule.
+  - Worked (original delivery charge Rs 268.25, tax 4 %): same price, agreed 500 → COD 500, 4100 288.25, 4200 211.75; agreed 200
+    → COD 200, 4100 200, shop bears 76.25; 16,000 → 20,000 agreed 300 → COD 4,300; 16,000 → 11,000 agreed 300 → COD 0, Rs 4,700
+    owed back at once; swap, same price, agreed 500 → pays 500 before it goes, 4100 268.25, 4200 231.75. `test/exchangeScenarios.test.js`.
+  - If that replacement is later cancelled after delivery the extra is not refunded automatically — a person does it.
+- **A waiting exchange's credit is not a refund** (Round 16b). While some items came back for an exchange and no replacement has carried
+  their credit (`pendingExchangeRows`), the order holds a **credit**. A plain refund of it is refused ("This is credit for a
+  replacement…"); `POST /orders/:id/refunds` with `dropExchange: true` pays back **exactly** that credit and ends the exchange (the
+  rows get `dropped`), after which no replacement can take it. Without this a person could refund it and still send the replacement.
+- **One exchange at a time** (`assertPartlyReturnable`): a partial exchange, swap or refund of some items is refused while an earlier
+  one is waiting for its replacement, or while a swap's old item has not been received.
+- **A swap is booked at PostEx as a `Replacement`** (`parcelFor`, `orderType`) with COD 0, so the rider takes the old parcel back in
+  the same visit; `parcelProblems` refuses a swap with a COD. The parcel preview says so in words (`parcelType`). A swap on a **TCS**
+  courier is refused (no such type there); a courier tracked by hand is allowed. PostEx has no sandbox: check the first one on its portal.
 
 ### 10.2b-3 The courier's costs are recovered (`utils/courierCosts.js`)
 
