@@ -5,6 +5,7 @@ import { accountBalance } from './ledger.js';
 import { partyLedgerReport } from './reports.js';
 import { pakistanDay } from './pakistanDay.js';
 import { listMoneyAccounts } from './moneyAccounts.js';
+import Party from '../models/Party.js';
 import { MONEY_KINDS } from './constants.js';
 
 const toId = value => new mongoose.Types.ObjectId(value);
@@ -88,6 +89,174 @@ export const cashbook = async (business, { accountId, from, to }) => {
     outPaisa,
     closingPaisa: running,
     rows
+  };
+};
+
+/**
+ * One page of a money account's cash book, newest first — what the Khata-style screen scrolls through. The same
+ * ledger read, so it can never disagree with `cashbook()`, but it never loads the whole history: the sort, the
+ * paging and the sums all happen in the database.
+ *
+ * Every row carries `balanceAfterPaisa` — what the account held just after it — worked out from the end of the range:
+ * `closing − Σ(rows newer than this one)`. The Σ of the rows before this page is one aggregate, not a scan in memory.
+ * Order is the cash-book order, reversed: Pakistan day, then when it was recorded (a form's date is midnight UTC).
+ */
+export const cashbookPage = async (business, { accountId, from, to, page = 1, limit = 20 }) => {
+  await ensureChart(business);
+  const acc = toId(accountId);
+  const skip = (page - 1) * limit;
+
+  const dateMatch = {};
+  if (from) dateMatch.$gte = from;
+  if (to) dateMatch.$lte = to;
+
+  const openingPaisa = from
+    ? await accountBalance(business, acc, { asOf: new Date(from.getTime() - 1) })
+    : 0;
+  const balanceNowPaisa = await accountBalance(business, acc);
+
+  const netOnAccount = {
+    $reduce: {
+      input: '$lines',
+      initialValue: 0,
+      in: {
+        $cond: [
+          { $eq: ['$$this.account', acc] },
+          {
+            $add: [
+              '$$value',
+              {
+                $subtract: [
+                  { $ifNull: ['$$this.debitPaisa', 0] },
+                  { $ifNull: ['$$this.creditPaisa', 0] }
+                ]
+              }
+            ]
+          },
+          '$$value'
+        ]
+      }
+    }
+  };
+  const firstParty = {
+    $let: {
+      vars: {
+        withParty: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: '$lines',
+                cond: { $ne: [{ $ifNull: ['$$this.party', null] }, null] }
+              }
+            },
+            0
+          ]
+        }
+      },
+      in: '$$withParty.party'
+    }
+  };
+
+  const [result] = await JournalEntry.aggregate([
+    {
+      $match: {
+        business: toId(business),
+        'lines.account': acc,
+        ...(from || to ? { date: dateMatch } : {})
+      }
+    },
+    {
+      $project: {
+        date: 1,
+        createdAt: 1,
+        memo: 1,
+        source: 1,
+        reversalOf: 1,
+        net: netOnAccount,
+        partyId: firstParty,
+        day: { $dateToString: { format: '%Y-%m-%d', date: '$date', timezone: 'Asia/Karachi' } }
+      }
+    },
+    { $sort: { day: -1, createdAt: -1, _id: -1 } },
+    {
+      $facet: {
+        rows: [{ $skip: skip }, { $limit: limit }],
+        // What the pages before this one added up to — nothing on the first page.
+        ...(skip > 0
+          ? { before: [{ $limit: skip }, { $group: { _id: null, net: { $sum: '$net' } } }] }
+          : {}),
+        totals: [
+          {
+            $group: {
+              _id: null,
+              count: { $sum: 1 },
+              net: { $sum: '$net' },
+              in: { $sum: { $cond: [{ $gt: ['$net', 0] }, '$net', 0] } },
+              out: { $sum: { $cond: [{ $lt: ['$net', 0] }, { $multiply: ['$net', -1] }, 0] } }
+            }
+          }
+        ]
+      }
+    }
+  ]);
+
+  const totals = result.totals[0] ?? { count: 0, net: 0, in: 0, out: 0 };
+  const closingPaisa = from || to ? openingPaisa + totals.net : balanceNowPaisa;
+  let running = closingPaisa - (result.before?.[0]?.net ?? 0);
+
+  const partyIds = [
+    ...new Set(
+      result.rows
+        .map(r => r.partyId)
+        .filter(Boolean)
+        .map(String)
+    )
+  ];
+  const parties = partyIds.length
+    ? await Party.find({ _id: { $in: partyIds } })
+        .select('name')
+        .lean()
+    : [];
+  const nameOf = new Map(parties.map(p => [String(p._id), p.name]));
+  const reversed = new Set(
+    (
+      await JournalEntry.find({
+        business: toId(business),
+        reversalOf: { $in: result.rows.map(r => r._id) }
+      })
+        .select('reversalOf')
+        .lean()
+    ).map(r => String(r.reversalOf))
+  );
+
+  const rows = result.rows.map(entry => {
+    const balanceAfterPaisa = running;
+    running -= entry.net;
+    return {
+      entryId: entry._id,
+      date: entry.date,
+      recordedAt: entry.createdAt,
+      memo: entry.memo,
+      party: entry.partyId ? (nameOf.get(String(entry.partyId)) ?? null) : null,
+      inPaisa: entry.net > 0 ? entry.net : 0,
+      outPaisa: entry.net < 0 ? -entry.net : 0,
+      balanceAfterPaisa,
+      sourceKind: entry.source?.kind ?? null,
+      isReversal: Boolean(entry.reversalOf),
+      reversed: reversed.has(String(entry._id))
+    };
+  });
+
+  return {
+    rows,
+    total: totals.count,
+    summary: {
+      balanceNowPaisa,
+      inPaisa: totals.in,
+      outPaisa: totals.out,
+      openingPaisa: from ? openingPaisa : null,
+      closingPaisa: from || to ? closingPaisa : null
+    }
   };
 };
 

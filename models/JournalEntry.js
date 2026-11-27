@@ -68,6 +68,8 @@ const JournalEntrySchema = new mongoose.Schema(
 
 JournalEntrySchema.index({ business: 1, date: -1 });
 JournalEntrySchema.index({ business: 1, 'lines.account': 1 });
+// The paged cash book: one account's entries in a date range (built in the background on first start).
+JournalEntrySchema.index({ business: 1, 'lines.account': 1, date: -1 });
 JournalEntrySchema.index({ business: 1, 'lines.party': 1 });
 JournalEntrySchema.index({ 'source.kind': 1, 'source.ref': 1 });
 

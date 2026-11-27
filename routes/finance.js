@@ -21,6 +21,7 @@ import {
   moneyAccountUpdateSchema,
   transferSchema,
   cashbookQuerySchema,
+  cashbookEntriesQuerySchema,
   courierWalletQuerySchema,
   courierWalletParcelsQuerySchema,
   courierReceiptQuerySchema
@@ -59,6 +60,7 @@ import {
   lockPeriod,
   unlockPeriod,
   getCashbook,
+  getCashbookEntries,
   getCourierWallet,
   getCourierWalletParcels,
   getCourierReceipts,
@@ -430,6 +432,31 @@ router.get('/trial-balance', can('reports', 'read'), getTrialBalance);
  *       404: { description: Business outside your scope }
  */
 router.get('/cashbook', can('journal', 'read'), validateQuery(cashbookQuerySchema), getCashbook);
+
+/**
+ * @swagger
+ * /finance/cashbook/entries:
+ *   get:
+ *     summary: One page of a money account's cash book, newest first, with the balance after each row
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: account, schema: { type: string }, description: "cash | bank | a money account id | partner:<id>" }
+ *       - { in: query, name: from, schema: { type: string, format: date-time }, description: "Inclusive; the client's local day start" }
+ *       - { in: query, name: to, schema: { type: string, format: date-time }, description: "Inclusive; the client's local day end" }
+ *       - { in: query, name: page, schema: { type: integer, default: 1 } }
+ *       - { in: query, name: limit, schema: { type: integer, default: 20, maximum: 50 } }
+ *     responses:
+ *       200: { description: "{ count, total, pagination, summary: { balanceNow, in, out, opening, closing }, data: rows[] }" }
+ *       404: { description: Business outside your scope }
+ */
+router.get(
+  '/cashbook/entries',
+  can('journal', 'read'),
+  validateQuery(cashbookEntriesQuerySchema),
+  getCashbookEntries
+);
 
 /**
  * @swagger

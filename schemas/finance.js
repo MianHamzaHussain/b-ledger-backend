@@ -165,6 +165,12 @@ export const cashbookQuerySchema = z.object({
   to: z.string().min(1).optional()
 });
 
+/** One page of a money account's cash book — the cash book's own query plus paging. */
+export const cashbookEntriesQuerySchema = cashbookQuerySchema.extend({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20)
+});
+
 /** Where the courier's wallet stands. */
 export const courierWalletQuerySchema = z.object({
   business,

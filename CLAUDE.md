@@ -847,8 +847,11 @@ salary _expense_, or a paid employee reads as owing us. `salaryLines`:
 as opening / in / out / closing — it can't disagree with the books. The client
 sends its **local** day bounds. Rows run by Pakistan day, then by when each entry
 was recorded (`recordedAt`) — a form's date is stored as midnight UTC, so the
-stored time is not the time to show or sort by. `GET /finance/summary` returns cash, bank, to
-get, to give for the home screen. Both need `journal:read`.
+stored time is not the time to show or sort by. `GET /finance/cashbook/entries` (Round 16) is the **paged** version for the
+Khata-style cash book: newest first, `page`/`limit` (≤ 50), an optional `from`/`to`, a `summary` (`balanceNow`, and for a range `in`,
+`out`, `opening`, `closing`) and a `balanceAfter` on every row — `closing − Σ(newer rows)`, the Σ of the earlier pages being one
+aggregate (`utils/cashbook.js cashbookPage`), never a scan in memory. A courier wallet may be read. `GET /finance/summary` returns
+cash, bank, to get, to give for the home screen. All need `journal:read`.
 
 ### 10.7 Courier performance (`utils/courierPerformance.js`) — counts, not money
 
