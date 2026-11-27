@@ -11,7 +11,7 @@ import logger from '../utils/logger.js';
 import { decryptSecret, encryptSecret } from '../utils/secretBox.js';
 import { cleanShop, graphql, requestToken } from '../utils/shopify/client.js';
 import { assertBusinessInScope } from '../utils/shopify/connect.js';
-import { isConfigured } from '../utils/shopify/oauth.js';
+import { appCredentials } from '../utils/shopify/oauth.js';
 import { retryHolds } from '../utils/shopify/importer.js';
 import { actorFor, registerWebhook, syncConnection } from '../utils/shopify/sync.js';
 
@@ -31,16 +31,19 @@ import { actorFor, registerWebhook, syncConnection } from '../utils/shopify/sync
 const assertInScope = assertBusinessInScope;
 
 /**
- * Can this business press Connect Shopify? Yes when the public app is set up on the server, or when an admin gave the business
- * an app of its own (it still needs the server's public address).
+ * What can this business do to connect? `configured`: the app that serves it (the public one, or one an admin gave this business)
+ * has its Client ID and secret, and the server knows its own public address — so "type your store address" works.
+ * `oneClick`: it also has an install link, so the big Connect Shopify button works too. The screen shows only what can work.
  */
-const isReady = async business =>
-  isConfigured() ||
-  (Boolean(process.env.API_PUBLIC_URL) && Boolean(await ShopifyApp.exists({ business })));
+const readiness = async business => {
+  const app = appCredentials(await ShopifyApp.findOne({ business }).select('+clientSecretEnc'));
+  const configured = Boolean(app.clientId && app.clientSecret && process.env.API_PUBLIC_URL);
+  return { configured, oneClick: configured && Boolean(app.installUrl) };
+};
 
 const view = async (connection, business) => {
-  const configured = await isReady(business ?? connection?.business);
-  if (!connection) return { connected: false, configured };
+  const { configured, oneClick } = await readiness(business ?? connection?.business);
+  if (!connection) return { connected: false, configured, oneClick };
   const [imported, waiting] = await Promise.all([
     Order.countDocuments({ business: connection.business, shopifyOrderIds: { $exists: true } }),
     ShopifyHold.countDocuments({ business: connection.business, status: 'open' })
@@ -49,6 +52,7 @@ const view = async (connection, business) => {
   return {
     connected: true,
     configured,
+    oneClick,
     // One-click (`oauth`) or the old way (the business made its own app and typed its keys).
     authType: connection.authType ?? 'client-credentials',
     // An inactive one-click connection cannot work until it is connected again (the store removed the app, or Shopify refused).

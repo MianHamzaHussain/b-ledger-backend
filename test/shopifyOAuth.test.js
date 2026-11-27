@@ -548,7 +548,7 @@ test('the card is told how a store is connected, and when it must be connected a
   const read = async () =>
     (await callHandler(getShopify, { query: { business: String(biz._id) } })).body.data;
 
-  assert.deepEqual(await read(), { connected: false, configured: true });
+  assert.deepEqual(await read(), { connected: false, configured: true, oneClick: true });
   delete process.env.SHOPIFY_API_SECRET;
   assert.equal((await read()).configured, false, 'the card can say the server is not set up');
   process.env.SHOPIFY_API_SECRET = SECRET;
@@ -583,4 +583,15 @@ test('a business with its own Shopify app can connect even when the public app i
   const res = await callHandler(getShopify, { query: { business: String(other._id) } });
   assert.equal(res.body.data.configured, false);
   process.env.SHOPIFY_API_SECRET = SECRET;
+});
+
+test('the big button is offered only when there is an install link; typing the address needs only the keys', async () => {
+  const read = async () =>
+    (await callHandler(getShopify, { query: { business: String(biz._id) } })).body.data;
+  delete process.env.SHOPIFY_INSTALL_URL;
+  const noLink = await read();
+  assert.equal(noLink.configured, true, 'the address box works without an install link');
+  assert.equal(noLink.oneClick, false, 'the big button would fail, so it is not offered');
+  process.env.SHOPIFY_INSTALL_URL = ENV.SHOPIFY_INSTALL_URL;
+  assert.equal((await read()).oneClick, true);
 });
