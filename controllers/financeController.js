@@ -39,7 +39,7 @@ import {
 } from '../utils/reports.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { ACCOUNT_TYPES, JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
-import { parseBusinessDate } from '../utils/pakistanDay.js';
+import { parseBusinessDate, endOfPakistanDay, pakistanDay } from '../utils/pakistanDay.js';
 import { userCan } from '../utils/permissions.js';
 
 /** A validated, positive paisa amount, or an ErrorResponse-throwing reject. */
@@ -594,24 +594,28 @@ export const getPeriodLock = asyncHandler(async (req, res, next) => {
 
 /**
  * @desc   Lock the books through a date — freezes those entries
- * @route  POST /api/v1/finance/period-lock  (journal:update)
+ * @route  POST /api/v1/finance/period-lock  (accounting:create)
  */
 export const lockPeriod = asyncHandler(async (req, res, next) => {
   const { business, periodEnd } = req.body;
   if (!business) return next(new ErrorResponse('Select a business', 400));
   if (!periodEnd) return next(new ErrorResponse('Choose a date to lock through', 400));
 
-  const lock = await PeriodLock.create({
-    business,
-    periodEnd: parseBusinessDate(periodEnd, 'end'),
-    lockedBy: req.user.id
-  });
+  // A lock runs through the END of a Pakistan day, whichever instant was sent.
+  const through = endOfPakistanDay(pakistanDay(parseBusinessDate(periodEnd, 'end')));
+  const current = await latestLock(business);
+  if (current && through <= current) {
+    return next(
+      new ErrorResponse(`The books are already locked through ${pakistanDay(current)}`, 400)
+    );
+  }
+  const lock = await PeriodLock.create({ business, periodEnd: through, lockedBy: req.user.id });
   res.status(201).json({ success: true, data: { periodEnd: lock.periodEnd } });
 });
 
 /**
  * @desc   Unlock — remove the most recent lock
- * @route  DELETE /api/v1/finance/period-lock?business=  (journal:delete)
+ * @route  DELETE /api/v1/finance/period-lock?business=  (accounting:delete)
  */
 export const unlockPeriod = asyncHandler(async (req, res, next) => {
   const business = requireBusiness(req, next);

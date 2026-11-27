@@ -370,6 +370,13 @@ Admins have it through `fullAccess`; nobody else does unless a role is given
 "Accountant tools". Everyday money goes through the named endpoints (expense,
 salary, party transactions…) whose double entry is fixed in code.
 
+**Locking the books** (`PeriodLock`, `/finance/period-lock`) is an accountant act too: **lock = `accounting:create`, unlock =
+`accounting:delete`** (reading the lock stays `journal:read`). A lock runs through the **end of a Pakistan day**, whichever
+instant is sent, and can not go earlier than the current one; nothing dated on or before it can be posted or reversed
+(`postEntry`), and the refusal names the Pakistan day. A **system-dated** entry — a PostEx receipt's payout day — that falls
+in a locked week is not refused: `openDateFor` (`utils/ledger.js`) puts it on the first open moment (the start of the
+Pakistan day after the lock) and its memo says when it was really paid; a hand-entered date is never moved.
+
 ### 6.4b Picking is not seeing — lookups
 
 A task often needs to _choose_ something that lives in a resource the person must not _browse_. A

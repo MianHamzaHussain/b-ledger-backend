@@ -964,7 +964,7 @@ router.get('/reports/courier-performance', can('reports', 'read'), getCourierPer
 router
   .route('/period-lock')
   .get(can('journal', 'read'), getPeriodLock)
-  .post(can('journal', 'update'), restrictBusinessToScope(), lockPeriod)
-  .delete(can('journal', 'delete'), unlockPeriod);
+  .post(can('accounting', 'create'), restrictBusinessToScope(), lockPeriod)
+  .delete(can('accounting', 'delete'), unlockPeriod);
 
 export default router;

@@ -5,7 +5,8 @@ import JournalEntry from '../models/JournalEntry.js';
 import Order from '../models/Order.js';
 import ErrorResponse from './errorResponse.js';
 import { accountByCode, ensureChart, CODES } from './chartOfAccounts.js';
-import { postEntry, reverseEntry } from './ledger.js';
+import { openDateFor, postEntry, reverseEntry } from './ledger.js';
+import { pakistanDay } from './pakistanDay.js';
 import { courierWalletFor } from './moneyAccounts.js';
 import { netOwed } from './courierWallet.js';
 import { fromPaisa } from './money.js';
@@ -453,10 +454,15 @@ export const importReceipt = async ({ business, courier, receipt, userId }) => {
 
     const lines = claimed.flatMap(r => r.lines);
     if (lines.length) {
+      // PostEx's paper can arrive after its week is locked: it goes on the first open day, and the memo says why.
+      const { date, movedFrom } = await openDateFor(business, plan.cprDate);
+      const parcels = `${claimed.length} parcel${claimed.length === 1 ? '' : 's'}`;
       entry = await postEntry({
         business,
-        date: plan.cprDate,
-        memo: `PostEx receipt ${receipt.cprNumber} — ${claimed.length} parcel${claimed.length === 1 ? '' : 's'}`,
+        date,
+        memo: movedFrom
+          ? `PostEx receipt ${receipt.cprNumber} — ${parcels} — paid ${pakistanDay(movedFrom)}, books locked through ${pakistanDay(new Date(date.getTime() - 1))}`
+          : `PostEx receipt ${receipt.cprNumber} — ${parcels}`,
         source: { kind: JOURNAL_SOURCES.COURIER_RECEIPT, ref: String(doc._id) },
         lines,
         userId
