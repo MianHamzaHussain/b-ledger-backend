@@ -20,10 +20,15 @@ import { logActivity, rupees } from './orderActivity.js';
  * The order stays DELIVERED. What the courier collected and charged stands (it happened); what is owed
  * back to the customer is the order's ordinary refund due, paid with the ordinary "Refund paid".
  * An order whose every piece has come back is not partial: it goes through Refund return or Exchange.
+ *
+ * Round 16 splits it into steps so an exchange of SOME items can reuse them: `pickLines` (check), `creditPieces`
+ * (sale → credit), `takeBackPieces` (stock back). A refund does all three at once; a return-first exchange does the
+ * first two and the replacement carries the credit; a swap at the door credits at once and takes the pieces back when
+ * the old item arrives.
  */
 
 /** Only a delivered courier parcel — a counter sale is settled at the counter. */
-const assertPartlyReturnable = order => {
+export const assertPartlyReturnable = order => {
   if (order.status !== ORDER_STATUS.DELIVERED) {
     throw new ErrorResponse('Only a delivered order can have items sent back', 400);
   }
@@ -65,14 +70,10 @@ const entryFor = async (order, { memo, debit, credit, amountPaisa, userId }) => 
 };
 
 /**
- * Record some pieces coming back. `lines` is `[{ line, quantity }]` (a line is an order item's id);
- * everything is checked before anything is posted. `keep` (rupees) is held back from the refund.
+ * Resolve and check the lines picked from an order — `[{ line, quantity }]`, a line being an order item's id — before
+ * anything is posted: a bad one must leave nothing half done. Returns `[{ item, quantity }]`.
  */
-export const partialReturn = async (order, body, userId) => {
-  assertPartlyReturnable(order);
-  const { lines = [], returnBy = 'customer', returnCourierName, reversalTrackingId, note } = body;
-
-  // Resolve and check every line first: a bad one must leave nothing half done.
+export const pickLines = (order, lines = []) => {
   const picked = [];
   const seen = new Set();
   for (const { line, quantity } of lines) {
@@ -92,33 +93,105 @@ export const partialReturn = async (order, body, userId) => {
     picked.push({ item, quantity });
   }
   if (!picked.length) throw new ErrorResponse('Choose which items came back', 400);
+  return picked;
+};
 
-  // Every piece back is not "some" — the whole-order flows already do that, with their own rules.
-  const piecesBefore = order.items.reduce((s, i) => s + i.quantity, 0);
-  const alreadyBack = (order.returnedItems ?? []).reduce((s, r) => s + r.quantity, 0);
-  const nowBack = picked.reduce((s, p) => s + p.quantity, 0);
-  if (alreadyBack + nowBack >= piecesBefore) {
-    throw new ErrorResponse(
-      'That is every piece — use Refund return or Exchange for the whole order',
-      400
-    );
+/** How many pieces the order has, and how many are already back. */
+const piecesOf = order => ({
+  total: order.items.reduce((s, i) => s + i.quantity, 0),
+  back: (order.returnedItems ?? []).reduce((s, r) => s + r.quantity, 0)
+});
+
+/**
+ * True when `picked` is every piece of an order nothing has gone back from — an exchange of that is the whole-order
+ * flow (the order becomes Exchanged), not a partial one.
+ */
+export const coversWholeOrder = (order, picked) => {
+  const { total, back } = piecesOf(order);
+  return back === 0 && picked.reduce((s, p) => s + p.quantity, 0) >= total;
+};
+
+/** What these pieces sold for and cost, in paisa. */
+export const valueOf = picked => ({
+  amountPaisa: picked.reduce((s, p) => s + toPaisa(p.item.unitPrice) * p.quantity, 0),
+  costPaisa: picked.reduce((s, p) => s + toPaisa(p.item.unitCost) * p.quantity, 0)
+});
+
+const wordsOf = picked =>
+  picked
+    .map(
+      ({ item, quantity }) =>
+        `${quantity} × ${item.productName}${item.variantLabel && item.variantLabel !== 'Default' ? ` (${item.variantLabel})` : ''}`
+    )
+    .join(', ');
+
+/**
+ * Step one of any partial return: the pieces' sale becomes the customer's credit (Dr Sales / Cr Advances from
+ * customers), a `transfer-in` row says so, and `returnedItems` records each piece. It does NOT touch stock — that is
+ * `takeBackPieces`, which a refund or a return-first exchange does at once and a swap at the door does when the old item
+ * arrives (`stockPending`). `forExchange` marks the rows as waiting for a replacement to carry their credit.
+ * Returns the entry and what the pieces were worth, in paisa.
+ */
+export const creditPieces = async (
+  order,
+  picked,
+  {
+    userId,
+    forExchange = false,
+    stockPending = false,
+    returnBy = 'customer',
+    returnCourierName,
+    reversalTrackingId,
+    note
   }
-
-  const amountPaisa = picked.reduce((s, p) => s + toPaisa(p.item.unitPrice) * p.quantity, 0);
-  const costPaisa = picked.reduce((s, p) => s + toPaisa(p.item.unitCost) * p.quantity, 0);
-  const keepPaisa = toPaisa(body.keep ?? 0);
-  if (keepPaisa > amountPaisa) {
-    throw new ErrorResponse('You can not keep back more than the returned items cost', 400);
-  }
-
+) => {
+  const { amountPaisa, costPaisa } = valueOf(picked);
   await ensureChart(order.business);
-  const credit = await entryFor(order, {
+  const entry = await entryFor(order, {
     memo: 'Items sent back: sale becomes credit',
     debit: CODES.SALES,
     credit: CODES.CUSTOMER_ADVANCES,
     amountPaisa,
     userId
   });
+  // The money the customer paid for those pieces is now theirs to get back (the order's refund due) — or, for an
+  // exchange, what a replacement carries.
+  order.customerMoney.push({
+    kind: 'transfer-in',
+    amountPaisa,
+    accountName: forExchange ? 'items being exchanged' : 'items sent back',
+    date: new Date(),
+    entry: entry._id,
+    by: userId
+  });
+
+  const date = new Date();
+  for (const { item, quantity } of picked) {
+    order.returnedItems.push({
+      line: item._id,
+      productName: item.productName,
+      variantLabel: item.variantLabel,
+      quantity,
+      unitPrice: item.unitPrice,
+      amountPaisa: toPaisa(item.unitPrice) * quantity,
+      date,
+      by: userId,
+      returnBy,
+      returnCourierName: returnBy === 'customer' ? returnCourierName : undefined,
+      reversalTrackingId,
+      note,
+      forExchange: forExchange || undefined,
+      stockPending: stockPending || undefined
+    });
+  }
+  order.returnedPieces = piecesOf(order).back;
+  if (reversalTrackingId) order.reversalTrackingId = reversalTrackingId;
+  order.updatedBy = userId;
+  return { entry, amountPaisa, costPaisa };
+};
+
+/** Step two: the pieces are back on the shelf — stock returns and their cost comes off the sale's COGS. */
+export const takeBackPieces = async (order, picked, userId) => {
   await releaseStock(
     picked.map(({ item, quantity }) => ({
       product: item.product,
@@ -126,7 +199,9 @@ export const partialReturn = async (order, body, userId) => {
       quantity
     }))
   );
+  const { costPaisa } = valueOf(picked);
   if (costPaisa > 0) {
+    await ensureChart(order.business);
     await entryFor(order, {
       memo: 'Items sent back: goods back in stock',
       debit: CODES.INVENTORY,
@@ -135,16 +210,40 @@ export const partialReturn = async (order, body, userId) => {
       userId
     });
   }
+};
 
-  // The money the customer paid for those pieces is now theirs to get back (the order's refund due).
-  order.customerMoney.push({
-    kind: 'transfer-in',
-    amountPaisa,
-    accountName: 'items sent back',
-    date: new Date(),
-    entry: credit._id,
-    by: userId
+/**
+ * Record some pieces coming back for a refund. `lines` is `[{ line, quantity }]`; everything is checked before
+ * anything is posted. `keep` (rupees) is held back from the refund.
+ */
+export const partialReturn = async (order, body, userId) => {
+  assertPartlyReturnable(order);
+  const { lines = [], returnBy = 'customer', returnCourierName, reversalTrackingId, note } = body;
+
+  const picked = pickLines(order, lines);
+  // Every piece back is not "some" — the whole-order flows already do that, with their own rules.
+  const { total, back } = piecesOf(order);
+  const nowBack = picked.reduce((s, p) => s + p.quantity, 0);
+  if (back + nowBack >= total) {
+    throw new ErrorResponse(
+      'That is every piece — use Refund return or Exchange for the whole order',
+      400
+    );
+  }
+  const { amountPaisa } = valueOf(picked);
+  const keepPaisa = toPaisa(body.keep ?? 0);
+  if (keepPaisa > amountPaisa) {
+    throw new ErrorResponse('You can not keep back more than the returned items cost', 400);
+  }
+
+  await creditPieces(order, picked, {
+    userId,
+    returnBy,
+    returnCourierName,
+    reversalTrackingId,
+    note
   });
+  await takeBackPieces(order, picked, userId);
   if (keepPaisa > 0) {
     const kept = await entryFor(order, {
       memo: 'Items sent back: delivery charge & tax kept',
@@ -163,40 +262,13 @@ export const partialReturn = async (order, body, userId) => {
     });
   }
 
-  const date = new Date();
-  for (const { item, quantity } of picked) {
-    order.returnedItems.push({
-      line: item._id,
-      productName: item.productName,
-      variantLabel: item.variantLabel,
-      quantity,
-      unitPrice: item.unitPrice,
-      amountPaisa: toPaisa(item.unitPrice) * quantity,
-      date,
-      by: userId,
-      returnBy,
-      returnCourierName: returnBy === 'customer' ? returnCourierName : undefined,
-      reversalTrackingId,
-      note
-    });
-  }
-  order.returnedPieces = alreadyBack + nowBack;
-  if (reversalTrackingId) order.reversalTrackingId = reversalTrackingId;
-  order.updatedBy = userId;
-
-  const what = picked
-    .map(
-      ({ item, quantity }) =>
-        `${quantity} × ${item.productName}${item.variantLabel && item.variantLabel !== 'Default' ? ` (${item.variantLabel})` : ''}`
-    )
-    .join(', ');
   logActivity(
     order,
     { id: userId },
     {
       kind: 'money',
-      text: `Sent back: ${what} — ${rupees(fromPaisa(amountPaisa))} back to the customer`
+      text: `Sent back: ${wordsOf(picked)} — ${rupees(fromPaisa(amountPaisa))} back to the customer`
     }
   );
-  return { amountPaisa, costPaisa, keepPaisa };
+  order.awaitingReturn = false;
 };
