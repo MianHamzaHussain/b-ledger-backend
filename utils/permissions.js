@@ -251,10 +251,12 @@ export const RESOURCES = {
     // accountant area (trial balance, journal); create = post those entries.
     label: 'Accountant tools',
     description:
-      'Advanced bookkeeping for an accountant: debit and credit entries, depreciation and the year-end close. Give this only to someone who knows accounting.',
+      'Advanced bookkeeping for an accountant: debit and credit entries, depreciation, the year-end close, and locking the books so past entries can no longer change. Give this only to someone who knows accounting.',
     can: {
       read: 'see the accountant screens, such as the trial balance',
-      create: 'post debit and credit entries, depreciation and the year-end close'
+      create:
+        'post debit and credit entries, depreciation and the year-end close, and lock the books through a date',
+      delete: 'undo the last lock on the books'
     },
     scopable: true,
     ownFilter: user => ({ business: { $in: user.assignedBusinesses || [] } })

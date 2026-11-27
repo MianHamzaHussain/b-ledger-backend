@@ -184,7 +184,13 @@ const ReturnedItemSchema = new mongoose.Schema(
     returnBy: { type: String, enum: ['customer', 'us'], default: 'customer' },
     returnCourierName: { type: String, trim: true, maxlength: 60 },
     reversalTrackingId: { type: String, trim: true },
-    note: { type: String, trim: true, maxlength: 300 }
+    note: { type: String, trim: true, maxlength: 300 },
+    /** These pieces came back for an exchange: their credit waits for (or went into) a replacement. */
+    forExchange: { type: Boolean },
+    /** A swap at the door: the old pieces are still with the customer — their stock returns when they arrive. */
+    stockPending: { type: Boolean },
+    /** The replacement that carried their credit. */
+    replacement: { type: mongoose.Schema.ObjectId, ref: 'Order' }
   },
   { _id: true }
 );

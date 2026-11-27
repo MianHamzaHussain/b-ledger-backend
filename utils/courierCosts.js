@@ -345,7 +345,10 @@ export const settleCourierCosts = async (
  *                  back is F (the replacement has no COD, so no tax on it).
  * The replacement's parcel is only an estimate until PostEx bills it; the business absorbs any small gap.
  */
-export const exchangeKeep = async (original, { newTotalPaisa, creditPaisa, isSwap = false }) => {
+export const exchangeKeep = async (
+  original,
+  { newTotalPaisa, creditPaisa, isSwap = false, freeCourier = false }
+) => {
   const business = await Business.findById(original.business).select('codTax').lean();
   const codTax = business?.codTax || {};
   const rows = await loadReceiptRows(original.business, [original._id], []);
@@ -358,28 +361,32 @@ export const exchangeKeep = async (original, { newTotalPaisa, creditPaisa, isSwa
   // The original parcel only gives the estimate for the replacement's delivery charge — it is not charged again.
   const estimatePaisa = orig.deliveryPaisa;
   const diffPaisa = newTotalPaisa - creditPaisa;
-  const fixedPaisa = estimatePaisa;
+  // The shop paid for the courier ('free delivery'): the customer owes the price difference and nothing more.
+  const fixedPaisa = freeCourier ? 0 : estimatePaisa;
   const basePaisa = diffPaisa + fixedPaisa;
   if (basePaisa <= 0) {
     return { owes: false, basePaisa, codPaisa: 0, keepPaisa: 0, lines: [], diffPaisa, fixedPaisa };
   }
 
   const percent = taxPercentOf(codTax);
-  const codPaisa = isSwap ? 0 : grossUpCod(basePaisa, percent);
-  const replacementTaxPaisa = isSwap ? 0 : Math.round((codPaisa * percent) / 100);
+  // Free: the COD is the difference itself — the shop takes the courier's 4 % on it too, so nothing is grossed up.
+  const codPaisa = isSwap ? 0 : freeCourier ? basePaisa : grossUpCod(basePaisa, percent);
+  const replacementTaxPaisa = isSwap || freeCourier ? 0 : Math.round((codPaisa * percent) / 100);
   const keepPaisa = isSwap ? fixedPaisa : codPaisa - diffPaisa;
-  const lines = [
-    {
-      label: 'Delivery charge — replacement parcel',
-      amountPaisa: estimatePaisa,
-      source: 'estimate'
-    },
-    {
-      label: `${percent} % tax on COD — replacement parcel`,
-      amountPaisa: replacementTaxPaisa,
-      source: 'estimate'
-    }
-  ];
+  const lines = freeCourier
+    ? []
+    : [
+        {
+          label: 'Delivery charge — replacement parcel',
+          amountPaisa: estimatePaisa,
+          source: 'estimate'
+        },
+        {
+          label: `${percent} % tax on COD — replacement parcel`,
+          amountPaisa: replacementTaxPaisa,
+          source: 'estimate'
+        }
+      ];
   // Whole-rupee rounding of the COD: a few paisa more than the costs, still the customer's to pay.
   const roundingPaisa = keepPaisa - lines.reduce((sum, l) => sum + l.amountPaisa, 0);
   if (roundingPaisa > 0)
@@ -441,6 +448,42 @@ export const applyExchangeKeep = async (replacement, keep, userId) => {
   // Saving re-derives the COD: the credit is now smaller by the costs, so the customer's COD is bigger.
   await replacement.save();
   return replacement;
+};
+
+/**
+ * The shop pays the courier for this exchange ("free delivery", a reason given): the replacement's costs are waived up
+ * front, so no payout is ever reduced by them. Unlike an admin's waiver at payout, this is a choice made when the
+ * exchange is made, by whoever makes it, and is logged on the order.
+ */
+export const waiveExchangeCosts = async (order, reason, userId) => {
+  order.courierCosts = { settledAt: new Date(), waived: true, reason, lines: [] };
+  order.updatedBy = userId;
+  await order.save();
+};
+
+/**
+ * A swap customer paid more than the courier costs (they handed over Rs 500 for a Rs 398.75 delivery): the extra is the
+ * shop's, booked straight to Delivery charged to customers — Dr the money account / Cr income. It never becomes an
+ * advance, so the replacement still reads as paid exactly its price.
+ */
+export const recordExtraDeliveryIncome = async (order, { extraPaisa, money, userId }) => {
+  if (!(extraPaisa > 0)) return null;
+  await ensureChart(order.business);
+  const label = `${orderLabel(order)} · ${order.customerName}`;
+  return postEntry({
+    business: order.business,
+    memo: `Extra delivery charge — ${label}`,
+    source: { kind: JOURNAL_SOURCES.ORDER, ref: String(order._id) },
+    lines: [
+      { account: money.account, label, debitPaisa: extraPaisa },
+      {
+        account: (await accountByCode(order.business, CODES.DELIVERY_INCOME))._id,
+        label,
+        creditPaisa: extraPaisa
+      }
+    ],
+    userId
+  });
 };
 
 /**

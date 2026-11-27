@@ -108,3 +108,19 @@ test('material already on the shelf: into Raw materials, no cash out', async () 
   assert.equal(await net(biz, CODES.CASH), 0);
   assert.equal(await net(biz, CODES.OPENING_BALANCES), -500000);
 });
+
+test('an opening note shows on the memo and the Khata row; without one it is unchanged', async () => {
+  const biz = await makeBusiness();
+  const supplier = await makeParty(biz._id, 'supplier');
+  const out = await opening(supplier, {
+    owesUs: false,
+    amount: 5000,
+    note: '  Old bill for lace '
+  });
+  assert.match(out.body.data.memo, /we owed .* — Old bill for lace$/);
+  assert.ok(out.body.data.lines.every(l => l.label?.endsWith('Old bill for lace')));
+
+  const plain = await opening(supplier, { owesUs: false, amount: 100 });
+  assert.doesNotMatch(plain.body.data.memo, / — [^—]+ — /);
+  assert.throws(() => partyOpeningSchema.parse({ owesUs: true, amount: 1, note: 'x'.repeat(121) }));
+});

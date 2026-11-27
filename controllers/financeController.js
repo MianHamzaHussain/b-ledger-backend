@@ -16,7 +16,7 @@ import {
 import { postEntry, reverseEntry, trialBalance, latestLock } from '../utils/ledger.js';
 import { salaryLines } from '../utils/partyPosting.js';
 import { resolveMoney } from '../utils/moneyAccounts.js';
-import { cashbook, moneySummary } from '../utils/cashbook.js';
+import { cashbook, cashbookPage, moneySummary } from '../utils/cashbook.js';
 import { courierWalletParcels, courierWalletSummary } from '../utils/courierWalletStatement.js';
 import { inScope } from '../utils/scope.js';
 import { undoCourierInvoice } from '../utils/courierInvoice.js';
@@ -39,8 +39,14 @@ import {
 } from '../utils/reports.js';
 import { toPaisa, fromPaisa } from '../utils/money.js';
 import { ACCOUNT_TYPES, JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
-import { parseBusinessDate } from '../utils/pakistanDay.js';
+import { parseBusinessDate, endOfPakistanDay, pakistanDay } from '../utils/pakistanDay.js';
 import { userCan } from '../utils/permissions.js';
+import {
+  assetEntryGuard,
+  assetNameFor,
+  buyAsset,
+  markPurchaseReversed
+} from '../utils/fixedAssets.js';
 
 /** A validated, positive paisa amount, or an ErrorResponse-throwing reject. */
 const amountPaisa = raw => {
@@ -279,7 +285,6 @@ export const recordAsset = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Choose the supplier this is owed to', 400));
   await ensureChart(business);
 
-  const asset = await accountByCode(business, CODES.FIXED_ASSETS);
   const credit = onCredit
     ? {
         account: (await accountByCode(business, CODES.ACCOUNTS_PAYABLE))._id,
@@ -291,14 +296,17 @@ export const recordAsset = asyncHandler(async (req, res, next) => {
         creditPaisa: paisa
       };
 
-  await respondPosted(res, {
+  // The asset is listed by name so a later sale knows what it cost; an older app sends only a memo.
+  const { asset, entry } = await buyAsset({
     business,
+    name: assetNameFor({ name: req.body.name, memo, date }),
+    note: req.body.name ? memo : undefined,
+    costPaisa: paisa,
+    credit,
     date,
-    memo: memo || 'Fixed asset purchase',
-    source: { kind: JOURNAL_SOURCES.ASSET },
-    lines: [{ account: asset._id, debitPaisa: paisa }, credit],
     userId: req.user.id
   });
+  res.status(201).json({ success: true, data: { ...entry.toObject(), asset } });
 });
 
 /**
@@ -594,24 +602,28 @@ export const getPeriodLock = asyncHandler(async (req, res, next) => {
 
 /**
  * @desc   Lock the books through a date — freezes those entries
- * @route  POST /api/v1/finance/period-lock  (journal:update)
+ * @route  POST /api/v1/finance/period-lock  (accounting:create)
  */
 export const lockPeriod = asyncHandler(async (req, res, next) => {
   const { business, periodEnd } = req.body;
   if (!business) return next(new ErrorResponse('Select a business', 400));
   if (!periodEnd) return next(new ErrorResponse('Choose a date to lock through', 400));
 
-  const lock = await PeriodLock.create({
-    business,
-    periodEnd: parseBusinessDate(periodEnd, 'end'),
-    lockedBy: req.user.id
-  });
+  // A lock runs through the END of a Pakistan day, whichever instant was sent.
+  const through = endOfPakistanDay(pakistanDay(parseBusinessDate(periodEnd, 'end')));
+  const current = await latestLock(business);
+  if (current && through <= current) {
+    return next(
+      new ErrorResponse(`The books are already locked through ${pakistanDay(current)}`, 400)
+    );
+  }
+  const lock = await PeriodLock.create({ business, periodEnd: through, lockedBy: req.user.id });
   res.status(201).json({ success: true, data: { periodEnd: lock.periodEnd } });
 });
 
 /**
  * @desc   Unlock — remove the most recent lock
- * @route  DELETE /api/v1/finance/period-lock?business=  (journal:delete)
+ * @route  DELETE /api/v1/finance/period-lock?business=  (accounting:delete)
  */
 export const unlockPeriod = asyncHandler(async (req, res, next) => {
   const business = requireBusiness(req, next);
@@ -735,10 +747,15 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Undo this on the material instead', 400));
   }
 
+  // An asset's sale is undone on the asset; a sold asset's purchase can not be reversed under it.
+  const guarded = await assetEntryGuard(entry);
+  if (guarded.refuse) return next(new ErrorResponse(guarded.refuse, 400));
+
   const reversal = await reverseEntry(entry._id, {
     userId: req.user.id,
     memo: req.body.memo
   });
+  if (guarded.asset) await markPurchaseReversed(guarded.asset, req.user.id);
   // Undoing a courier invoice reopens its CODs and the charges it billed.
   if (entry.source?.kind === JOURNAL_SOURCES.COURIER_INVOICE) {
     await undoCourierInvoice(entry._id);
@@ -834,22 +851,25 @@ export const getCourierWalletParcels = asyncHandler(async (req, res, next) => {
  * @route  GET /api/v1/finance/cashbook?business=&account=<id>|partner:<id>|cash|bank&from=&to=
  *         (journal:read — scoped)
  */
+/**
+ * The money account a cash book request names, once the business is checked to be the caller's. 'cash' / 'bank'
+ * still name the original two; anything else is a money account id or a partner, checked like any other money
+ * reference. Reading the courier's wallet is fine — only spending from it is refused (resolveMoney, everywhere else).
+ */
+const cashbookAccount = async (req, business, account) => {
+  const legacy = account === 'cash' || account === 'bank' || !account;
+  return resolveMoney(business, legacy ? { method: account || 'cash' } : { account }, req.user, {
+    allowCourierHeld: true
+  });
+};
+
 export const getCashbook = asyncHandler(async (req, res, next) => {
   const { business, account } = req.query;
   if (!business) return next(new ErrorResponse('Select a business', 400));
   // Out of scope reads as not found, never forbidden (CLAUDE.md §6).
   if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
 
-  // 'cash' / 'bank' still name the original two; anything else is a money
-  // account id or a partner, checked like any other money reference.
-  const legacy = account === 'cash' || account === 'bank' || !account;
-  // Reading the courier's wallet is fine — only spending from it is refused (resolveMoney, no flag, everywhere else).
-  const money = await resolveMoney(
-    business,
-    legacy ? { method: account || 'cash' } : { account },
-    req.user,
-    { allowCourierHeld: true }
-  );
+  const money = await cashbookAccount(req, business, account);
 
   const book = await cashbook(business, {
     accountId: money.account,
@@ -871,6 +891,50 @@ export const getCashbook = asyncHandler(async (req, res, next) => {
         balance: fromPaisa(r.balancePaisa)
       }))
     }
+  });
+});
+
+/**
+ * @desc   One page of a money account's cash book, newest first, each row with what the account held just after
+ *         it — what the Khata-style cash book scrolls through. Optional date range; `summary` has the balance now
+ *         and, for a range, what came in, went out, and the balance at its start and end.
+ * @route  GET /api/v1/finance/cashbook/entries?business=&account=&from=&to=&page=&limit=  (journal:read — scoped)
+ */
+export const getCashbookEntries = asyncHandler(async (req, res, next) => {
+  const { business, account, page, limit } = req.query;
+  if (!inScope(req, business)) return next(new ErrorResponse('Business not found', 404));
+
+  const money = await cashbookAccount(req, business, account);
+  const out = await cashbookPage(business, {
+    accountId: money.account,
+    from: parseDateParam(req.query.from, 'from'),
+    to: parseDateParam(req.query.to, 'to', 'end'),
+    page,
+    limit
+  });
+
+  const next_ = page * limit < out.total ? { page: page + 1, limit } : undefined;
+  const prev = page > 1 ? { page: page - 1, limit } : undefined;
+  res.status(200).json({
+    success: true,
+    count: out.rows.length,
+    total: out.total,
+    pagination: { ...(next_ ? { next: next_ } : {}), ...(prev ? { prev } : {}) },
+    summary: Object.fromEntries(
+      Object.entries(out.summary).flatMap(([k, v]) => {
+        const base = k.replace(/Paisa$/, '');
+        return [
+          [k, v],
+          [base, v === null ? null : fromPaisa(v)]
+        ];
+      })
+    ),
+    data: out.rows.map(r => ({
+      ...r,
+      in: fromPaisa(r.inPaisa),
+      out: fromPaisa(r.outPaisa),
+      balanceAfter: fromPaisa(r.balanceAfterPaisa)
+    }))
   });
 });
 

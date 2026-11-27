@@ -79,6 +79,8 @@ export const manualSchema = z.object({
 
 export const assetSchema = z.object({
   business: id,
+  /** What the asset is ("Light stand"). Left out by an older app, it is taken from the memo. */
+  name: z.string().trim().max(80, 'Name can not be more than 80 characters').optional(),
   amount,
   onCredit: z.boolean().optional(),
   party: id.optional(),
@@ -163,6 +165,31 @@ export const cashbookQuerySchema = z.object({
     .optional(),
   from: z.string().min(1).optional(),
   to: z.string().min(1).optional()
+});
+
+/** Selling a fixed asset, or throwing it away (`throwAway`: no price, no money). */
+export const assetSellSchema = z.object({
+  /** What it sold for, in rupees. 0 or left out with `throwAway`. */
+  price: z.coerce.number().min(0, 'The price can not be negative').optional(),
+  method,
+  /** Where the money came in — a money account id, or `partner:<id>`. */
+  account,
+  date,
+  buyerName: z.string().trim().max(80, 'Name can not be more than 80 characters').optional(),
+  /** Accountant only: how much of the depreciation ever posted belongs to this item. */
+  depreciation: z.coerce.number().min(0, 'Depreciation can not be negative').optional(),
+  throwAway: z.boolean().optional()
+});
+
+export const assetsQuerySchema = z.object({
+  business,
+  status: z.enum(['in-use', 'sold', 'thrown-away']).optional()
+});
+
+/** One page of a money account's cash book — the cash book's own query plus paging. */
+export const cashbookEntriesQuerySchema = cashbookQuerySchema.extend({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20)
 });
 
 /** Where the courier's wallet stands. */

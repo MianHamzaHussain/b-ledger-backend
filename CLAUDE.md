@@ -163,6 +163,7 @@ const ThingSchema = new mongoose.Schema(
 | `Consignment`     | Sale-or-return goods out with a **reseller** — a header with many lines, each tracking issued/returned/kept. Goods stay yours (Goods-on-Approval at cost) until kept (then a sale) or returned. A second money axis (`billedPaisa`/`paidPaisa`) tracks what the reseller owes vs has paid                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `Account`         | One line of the per-business **chart of accounts** (`code`, `name`, `type`, derived `normalBalance`). Seeded from a standard chart on first use (`chartOfAccounts.js`); per-partner capital accounts are added dynamically                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `JournalEntry`    | A balanced **double-entry** posting — both sides in `lines[]` (`account`, optional `party`/`product`/`batch`/`label`, `debitPaisa`/`creditPaisa`). The pre-validate hook **rejects unbalanced entries**. `source.kind` traces what posted it (order, consignment, capital, loan, asset, `courier-settlement`…)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `FixedAsset`      | One thing bought to keep and use (a light stand): `name`, `costPaisa`, `boughtOn`, the `purchaseEntry` that bought it, this item's share of depreciation, `status` (`in-use` / `sold` / `thrown-away`) and its `sale` (price, where it came in, the entry, the gain or loss). Lets a sale book the gain/loss itself (§10.13)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `PeriodLock`      | Freezes entries dated on/before a cutoff so reported history can't change after the fact                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `Notification`    | In-app notification (new order, order paid, low stock) — drives the header bell                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
@@ -369,6 +370,13 @@ Everyday users are not accountants (see §10). The raw tools — `POST
 Admins have it through `fullAccess`; nobody else does unless a role is given
 "Accountant tools". Everyday money goes through the named endpoints (expense,
 salary, party transactions…) whose double entry is fixed in code.
+
+**Locking the books** (`PeriodLock`, `/finance/period-lock`) is an accountant act too: **lock = `accounting:create`, unlock =
+`accounting:delete`** (reading the lock stays `journal:read`). A lock runs through the **end of a Pakistan day**, whichever
+instant is sent, and can not go earlier than the current one; nothing dated on or before it can be posted or reversed
+(`postEntry`), and the refusal names the Pakistan day. A **system-dated** entry — a PostEx receipt's payout day — that falls
+in a locked week is not refused: `openDateFor` (`utils/ledger.js`) puts it on the first open moment (the start of the
+Pakistan day after the lock) and its memo says when it was really paid; a hand-entered date is never moved.
 
 ### 6.4b Picking is not seeing — lookups
 
@@ -585,6 +593,27 @@ charged again (owner's rule, 2026-11-26; before it, both parcels were charged).
     the old item is received.
   - `awaitingReturn` stays set until the old item is received.
 - **Counter sales** aren't exchanged here — only courier parcels.
+- **Exchanging only SOME items** (Round 16 — order #0204 had two items and the customer swapped one). `exchange-return`,
+  `swap` and `exchange-quote` take `lines` (`[{ line, quantity }]`, quote: `lines=<lineId>:<qty>,…`). Left out, or covering
+  every piece of an order nothing has gone back from, it is the whole-order flow above, unchanged. Otherwise:
+  - the order stays **Delivered** and `exchangedFor` is **not** set (it means the whole order was swapped); the swapped
+    pieces' price — only theirs — becomes the credit (`creditPieces`: Dr Sales / Cr Advances, a `transfer-in` row, and
+    `returnedItems` rows with `forExchange`). The rest was kept and stays sold;
+  - **return first**: stock returns at once (`takeBackPieces`); the rows wait for a replacement
+    (`pendingExchangeRows`). `exchange-replacement` is allowed on a Delivered order that has pending rows, carries exactly
+    their credit (`partialCreditFor`) and a `transfer-out` on the original (`markPartialCreditMoved`) points each row at it;
+  - **swap**: the credit is posted at once and the rows are `stockPending`; `receive-return` then puts only those pieces
+    back on the shelf (`takeBackPieces`). If creating the replacement fails the credit entry and rows are undone;
+  - the rest can be exchanged later (even every remaining piece); a line can't go back more than is left.
+    `partialReturn` (a refund of some items) is the same steps (`pickLines`, `creditPieces`, `takeBackPieces`), unchanged.
+- **What a swap customer pays** (`swap`, Round 16). Due = price difference + the new parcel's cost (`exchangeKeep`). The
+  customer hands over `amountReceived` (default: exactly what is due; **at least** what is due, else 400). What is due is an
+  advance on the replacement, so its COD stays 0; **anything beyond it is the shop's** — Dr the money account / Cr **Delivery
+  charged to customers (4200)** (`recordExtraDeliveryIncome`), never an advance, so the replacement still reads as paid
+  exactly its price. (If that replacement is later cancelled the extra is not refunded automatically — a person does it.)
+  **Free delivery** (`freeCourier` + a required `freeReason`, swap and replacement): the shop pays the courier — the new
+  parcel's cost is 0 for the customer (a return-first COD is the plain difference, nothing grossed up) and the replacement's
+  costs are waived (`waiveExchangeCosts`), so no payout is ever reduced by them; the reason is on the timeline.
 
 ### 10.2b-3 The courier's costs are recovered (`utils/courierCosts.js`)
 
@@ -797,7 +826,7 @@ What the business already had and owed the day it starts on B Ledger. It was
 earned or spent before, so it never moves cash or this period's profit. Every
 opening posts against **Opening balances (3200, equity)**:
 
-- **Khata** (`POST /parties/:id/opening`, `owesUs`): the person's own running
+- **Khata** (`POST /parties/:id/opening`, `owesUs`, optional `note` ≤ 120 — what it was for, on the memo and the Khata row): the person's own running
   account against 3200.
   - Accounts by type: supplier → AP, reseller/customer → AR, employee →
     Salaries payable, courier → COD receivable, lender → Loan payable.
@@ -813,13 +842,13 @@ opening posts against **Opening balances (3200, equity)**:
 `POST /parties/:id/transactions` — the DigiKhata action. The party's **type**
 picks the account (`utils/partyPosting.js`):
 
-| Party              | gave                                                     | got                                                                         |
-| ------------------ | -------------------------------------------------------- | --------------------------------------------------------------------------- |
-| supplier           | payment (AP)                                             | a **bill** — requires `category` (an expense code), expense owed on AP      |
-| reseller, customer | money given (AR)                                         | payment received (AR); a customer's is applied to its counter sales (§10.4) |
-| employee           | salary paid (§10.5), or `purpose: 'advance'`             | salary due                                                                  |
-| lender             | principal repaid (≤ owed; interest via `/finance/loans`) | loan taken                                                                  |
-| courier            | refused                                                  | refused — recorded on its invoice (§10.2)                                   |
+| Party              | gave                                                     | got                                                                                                                                                       |
+| ------------------ | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| supplier           | payment (AP)                                             | a **bill** — requires `category` (an expense code), expense owed on AP; or `purpose: 'refund'` — **money back** from them (Dr money / Cr AP, no category) |
+| reseller, customer | money given (AR)                                         | payment received (AR); a customer's is applied to its counter sales (§10.4)                                                                               |
+| employee           | salary paid (§10.5), or `purpose: 'advance'`             | salary due; or `purpose: 'repay'` — an **advance paid back** (Dr money / Cr Salaries Payable, never more than they hold)                                  |
+| lender             | principal repaid (≤ owed; interest via `/finance/loans`) | loan taken                                                                                                                                                |
+| courier            | refused                                                  | refused — recorded on its invoice (§10.2)                                                                                                                 |
 
 ### 10.4 Credit counter sales
 
@@ -847,8 +876,11 @@ salary _expense_, or a paid employee reads as owing us. `salaryLines`:
 as opening / in / out / closing — it can't disagree with the books. The client
 sends its **local** day bounds. Rows run by Pakistan day, then by when each entry
 was recorded (`recordedAt`) — a form's date is stored as midnight UTC, so the
-stored time is not the time to show or sort by. `GET /finance/summary` returns cash, bank, to
-get, to give for the home screen. Both need `journal:read`.
+stored time is not the time to show or sort by. `GET /finance/cashbook/entries` (Round 16) is the **paged** version for the
+Khata-style cash book: newest first, `page`/`limit` (≤ 50), an optional `from`/`to`, a `summary` (`balanceNow`, and for a range `in`,
+`out`, `opening`, `closing`) and a `balanceAfter` on every row — `closing − Σ(newer rows)`, the Σ of the earlier pages being one
+aggregate (`utils/cashbook.js cashbookPage`), never a scan in memory. A courier wallet may be read. `GET /finance/summary` returns
+cash, bank, to get, to give for the home screen. All need `journal:read`.
 
 ### 10.7 Courier performance (`utils/courierPerformance.js`) — counts, not money
 
@@ -1316,6 +1348,30 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
   `/auth/me`'s assigned businesses include them, so the switcher can draw them —
   keep them out of any other lean list.
 
+### 10.13 Fixed assets — a list, and selling one (Round 16, `utils/fixedAssets.js`)
+
+Buying an asset (`POST /finance/assets`, now with a `name`; an older app's memo becomes the name) posts Dr Fixed Assets / Cr money
+or a supplier **and** lists a `FixedAsset` — if listing fails the purchase is reversed, never one without the other. The app then
+knows what the item cost, so **selling it books the gain or loss itself** (`POST /finance/assets/:id/sell`, `journal:create`):
+
+|                  | Posting                                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- |
+| money in         | Dr the money account — the price (when sold for something)                                                      |
+| depreciation     | Dr Accumulated Depreciation — this item's share, **set only by an accountant** (`accounting:create`); default 0 |
+| the asset        | Cr Fixed Assets — what it cost                                                                                  |
+| below book value | Dr **Loss on selling assets** (5260) — book − price. Bought 2,800, sold 2,500 → a Rs 300 loss                   |
+| above book value | Cr **Gain on selling assets** (4300) — price − book                                                             |
+
+_Thrown away_ is the same with a price of 0 (`throwAway`): the whole book value is a loss and no money moves. Book value = cost −
+the item's depreciation. The asset is **claimed** with one conditional update first (two taps can not both sell it) and released if
+posting fails; a sale can not be dated before the day it was bought; a price needs "where the money came in". `POST
+/finance/assets/:id/undo-sale` reverses the entry and puts it back in use (only the sale can be undone, once). The journal refuses
+to reverse an `asset-sale` entry ("Undo this on the asset") or the purchase of a sold asset; reversing the purchase of an unsold one
+is allowed and marks it _thrown away — purchase reversed_. `GET /finance/assets?business=&status=` and `/:id` read the list (cost,
+book value, sale in rupees). `asset-sale` is a hand-entered kind (`HAND_KINDS`): **ledger clear deletes the assets with their entries**
+(and snapshots them). `npm run assets:import` (dry run, then `-- --apply`; `utils/importFixedAssets.js`) lists earlier purchases that
+have no asset behind them and reports the depreciation ever posted per business — **clear first, import after**. Delete it once run.
+
 ### 10.12 TCS (2026-10-29) — built from the guide, not yet proven live
 
 - `utils/couriers/tcs.js` is a second adapter behind the same interface as PostEx (`cities, addresses,
@@ -1387,8 +1443,6 @@ cost more the longer it waits.
 
 - **Staff advances sit on Salaries Payable**, so an advance shows as a negative
   liability on the balance sheet rather than a separate asset. Profit is right.
-- **An employee repaying an advance in cash** has no endpoint; it is cut from
-  salary instead.
 - **Undoing a courier settlement** is an accountant action (reverse the entry in
   the journal); everyday users can't.
 - The older finance read endpoints (trial balance…) answer **403** for a business

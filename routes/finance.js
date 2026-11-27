@@ -14,6 +14,8 @@ import {
   salarySchema,
   manualSchema,
   assetSchema,
+  assetSellSchema,
+  assetsQuerySchema,
   loanSchema,
   depreciationSchema,
   closeSchema,
@@ -21,12 +23,20 @@ import {
   moneyAccountUpdateSchema,
   transferSchema,
   cashbookQuerySchema,
+  cashbookEntriesQuerySchema,
   courierWalletQuerySchema,
   courierWalletParcelsQuerySchema,
   courierReceiptQuerySchema
 } from '../schemas/finance.js';
 import JournalEntry from '../models/JournalEntry.js';
 import Account from '../models/Account.js';
+import FixedAsset from '../models/FixedAsset.js';
+import {
+  getAssets,
+  getAsset,
+  sellFixedAsset,
+  undoFixedAssetSale
+} from '../controllers/fixedAssetController.js';
 import {
   getMoneyAccounts,
   lookupMoneyAccounts,
@@ -59,6 +69,7 @@ import {
   lockPeriod,
   unlockPeriod,
   getCashbook,
+  getCashbookEntries,
   getCourierWallet,
   getCourierWalletParcels,
   getCourierReceipts,
@@ -318,6 +329,33 @@ router.post(
 
 /**
  * @swagger
+ * /finance/assets:
+ *   get: { summary: The fixed assets of a business, with what became of each, tags: [Finance], security: [{ bearerAuth: [] }], parameters: [{ in: query, name: business, required: true, schema: { type: string } }, { in: query, name: status, schema: { type: string, enum: [in-use, sold, thrown-away] } }], responses: { 200: { description: "{ count, data: assets[] } with cost, book value and sale in rupees" } } }
+ * /finance/assets/{id}:
+ *   get: { summary: One fixed asset, tags: [Finance], security: [{ bearerAuth: [] }], responses: { 200: { description: The asset } } }
+ * /finance/assets/{id}/sell:
+ *   post: { summary: Sell an asset or throw it away — the gain or loss is booked by the app, tags: [Finance], security: [{ bearerAuth: [] }], responses: { 200: { description: The asset, with gainLoss } } }
+ * /finance/assets/{id}/undo-sale:
+ *   post: { summary: Undo a sale or throw-away, tags: [Finance], security: [{ bearerAuth: [] }], responses: { 200: { description: The asset, back in use } } }
+ */
+router.get('/assets', can('journal', 'read'), validateQuery(assetsQuerySchema), getAssets);
+router.get('/assets/:id', can('journal', 'read'), loadScoped(FixedAsset), getAsset);
+router.post(
+  '/assets/:id/sell',
+  can('journal', 'create'),
+  loadScoped(FixedAsset),
+  validate(assetSellSchema),
+  sellFixedAsset
+);
+router.post(
+  '/assets/:id/undo-sale',
+  can('journal', 'create'),
+  loadScoped(FixedAsset),
+  undoFixedAssetSale
+);
+
+/**
+ * @swagger
  * /finance/loans:
  *   post: { summary: Take or repay a loan (repay expenses optional interest), tags: [Finance], security: [{ bearerAuth: [] }], responses: { 201: { description: Posted } } }
  */
@@ -430,6 +468,31 @@ router.get('/trial-balance', can('reports', 'read'), getTrialBalance);
  *       404: { description: Business outside your scope }
  */
 router.get('/cashbook', can('journal', 'read'), validateQuery(cashbookQuerySchema), getCashbook);
+
+/**
+ * @swagger
+ * /finance/cashbook/entries:
+ *   get:
+ *     summary: One page of a money account's cash book, newest first, with the balance after each row
+ *     tags: [Finance]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: business, required: true, schema: { type: string } }
+ *       - { in: query, name: account, schema: { type: string }, description: "cash | bank | a money account id | partner:<id>" }
+ *       - { in: query, name: from, schema: { type: string, format: date-time }, description: "Inclusive; the client's local day start" }
+ *       - { in: query, name: to, schema: { type: string, format: date-time }, description: "Inclusive; the client's local day end" }
+ *       - { in: query, name: page, schema: { type: integer, default: 1 } }
+ *       - { in: query, name: limit, schema: { type: integer, default: 20, maximum: 50 } }
+ *     responses:
+ *       200: { description: "{ count, total, pagination, summary: { balanceNow, in, out, opening, closing }, data: rows[] }" }
+ *       404: { description: Business outside your scope }
+ */
+router.get(
+  '/cashbook/entries',
+  can('journal', 'read'),
+  validateQuery(cashbookEntriesQuerySchema),
+  getCashbookEntries
+);
 
 /**
  * @swagger
@@ -937,7 +1000,7 @@ router.get('/reports/courier-performance', can('reports', 'read'), getCourierPer
 router
   .route('/period-lock')
   .get(can('journal', 'read'), getPeriodLock)
-  .post(can('journal', 'update'), restrictBusinessToScope(), lockPeriod)
-  .delete(can('journal', 'delete'), unlockPeriod);
+  .post(can('accounting', 'create'), restrictBusinessToScope(), lockPeriod)
+  .delete(can('accounting', 'delete'), unlockPeriod);
 
 export default router;

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import mongoose from 'mongoose';
 import Account from '../models/Account.js';
+import FixedAsset from '../models/FixedAsset.js';
 import JournalEntry from '../models/JournalEntry.js';
 import Party from '../models/Party.js';
 import PeriodLock from '../models/PeriodLock.js';
@@ -30,6 +31,7 @@ export const HAND_KINDS = [
   JOURNAL_SOURCES.TRANSFER,
   JOURNAL_SOURCES.OPENING,
   JOURNAL_SOURCES.ASSET,
+  JOURNAL_SOURCES.ASSET_SALE,
   JOURNAL_SOURCES.LOAN,
   JOURNAL_SOURCES.DEPRECIATION,
   JOURNAL_SOURCES.CLOSING
@@ -45,6 +47,7 @@ export const KIND_WORDS = {
   [JOURNAL_SOURCES.TRANSFER]: 'money moved between places',
   [JOURNAL_SOURCES.OPENING]: 'opening balances',
   [JOURNAL_SOURCES.ASSET]: 'assets bought',
+  [JOURNAL_SOURCES.ASSET_SALE]: 'assets sold',
   [JOURNAL_SOURCES.LOAN]: 'loans',
   [JOURNAL_SOURCES.DEPRECIATION]: 'depreciation',
   [JOURNAL_SOURCES.CLOSING]: 'year-end closings'
@@ -169,6 +172,13 @@ export const planLedgerClear = async business => {
   };
 };
 
+/** The asset rows whose purchase or sale entry is being deleted. */
+const assetsOf = (business, ids) =>
+  FixedAsset.find({
+    business,
+    $or: [{ purchaseEntry: { $in: ids } }, { 'sale.entry': { $in: ids } }]
+  });
+
 /**
  * Write exactly what is about to be deleted to one JSON-lines file, so a wrong click can be rebuilt for this business
  * alone. Throws on any failure — the clear must not go ahead without its safety copy.
@@ -189,6 +199,10 @@ const snapshotLedger = async (business, ids) => {
   for await (const doc of PeriodLock.find({ business }).lean().cursor()) {
     await write(`${JSON.stringify({ collection: 'periodlocks', doc })}\n`);
   }
+  // The asset list goes with the entries that bought and sold its items.
+  for await (const doc of assetsOf(business, ids).lean().cursor()) {
+    await write(`${JSON.stringify({ collection: 'fixedassets', doc })}\n`);
+  }
   await new Promise((resolve, reject) => out.end(err => (err ? reject(err) : resolve())));
   return file;
 };
@@ -203,6 +217,10 @@ export const clearLedger = async ({ business, userId }) => {
 
   const { deletedCount } = await JournalEntry.deleteMany({ business, _id: { $in: plan.ids } });
   const locks = await PeriodLock.deleteMany({ business });
+  const assets = await FixedAsset.deleteMany({
+    business,
+    $or: [{ purchaseEntry: { $in: plan.ids } }, { 'sale.entry': { $in: plan.ids } }]
+  });
 
   logger.warn(
     {
@@ -211,6 +229,7 @@ export const clearLedger = async ({ business, userId }) => {
       cleared: plan.countsByKind,
       entries: deletedCount,
       periodLocks: locks.deletedCount,
+      assets: assets.deletedCount,
       snapshot
     },
     'ledger cleared'
@@ -219,6 +238,7 @@ export const clearLedger = async ({ business, userId }) => {
     deleted: deletedCount,
     countsByKind: plan.countsByKind,
     periodLocks: locks.deletedCount,
+    assets: assets.deletedCount,
     balances: plan.balances
   };
 };

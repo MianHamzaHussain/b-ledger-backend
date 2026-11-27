@@ -238,10 +238,36 @@ export const orderPaymentSchema = z.object({
 const reversalTrackingId = z.string().trim().max(60).optional();
 
 /**
+ * Exchange only SOME of an order's items: `[{ line, quantity }]`. Left out — or covering every piece — it is the
+ * whole-order exchange it always was; otherwise only those pieces' price is the customer's credit.
+ */
+const exchangeLines = z
+  .array(
+    z.object({
+      line: id,
+      quantity: z.coerce.number().int('Whole pieces only').min(1, 'At least 1 piece')
+    })
+  )
+  .min(1, 'Choose which items are exchanged')
+  .optional();
+
+/** "Free delivery": the shop pays the courier for this exchange. A reason is always kept. */
+const freeDelivery = {
+  freeCourier: z.boolean().optional(),
+  freeReason: z.string().trim().max(200, 'Keep the reason under 200 characters').optional()
+};
+const freeNeedsReason = [
+  v => !v.freeCourier || (v.freeReason && v.freeReason.length >= 3),
+  { message: 'Say why the delivery is free', path: ['freeReason'] }
+];
+
+/**
  * Exchange, item back first: the customer sends it on a courier of their choice,
  * at their cost — named here for reference, never on our invoice.
  */
 export const orderExchangeReturnSchema = z.object({
+  /** Only these items come back; the rest of the order is kept. */
+  lines: exchangeLines,
   returnCourierName: z.string().trim().max(60).optional(),
   /** Their parcel's tracking number, for reference and search. */
   reversalTrackingId,
@@ -262,7 +288,7 @@ const swapOrder = {
   deliveryAddress: z.string().optional()
 };
 /** Sent back first: the replacement may go with any courier. */
-const replacementOrder = { ...swapOrder, courier: id.optional() };
+const replacementOrder = { ...swapOrder, ...freeDelivery, courier: id.optional() };
 const hasSomething = [
   v => v.items.length + v.customWork.length > 0,
   { message: 'Add at least one item or custom work', path: ['items'] }
@@ -276,14 +302,26 @@ const hasSomething = [
 export const orderSwapSchema = z
   .object({
     ...swapOrder,
-    /** Where the customer paid the difference — a money account or partner:<id>. */
+    ...freeDelivery,
+    /** Only these items are swapped; the rest of the order is kept. */
+    lines: exchangeLines,
+    /** Where the customer paid — a money account or partner:<id>. */
     differenceAccount: z.string().min(1).optional(),
+    /**
+     * What the customer actually handed over (rupees). At least what is due; anything beyond the courier's cost is the
+     * shop's, booked as delivery income. Left out, it is exactly what is due.
+     */
+    amountReceived: money.optional(),
     reversalTrackingId,
     note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
   })
-  .refine(...hasSomething);
+  .refine(...hasSomething)
+  .refine(...freeNeedsReason);
 
-export const orderReplacementSchema = z.object(replacementOrder).refine(...hasSomething);
+export const orderReplacementSchema = z
+  .object(replacementOrder)
+  .refine(...hasSomething)
+  .refine(...freeNeedsReason);
 
 /** An advance the customer sent, or a refund we paid them. */
 export const orderMoneySchema = z.object({

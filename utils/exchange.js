@@ -137,6 +137,51 @@ export const creditForReplacement = (original, userId) => {
   };
 };
 
+/**
+ * Pieces of a DELIVERED order that came back for an exchange and whose credit no replacement has carried yet
+ * (`returnedItems` rows with `forExchange` and no `replacement`). A partial exchange leaves the order Delivered, so this
+ * — not the Exchanged status — is how a replacement finds what it is replacing.
+ */
+export const pendingExchangeRows = order =>
+  (order.returnedItems ?? []).filter(r => r.forExchange && !r.replacement);
+
+/** What those pending rows are worth to the customer, in paisa. */
+export const pendingCreditPaisa = order =>
+  pendingExchangeRows(order).reduce((sum, r) => sum + r.amountPaisa, 0);
+
+/** The credit a replacement of SOME items starts with: exactly those items' price, not everything the order holds. */
+export const partialCreditFor = (original, userId) => {
+  const amountPaisa = pendingCreditPaisa(original);
+  if (amountPaisa <= 0) return null;
+  const what = pendingExchangeRows(original)
+    .map(r => `${r.quantity} × ${r.productName}`)
+    .join(', ');
+  return {
+    kind: 'transfer-in',
+    amountPaisa,
+    accountName: `from exchange of #${original.orderNumber} (${what})`,
+    date: new Date(),
+    by: userId
+  };
+};
+
+/**
+ * The credit of a partial exchange moved to its replacement: a `transfer-out` row on the original, and the pending rows
+ * point at the replacement. The original is NOT marked as exchanged — most of it was kept; `exchangedFor` means the whole
+ * order was swapped, and only that.
+ */
+export const markPartialCreditMoved = (original, replacement, amountPaisa, userId) => {
+  original.customerMoney.push({
+    kind: 'transfer-out',
+    amountPaisa,
+    accountName: `moved to replacement #${replacement.orderNumber}`,
+    date: new Date(),
+    by: userId
+  });
+  for (const row of pendingExchangeRows(original)) row.replacement = replacement._id;
+  original.updatedBy = userId;
+};
+
 /** The original no longer holds the credit — its replacement does. */
 export const markCreditMoved = (original, replacement, amountPaisa, userId) => {
   original.customerMoney.push({

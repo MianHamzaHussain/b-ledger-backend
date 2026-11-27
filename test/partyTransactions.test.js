@@ -13,7 +13,11 @@ import {
 import Order from '../models/Order.js';
 import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
 import { accountBalance, partyBalance } from '../utils/ledger.js';
-import { recordPartyTransaction, getPartySummary } from '../controllers/partyController.js';
+import {
+  recordPartyTransaction,
+  getPartySummary,
+  reversePartyEntry
+} from '../controllers/partyController.js';
 import { updateOrderPayment } from '../controllers/orderController.js';
 import { partyTransactionSchema } from '../schemas/parties.js';
 import { toPaisa } from '../utils/money.js';
@@ -234,4 +238,80 @@ test('employee advance: cut straight from a salary payment', async () => {
   await txn(employee, { direction: 'gave', amount: 25000, deductAdvance: 5000 });
   assert.equal(await partyBalance(biz._id, employee._id), 0, 'advance used up');
   assert.equal(await balanceOf(biz, CODES.SALARIES), toPaisa(30000), 'salary = cash + advance cut');
+});
+
+const reverse = (party, entry) =>
+  runHandler(reversePartyEntry, { resource: party, params: { entryId: String(entry._id) } });
+
+test('employee: paying back part of an advance puts money in and shrinks what they hold', async () => {
+  const biz = await makeBusiness();
+  const employee = await makeParty(biz._id, 'employee');
+  await txn(employee, { direction: 'gave', amount: 8000, purpose: 'advance' });
+
+  const out = await txn(employee, { direction: 'got', amount: 3000, purpose: 'repay' });
+  assert.equal(await balanceOf(biz, CODES.CASH), -toPaisa(5000), '8,000 out, 3,000 back');
+  assert.equal(await partyBalance(biz._id, employee._id), toPaisa(5000), 'still holds 5,000');
+  const e = out.body.data;
+  const debit = e.lines.reduce((s, l) => s + l.debitPaisa, 0);
+  assert.equal(
+    debit,
+    e.lines.reduce((s, l) => s + l.creditPaisa, 0),
+    'balances'
+  );
+
+  await assert.rejects(
+    txn(employee, { direction: 'got', amount: 9000, purpose: 'repay' }),
+    /holds only Rs 5000 of advance/
+  );
+  assert.equal(await partyBalance(biz._id, employee._id), toPaisa(5000), 'nothing posted');
+});
+
+test('supplier: money back goes in the chosen account and settles what they owe us', async () => {
+  const biz = await makeBusiness();
+  const supplier = await makeParty(biz._id, 'supplier');
+  await txn(supplier, { direction: 'got', amount: 1000, category: CODES.PACKING });
+  await txn(supplier, { direction: 'gave', amount: 3000, method: 'bank' }); // an overpayment
+  assert.equal(await partyBalance(biz._id, supplier._id), toPaisa(2000), 'they owe us 2,000');
+
+  await txn(supplier, { direction: 'got', amount: 2000, purpose: 'refund', method: 'bank' });
+  assert.equal(await partyBalance(biz._id, supplier._id), 0, 'settled');
+  assert.equal(await balanceOf(biz, CODES.BANK), -toPaisa(1000), '3,000 out, 2,000 back');
+  assert.equal(await balanceOf(biz, CODES.PACKING), toPaisa(1000), 'the expense is untouched');
+});
+
+test('got with no purpose still books salary due / a bill (an older app)', async () => {
+  const biz = await makeBusiness();
+  const employee = await makeParty(biz._id, 'employee');
+  await txn(employee, { direction: 'got', amount: 30000 });
+  assert.equal(await partyBalance(biz._id, employee._id), -toPaisa(30000));
+  assert.equal(await balanceOf(biz, CODES.CASH), 0, 'no money moved');
+});
+
+test('repay is only for a worker and refund only for a supplier, and only as "got"', async () => {
+  const biz = await makeBusiness();
+  const supplier = await makeParty(biz._id, 'supplier');
+  const employee = await makeParty(biz._id, 'employee');
+  await assert.rejects(txn(supplier, { direction: 'got', amount: 10, purpose: 'repay' }), /worker/);
+  await assert.rejects(
+    txn(employee, { direction: 'got', amount: 10, purpose: 'refund' }),
+    /supplier/
+  );
+  assert.throws(() =>
+    partyTransactionSchema.parse({ direction: 'gave', amount: 10, purpose: 'repay' })
+  );
+});
+
+test('both new rows can be reversed from the Khata', async () => {
+  const biz = await makeBusiness();
+  const employee = await makeParty(biz._id, 'employee');
+  const supplier = await makeParty(biz._id, 'supplier');
+  await txn(employee, { direction: 'gave', amount: 500, purpose: 'advance' });
+  const back = (await txn(employee, { direction: 'got', amount: 200, purpose: 'repay' })).body.data;
+  await reverse(employee, back);
+  assert.equal(await partyBalance(biz._id, employee._id), toPaisa(500));
+
+  const refund = (await txn(supplier, { direction: 'got', amount: 300, purpose: 'refund' })).body
+    .data;
+  await reverse(supplier, refund);
+  assert.equal(await partyBalance(biz._id, supplier._id), 0);
 });

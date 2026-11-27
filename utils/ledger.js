@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import JournalEntry from '../models/JournalEntry.js';
 import PeriodLock from '../models/PeriodLock.js';
 import ErrorResponse from './errorResponse.js';
+import { pakistanDay } from './pakistanDay.js';
 
 const toId = value => new mongoose.Types.ObjectId(value);
 
@@ -16,10 +17,26 @@ const assertNotLocked = async (business, when) => {
   const lockedThrough = await latestLock(business);
   if (lockedThrough && new Date(when) <= lockedThrough) {
     throw new ErrorResponse(
-      `The books are locked through ${lockedThrough.toISOString().slice(0, 10)} — a later date is needed.`,
+      `The books are locked through ${pakistanDay(lockedThrough)} — a later date is needed.`,
       400
     );
   }
+};
+
+/**
+ * The date a **system-dated** entry (one a person did not choose the date of — a PostEx receipt's payout day) should
+ * be posted on. If that day is already locked, it goes on the first open moment — the start of the Pakistan day after
+ * the lock — instead of being refused, so late paperwork for a locked week can still be added. A hand-entered date is
+ * never moved: a person chose it, and the lock refuses it. Returns `{ date, movedFrom }` (`movedFrom` is the wanted
+ * date when it was moved, else null).
+ */
+export const openDateFor = async (business, wanted) => {
+  const lockedThrough = await latestLock(business);
+  const when = wanted || new Date();
+  if (lockedThrough && new Date(when) <= lockedThrough) {
+    return { date: new Date(lockedThrough.getTime() + 1), movedFrom: new Date(when) };
+  }
+  return { date: when, movedFrom: null };
 };
 
 /**
