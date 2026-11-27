@@ -153,6 +153,12 @@ export const partyTransactionLines = async (
   const business = party.business;
   const id = party._id;
   const name = party.name;
+  if (purpose === 'repay' && party.type !== PARTY_TYPES.EMPLOYEE) {
+    throw new ErrorResponse('Only a worker can pay back an advance', 400);
+  }
+  if (purpose === 'refund' && party.type !== PARTY_TYPES.SUPPLIER) {
+    throw new ErrorResponse('Only a supplier can give money back', 400);
+  }
 
   switch (party.type) {
     case PARTY_TYPES.SUPPLIER: {
@@ -165,6 +171,15 @@ export const partyTransactionLines = async (
       }
       // A bill: the supplier sold us something on credit. What it was for decides
       // which expense it is — without that, profit can't be right.
+      if (purpose === 'refund') {
+        // Money back from a supplier (a refund or an overpayment): Dr money / Cr Payables. It may take
+        // them past zero — then they owe us.
+        return {
+          lines: await moneyLines(business, id, paisa, 'got', CODES.ACCOUNTS_PAYABLE, money),
+          memo: `Money back from ${name}`,
+          source: JOURNAL_SOURCES.PAYMENT
+        };
+      }
       if (!category) throw new ErrorResponse('Choose what this bill was for', 400);
       if (PRODUCTION_COST_CODES.has(category)) throw productionCostError();
       const expense = await accountByCode(business, category);
@@ -191,6 +206,22 @@ export const partyTransactionLines = async (
       };
 
     case PARTY_TYPES.EMPLOYEE:
+      // An employee paying back an advance: Dr money / Cr Salaries Payable, never more than they hold.
+      if (direction === 'got' && purpose === 'repay') {
+        const payable = await accountByCode(business, CODES.SALARIES_PAYABLE);
+        const heldPaisa = Math.max(0, await partyAccountBalance(business, payable._id, id));
+        if (paisa > heldPaisa) {
+          throw new ErrorResponse(`${name} holds only Rs ${fromPaisa(heldPaisa)} of advance`, 400);
+        }
+        return {
+          lines: [
+            { account: money.account, debitPaisa: paisa },
+            { account: payable._id, party: id, creditPaisa: paisa }
+          ],
+          memo: `Advance paid back — ${name}`,
+          source: JOURNAL_SOURCES.SALARY
+        };
+      }
       // An advance is money they hold of ours until a later salary absorbs it.
       if (direction === 'gave' && purpose === 'advance') {
         return {

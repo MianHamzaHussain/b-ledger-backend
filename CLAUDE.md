@@ -813,13 +813,13 @@ opening posts against **Opening balances (3200, equity)**:
 `POST /parties/:id/transactions` — the DigiKhata action. The party's **type**
 picks the account (`utils/partyPosting.js`):
 
-| Party              | gave                                                     | got                                                                         |
-| ------------------ | -------------------------------------------------------- | --------------------------------------------------------------------------- |
-| supplier           | payment (AP)                                             | a **bill** — requires `category` (an expense code), expense owed on AP      |
-| reseller, customer | money given (AR)                                         | payment received (AR); a customer's is applied to its counter sales (§10.4) |
-| employee           | salary paid (§10.5), or `purpose: 'advance'`             | salary due                                                                  |
-| lender             | principal repaid (≤ owed; interest via `/finance/loans`) | loan taken                                                                  |
-| courier            | refused                                                  | refused — recorded on its invoice (§10.2)                                   |
+| Party              | gave                                                     | got                                                                                                                                                       |
+| ------------------ | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| supplier           | payment (AP)                                             | a **bill** — requires `category` (an expense code), expense owed on AP; or `purpose: 'refund'` — **money back** from them (Dr money / Cr AP, no category) |
+| reseller, customer | money given (AR)                                         | payment received (AR); a customer's is applied to its counter sales (§10.4)                                                                               |
+| employee           | salary paid (§10.5), or `purpose: 'advance'`             | salary due; or `purpose: 'repay'` — an **advance paid back** (Dr money / Cr Salaries Payable, never more than they hold)                                  |
+| lender             | principal repaid (≤ owed; interest via `/finance/loans`) | loan taken                                                                                                                                                |
+| courier            | refused                                                  | refused — recorded on its invoice (§10.2)                                                                                                                 |
 
 ### 10.4 Credit counter sales
 
@@ -1387,8 +1387,6 @@ cost more the longer it waits.
 
 - **Staff advances sit on Salaries Payable**, so an advance shows as a negative
   liability on the balance sheet rather than a separate asset. Profit is right.
-- **An employee repaying an advance in cash** has no endpoint; it is cut from
-  salary instead.
 - **Undoing a courier settlement** is an accountant action (reverse the entry in
   the journal); everyday users can't.
 - The older finance read endpoints (trial balance…) answer **403** for a business

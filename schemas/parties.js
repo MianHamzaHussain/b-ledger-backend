@@ -52,23 +52,31 @@ export const partyOpeningSchema = z.object({
   date: z.union([z.string(), z.date()]).optional()
 });
 
-export const partyTransactionSchema = z.object({
-  direction: z.enum(['gave', 'got']),
-  amount: z.coerce
-    .number({ error: 'Enter an amount' })
-    .positive('Enter an amount greater than zero'),
-  method: z.enum(['cash', 'bank']).optional(),
-  /** A money account id, or `partner:<id>` — wins over `method`. */
-  account: z.string().min(1).optional(),
-  /** A supplier's bill: the expense account code it was for. */
-  category: z.string().optional(),
-  /** An employee payment: salary (default) or an advance against later salary. */
-  purpose: z.enum(['salary', 'advance']).optional(),
-  /** An employee's salary: how much of their outstanding advance to cut from it. */
-  deductAdvance: z.coerce.number().min(0, 'Can not be negative').optional(),
-  date: z.union([z.string(), z.date()]).optional(),
-  memo: z.string().trim().max(200).optional()
-});
+export const partyTransactionSchema = z
+  .object({
+    direction: z.enum(['gave', 'got']),
+    amount: z.coerce
+      .number({ error: 'Enter an amount' })
+      .positive('Enter an amount greater than zero'),
+    method: z.enum(['cash', 'bank']).optional(),
+    /** A money account id, or `partner:<id>` — wins over `method`. */
+    account: z.string().min(1).optional(),
+    /** A supplier's bill: the expense account code it was for. */
+    category: z.string().optional(),
+    /**
+     * An employee payment: salary (default) or an advance against later salary. On "got": `repay` — an employee
+     * paying back an advance — or `refund` — a supplier giving money back. Left out, "got" is salary due / a bill.
+     */
+    purpose: z.enum(['salary', 'advance', 'repay', 'refund']).optional(),
+    /** An employee's salary: how much of their outstanding advance to cut from it. */
+    deductAdvance: z.coerce.number().min(0, 'Can not be negative').optional(),
+    date: z.union([z.string(), z.date()]).optional(),
+    memo: z.string().trim().max(200).optional()
+  })
+  .refine(v => !(v.purpose === 'repay' || v.purpose === 'refund') || v.direction === 'got', {
+    message: 'Paying back or giving money back is money you got',
+    path: ['purpose']
+  });
 
 /** A courier's invoice — what it paid (COD per order) and billed (charge per parcel). */
 export const courierInvoiceSchema = z.object({
