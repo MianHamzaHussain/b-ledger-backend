@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "0d455db243d9750908d8bb06b2c3037d"
+client_id = "f4a75c5530d2af46ef5332c6df03d26e"
 name = "B Ledger"
 application_url = "https://backend.bledger.org/api/v1/integrations/shopify/install"
 embedded = false
