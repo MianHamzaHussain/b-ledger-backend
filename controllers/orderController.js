@@ -2041,7 +2041,7 @@ export const addOrderAdvance = asyncHandler(async (req, res) => {
 export const addOrderRefund = asyncHandler(async (req, res) => {
   const order = req.resource;
   const money = await orderMoney(order, req);
-  const { amount, date, note, early, reason } = req.body;
+  const { amount, date, note, early, reason, dropExchange } = req.body;
   await recordRefund(order, {
     amount,
     money,
@@ -2050,7 +2050,8 @@ export const addOrderRefund = asyncHandler(async (req, res) => {
     userId: req.user.id,
     user: req.user,
     early,
-    reason
+    reason,
+    dropExchange
   });
   res.status(201).json({ success: true, data: order });
 });

@@ -33,6 +33,7 @@ import {
   orderAirwayBillsSchema,
   orderPartialReturnSchema,
   orderMoneySchema,
+  orderRefundSchema,
   orderCreditSchema,
   orderWaiveCostsSchema,
   customCostSchema
@@ -988,7 +989,7 @@ router.post(
   '/:id/refunds',
   can('orders', 'update'),
   loadScoped(Order),
-  validate(orderMoneySchema),
+  validate(orderRefundSchema),
   addOrderRefund
 );
 router.delete(

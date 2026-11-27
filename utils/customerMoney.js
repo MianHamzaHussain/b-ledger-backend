@@ -8,6 +8,7 @@ import { isCounterSale, heldPaisaOf } from '../models/Order.js';
 import { upsertCustomerParty } from './customerParty.js';
 import { logActivity } from './orderActivity.js';
 import { settleCourierCosts } from './courierCosts.js';
+import { pendingCreditPaisa, pendingExchangeRows } from './exchange.js';
 
 /**
  * Money that passes directly between the customer and us on an order — an
@@ -96,7 +97,7 @@ export const recordAdvance = async (order, { amount, money, date, note, userId }
 /** Pay the customer back — at most what is due to them. */
 export const recordRefund = async (
   order,
-  { amount, money, date, note, userId, user, early, reason }
+  { amount, money, date, note, userId, user, early, reason, dropExchange = false }
 ) => {
   // The parcel is still out: it may yet come back, and the customer is refunded
   // once it's delivered (or returned) — never while the courier has it.
@@ -111,6 +112,25 @@ export const recordRefund = async (
       order.refundDuePaisa > 0
         ? `Only ${formatRupees(order.refundDuePaisa / 100)} is due back on this order`
         : 'Nothing is due back on this order',
+      400
+    );
+  }
+
+  // Some items came back for an exchange and no replacement has carried their credit yet. That money is the
+  // customer's CREDIT for the replacement, not a refund: paying it out is one explicit choice that ends the exchange —
+  // otherwise it could be paid back and still ride into the replacement.
+  const waitingPaisa = order.status === ORDER_STATUS.DELIVERED ? pendingCreditPaisa(order) : 0;
+  if (dropExchange) {
+    if (waitingPaisa <= 0) throw new ErrorResponse('No exchange is waiting on this order', 400);
+    if (amountPaisa !== waitingPaisa) {
+      throw new ErrorResponse(
+        `Pay back exactly ${formatRupees(waitingPaisa / 100)} — the credit for the replacement`,
+        400
+      );
+    }
+  } else if (waitingPaisa > 0 && amountPaisa > order.refundDuePaisa - waitingPaisa) {
+    throw new ErrorResponse(
+      'This is credit for a replacement — send the replacement, or choose Pay it back instead',
       400
     );
   }
@@ -139,6 +159,17 @@ export const recordRefund = async (
       text: `Refund ${formatRupees(amount)} paid${money.name ? ` from ${money.name}` : ''}`
     }
   );
+  if (dropExchange) {
+    for (const row of pendingExchangeRows(order)) row.dropped = true;
+    logActivity(
+      order,
+      { id: userId },
+      {
+        kind: 'money',
+        text: `Customer took ${formatRupees(amount)} back instead of a replacement`
+      }
+    );
+  }
   order.updatedBy = userId;
   await order.save();
   return order;

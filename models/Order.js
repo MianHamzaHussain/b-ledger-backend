@@ -190,7 +190,9 @@ const ReturnedItemSchema = new mongoose.Schema(
     /** A swap at the door: the old pieces are still with the customer — their stock returns when they arrive. */
     stockPending: { type: Boolean },
     /** The replacement that carried their credit. */
-    replacement: { type: mongoose.Schema.ObjectId, ref: 'Order' }
+    replacement: { type: mongoose.Schema.ObjectId, ref: 'Order' },
+    /** The customer took the money instead of a replacement: the exchange ended and the credit was paid back. */
+    dropped: { type: Boolean }
   },
   { _id: true }
 );

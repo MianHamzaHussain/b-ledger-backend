@@ -334,6 +334,11 @@ export const orderMoneySchema = z.object({
   reason: z.string().trim().max(300, 'Keep the reason under 300 characters').optional()
 });
 
+/** A refund: the same fields, and the one choice that ends a waiting exchange by paying its credit back. */
+export const orderRefundSchema = orderMoneySchema.extend({
+  dropExchange: z.boolean().optional()
+});
+
 /** A failed delivery attempt — the reason from a fixed list, and an optional note. */
 export const orderAttemptSchema = z.object({
   reason: z.enum(Object.values(ATTEMPT_REASONS), { error: 'Choose why it failed' }),

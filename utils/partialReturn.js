@@ -7,6 +7,7 @@ import { toPaisa, fromPaisa } from './money.js';
 import { JOURNAL_SOURCES, ORDER_STATUS } from './constants.js';
 import { isCounterSale } from '../models/Order.js';
 import { logActivity, rupees } from './orderActivity.js';
+import { pendingExchangeRows } from './exchange.js';
 
 /**
  * The customer kept some pieces of a DELIVERED order and sent the others back (R9-13). The standard
@@ -35,6 +36,19 @@ export const assertPartlyReturnable = order => {
   if (order.exchangedFor) throw new ErrorResponse('This order has already been exchanged', 400);
   if (isCounterSale(order)) {
     throw new ErrorResponse('A counter sale is settled at the counter, not here', 400);
+  }
+  // One exchange at a time: a second one would mix its credit with the first's (the replacement carries every waiting row).
+  if (pendingExchangeRows(order).length) {
+    throw new ErrorResponse(
+      'Finish the exchange already started on this order first — send its replacement, or pay the credit back',
+      400
+    );
+  }
+  if (order.awaitingReturn) {
+    throw new ErrorResponse(
+      'The old item from the last swap has not come back yet — mark it received first',
+      400
+    );
   }
 };
 

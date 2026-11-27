@@ -21,14 +21,17 @@ import {
   createReplacement,
   swapOrder,
   receiveReturn,
-  getExchangeQuote
+  getExchangeQuote,
+  addOrderRefund,
+  partialReturnOrder
 } from '../controllers/orderController.js';
 import {
   orderCreateSchema,
   orderStatusSchema,
   orderExchangeReturnSchema,
   orderReplacementSchema,
-  orderSwapSchema
+  orderSwapSchema,
+  orderRefundSchema
 } from '../schemas/orders.js';
 
 /**
@@ -307,6 +310,11 @@ test('the rest of the order can be exchanged later; more than is left is refused
     items: [item(ctx, 'S', 16000)]
   });
 
+  // The first swap's old item must come back before another exchange starts.
+  await runHandler(receiveReturn, {
+    resource: await Order.findById(original._id),
+    body: {}
+  });
   const again = await Order.findById(original._id);
   await assert.rejects(
     swap(ctx, again, {
@@ -346,4 +354,104 @@ test('a counter sale or an order not yet delivered can not be exchanged in part'
     }),
     /Only a delivered order/
   );
+});
+
+/** Some items came back for an exchange; their credit is waiting for a replacement. */
+async function waitingExchange(ctx) {
+  const original = await shakira(ctx);
+  return runHandler(exchangeReturn, {
+    resource: original,
+    body: orderExchangeReturnSchema.parse({ lines: [{ line: lineOf(original, 0), quantity: 1 }] })
+  }).then(r => Order.findById(r.body.data._id));
+}
+
+const refund = (ctx, order, body) =>
+  runHandler(addOrderRefund, {
+    resource: order,
+    body: orderRefundSchema.parse({ account: ctx.cash, ...body })
+  }).then(r => Order.findById(r.body.data._id));
+
+test('credit waiting for a replacement can not be paid out as a plain refund — it would be paid twice', async () => {
+  const ctx = await setup();
+  const back = await waitingExchange(ctx);
+  await assert.rejects(refund(ctx, back, { amount: 16000 }), /credit for a replacement/);
+  assert.equal(await bal(ctx, CODES.CASH), 0, 'nothing was paid');
+  const still = await Order.findById(back._id);
+  assert.equal(still.customerMoney.filter(m => m.kind === 'refund').length, 0);
+});
+
+test('Pay it back instead: exactly the credit, ends the exchange, no replacement can then take it', async () => {
+  const ctx = await setup();
+  const back = await waitingExchange(ctx);
+  await assert.rejects(
+    refund(ctx, back, { amount: 10000, dropExchange: true }),
+    /Pay back exactly/
+  );
+  const paid = await refund(ctx, back, { amount: 16000, dropExchange: true });
+  assert.equal(paid.refundDuePaisa, 0);
+  assert.equal(paid.returnedItems[0].dropped, true);
+  assert.ok(paid.activity.some(a => /instead of a replacement/.test(a.text)));
+  assert.equal(await bal(ctx, CODES.CASH), -1600000);
+  await assert.rejects(
+    runHandler(createReplacement, {
+      resource: paid,
+      body: orderReplacementSchema.parse({ items: [item(ctx, 'S', 1)] })
+    }),
+    /Record the item coming back first/
+  );
+  await assert.rejects(
+    refund(ctx, paid, { amount: 1, dropExchange: true }),
+    /Nothing is due back|No exchange is waiting/
+  );
+  await everyEntryBalances(ctx);
+});
+
+test('one exchange at a time: a second partial exchange, swap or refund waits for the first to finish', async () => {
+  const ctx = await setup();
+  const original = await shakira(ctx);
+  const waiting = await runHandler(exchangeReturn, {
+    resource: original,
+    body: orderExchangeReturnSchema.parse({ lines: [{ line: lineOf(original, 0), quantity: 1 }] })
+  }).then(r => Order.findById(r.body.data._id));
+  const second = [{ line: lineOf(waiting, 1), quantity: 1 }];
+  const stockBefore = await stockOf(ctx, 'L');
+  await assert.rejects(
+    runHandler(exchangeReturn, {
+      resource: waiting,
+      body: orderExchangeReturnSchema.parse({ lines: second })
+    }),
+    /Finish the exchange already started/
+  );
+  await assert.rejects(
+    swap(ctx, waiting, { lines: second, items: [item(ctx, 'S', 9000)] }),
+    /Finish the exchange already started/
+  );
+  await assert.rejects(
+    runHandler(partialReturnOrder, { resource: waiting, body: { lines: second } }),
+    /Finish the exchange already started/
+  );
+  assert.equal(await stockOf(ctx, 'L'), stockBefore, 'nothing moved');
+});
+
+test('a swap whose old item has not arrived blocks the next exchange the same way', async () => {
+  const ctx2 = await setup();
+  const o2 = await shakira(ctx2);
+  const sw = await swap(ctx2, o2, {
+    lines: [{ line: lineOf(o2, 0), quantity: 1 }],
+    items: [item(ctx2, 'S', 16000)],
+    amountReceived: 268.25
+  });
+  assert.ok(sw);
+  const after = await Order.findById(o2._id);
+  assert.equal(after.awaitingReturn, true);
+  await assert.rejects(
+    runHandler(exchangeReturn, {
+      resource: after,
+      body: orderExchangeReturnSchema.parse({ lines: [{ line: lineOf(after, 1), quantity: 1 }] })
+    }),
+    /has not come back yet/
+  );
+  await runHandler(receiveReturn, { resource: after, body: {} });
+  const done = await Order.findById(o2._id);
+  assert.equal(done.awaitingReturn, false);
 });
