@@ -17,10 +17,39 @@ const ShopifyConnectionSchema = new mongoose.Schema(
     shop: { type: String, required: true, trim: true, lowercase: true },
     /** The store's name as Shopify reports it, for display. */
     shopName: { type: String, trim: true },
-    clientId: { type: String, required: true, trim: true },
+    /**
+     * How it was connected. `client-credentials`: the business made its own Shopify app and typed its Client ID and secret
+     * (the old way, kept until every business has moved). `oauth`: B Ledger's own Shopify app was installed with one click —
+     * no keys, and the tokens expire (an hour) and are renewed from a refresh token (90 days).
+     */
+    authType: {
+      type: String,
+      enum: ['client-credentials', 'oauth'],
+      default: 'client-credentials'
+    },
+    clientId: {
+      type: String,
+      trim: true,
+      required: [
+        function needsClientId() {
+          return this.authType !== 'oauth';
+        },
+        'Enter the Client ID'
+      ]
+    },
     clientSecretEnc: { type: String, select: false },
     accessTokenEnc: { type: String, select: false },
     tokenExpiresAt: { type: Date },
+    /** oauth only: renews the access token. Rotates on every renewal, so the pair is always saved together. */
+    refreshTokenEnc: { type: String, select: false },
+    refreshTokenExpiresAt: { type: Date },
+    /** Counts renewals: a renewal only lands if nobody else renewed first, so two never overwrite one another. */
+    tokenVersion: { type: Number, default: 0 },
+    /** What the store allowed (`read_orders`). */
+    scopes: { type: String },
+    /** Set when Shopify says the app was removed from the store; the connection then waits to be redacted or reconnected. */
+    uninstalledAt: { type: Date },
+
     isActive: { type: Boolean, default: true },
     /** Orders placed before this moment are never brought in: automation starts the day it is connected. */
     goLiveAt: { type: Date, required: true },
@@ -34,6 +63,10 @@ const ShopifyConnectionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-ShopifyConnectionSchema.index({ shop: 1 });
+// One store belongs to one business at a time. (A disconnected or removed connection no longer holds the store.)
+ShopifyConnectionSchema.index(
+  { shop: 1 },
+  { unique: true, partialFilterExpression: { isActive: true }, name: 'shop_active_unique' }
+);
 
 export default mongoose.model('ShopifyConnection', ShopifyConnectionSchema);

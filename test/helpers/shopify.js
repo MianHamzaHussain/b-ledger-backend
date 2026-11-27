@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import { reply } from './courier.js';
+import { userId } from './db.js';
 import { shopifyDeps } from '../../utils/shopify/client.js';
 
 /**
@@ -11,12 +13,57 @@ export const fakeShopify = ({
   tokenBody,
   shopName = 'Test Store ',
   ordersFail = false,
-  webhookFail = false
+  webhookFail = false,
+  // One-click (OAuth) connections: what the store grants, how long an access token lasts, and whether a renewal is refused.
+  grantedScope = 'read_orders',
+  accessTtl = 3600,
+  codeStatus = 200,
+  refreshStatus = 200,
+  // Runs in the middle of a renewal — to model another request renewing at the same moment.
+  onRefresh
 } = {}) => {
-  const state = { orders, calls: [], tokenRequests: 0, orderQueries: 0, webhookCalls: 0 };
+  const state = {
+    orders,
+    calls: [],
+    tokenRequests: 0,
+    orderQueries: 0,
+    webhookCalls: 0,
+    codeExchanges: [],
+    refreshes: [],
+    graphqlTokens: []
+  };
+  let rotation = 0;
   shopifyDeps.fetchImpl = async (url, init) => {
     const u = String(url);
     state.calls.push(u);
+    const sent = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+    if (u.includes('/admin/oauth/access_token') && sent?.code) {
+      state.codeExchanges.push(sent);
+      if (codeStatus !== 200) return reply({ error: 'invalid_request' }, codeStatus);
+      rotation += 1;
+      return reply({
+        access_token: `at_${rotation}`,
+        refresh_token: `rt_${rotation}`,
+        scope: grantedScope,
+        expires_in: accessTtl,
+        refresh_token_expires_in: 7_776_000
+      });
+    }
+    if (u.includes('/admin/oauth/access_token') && sent?.grant_type === 'refresh_token') {
+      state.refreshes.push(sent);
+      if (onRefresh) await onRefresh(sent);
+      if (refreshStatus !== 200) return reply({ error: 'invalid_grant' }, refreshStatus);
+      rotation += 1;
+      return reply({
+        access_token: `at_${rotation}`,
+        refresh_token: `rt_${rotation}`,
+        scope: grantedScope,
+        expires_in: accessTtl,
+        refresh_token_expires_in: 7_776_000
+      });
+    }
+    if (u.includes('/graphql.json'))
+      state.graphqlTokens.push(init?.headers?.['X-Shopify-Access-Token']);
     if (u.includes('/admin/oauth/access_token')) {
       state.tokenRequests += 1;
       if (tokenStatus !== 200) return reply(tokenBody ?? {}, tokenStatus);
@@ -127,3 +174,86 @@ export const orderNode = ({
     ]
   }
 });
+
+/** What a handler did to the response, for the pages that answer with redirects (the install trip) and the webhook. */
+export const callHandler = async (handler, req = {}) => {
+  const headers = Object.fromEntries(
+    Object.entries(req.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value])
+  );
+  const res = {
+    statusCode: 200,
+    redirectedTo: null,
+    cookies: {},
+    cleared: [],
+    body: undefined,
+    ended: false,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    end() {
+      this.ended = true;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+      return this;
+    },
+    redirect(target) {
+      this.statusCode = 302;
+      this.redirectedTo = target;
+      return this;
+    },
+    cookie(name, value, options) {
+      this.cookies[name] = { value, ...options };
+      return this;
+    },
+    clearCookie(name) {
+      this.cleared.push(name);
+      return this;
+    },
+    get headersSent() {
+      return this.ended || this.redirectedTo !== null || this.body !== undefined;
+    }
+  };
+  const request = {
+    user: { id: userId },
+    query: {},
+    body: {},
+    cookies: {},
+    ...req,
+    get: name => headers[name.toLowerCase()]
+  };
+  // Done when the response is written AND the handler has finished (a webhook answers first, then works).
+  await new Promise((resolve, reject) => {
+    const next = err => reject(err instanceof Error ? err : new Error(String(err)));
+    let answered;
+    const wasAnswered = new Promise(done => {
+      answered = done;
+    });
+    for (const method of ['end', 'json', 'redirect']) {
+      const original = res[method].bind(res);
+      res[method] = (...args) => {
+        const out = original(...args);
+        answered();
+        return out;
+      };
+    }
+    Promise.all([Promise.resolve(handler(request, res, next)), wasAnswered]).then(resolve, reject);
+  });
+  return res;
+};
+
+/** Shopify's signature on a redirect: the query without `hmac`, sorted, HMAC-SHA256 in hex. */
+export const signQuery = (query, secret) => {
+  const message = Object.entries(query)
+    .filter(([key]) => key !== 'hmac')
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+  return { ...query, hmac: crypto.createHmac('sha256', secret).update(message).digest('hex') };
+};
+
+/** Shopify's signature on a webhook: base64 HMAC-SHA256 over the exact bytes. */
+export const signBody = (raw, secret) =>
+  crypto.createHmac('sha256', secret).update(raw).digest('base64');

@@ -9,6 +9,8 @@ import ErrorResponse from '../utils/errorResponse.js';
 import logger from '../utils/logger.js';
 import { decryptSecret, encryptSecret } from '../utils/secretBox.js';
 import { cleanShop, graphql, requestToken } from '../utils/shopify/client.js';
+import { assertBusinessInScope } from '../utils/shopify/connect.js';
+import { isConfigured } from '../utils/shopify/oauth.js';
 import { retryHolds } from '../utils/shopify/importer.js';
 import { actorFor, registerWebhook, syncConnection } from '../utils/shopify/sync.js';
 
@@ -25,26 +27,26 @@ import { actorFor, registerWebhook, syncConnection } from '../utils/shopify/sync
  * @route  POST   /api/v1/integrations/shopify/holds/:id/ignore     (integrations:update)
  */
 
-/** A business outside the person's own is simply not found (the same rule as every scoped list). */
-const assertInScope = (req, business) => {
-  const allowed = req.accessFilter?.business?.$in;
-  if (allowed && !allowed.map(String).includes(String(business))) {
-    throw new ErrorResponse('Not found', 404);
-  }
-};
+const assertInScope = assertBusinessInScope;
 
 const view = async connection => {
-  if (!connection) return { connected: false };
+  if (!connection) return { connected: false, configured: isConfigured() };
   const [imported, waiting] = await Promise.all([
     Order.countDocuments({ business: connection.business, shopifyOrderIds: { $exists: true } }),
     ShopifyHold.countDocuments({ business: connection.business, status: 'open' })
   ]);
+  const oauth = connection.authType === 'oauth';
   return {
     connected: true,
+    configured: isConfigured(),
+    // One-click (`oauth`) or the old way (the business made its own app and typed its keys).
+    authType: connection.authType ?? 'client-credentials',
+    // An inactive one-click connection cannot work until it is connected again (the store removed the app, or Shopify refused).
+    needsReconnect: oauth && !connection.isActive,
     shop: connection.shop,
     shopName: connection.shopName ?? null,
-    clientId: connection.clientId,
-    hasSecret: true,
+    clientId: oauth ? null : connection.clientId,
+    hasSecret: !oauth,
     isActive: connection.isActive,
     goLiveAt: connection.goLiveAt,
     lastSyncAt: connection.lastSyncAt ?? null,
@@ -86,12 +88,13 @@ export const connectShopify = asyncHandler(async (req, res) => {
         clientSecretEnc: encryptSecret(secret),
         accessTokenEnc: encryptSecret(token.accessToken),
         tokenExpiresAt: token.expiresAt,
+        authType: 'client-credentials',
         isActive: true,
         updatedBy: req.user.id
       },
       // Automation starts the day it is connected: older orders are never brought in.
       $setOnInsert: { goLiveAt: new Date(), createdBy: req.user.id },
-      $unset: { lastError: 1 }
+      $unset: { lastError: 1, refreshTokenEnc: 1, uninstalledAt: 1 }
     },
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   ).select('+clientSecretEnc +accessTokenEnc');

@@ -46,7 +46,18 @@ const logger = pino({
       '*.password',
       // A courier key is typed once into the connect box — never written to a log.
       'req.body.token',
-      '*.tokenEnc'
+      '*.tokenEnc',
+      // Shopify's one-time code, our state and ticket, and the tokens: none of them is ever written to a log.
+      'req.query.code',
+      'req.query.state',
+      'req.query.ticket',
+      'req.query.hmac',
+      'req.body.ticket',
+      'req.body.clientSecret',
+      '*.access_token',
+      '*.refresh_token',
+      '*.accessToken',
+      '*.refreshToken'
     ],
     censor: '[redacted]'
   },

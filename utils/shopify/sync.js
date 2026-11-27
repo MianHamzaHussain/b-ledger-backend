@@ -43,7 +43,7 @@ const ORDERS = `
         currentTotalPriceSet { shopMoney { amount } }
         totalShippingPriceSet { shopMoney { amount } }
         totalDiscountsSet { shopMoney { amount } }
-        customer { firstName lastName phone email }
+        customer { firstName lastName phone }
         shippingAddress { name phone address1 address2 city province zip }
         lineItems(first: 50) {
           nodes { title variantTitle sku quantity originalUnitPriceSet { shopMoney { amount } } variant { id } product { id } }
@@ -202,6 +202,8 @@ export const registerWebhook = async connection => {
  * no one to reconnect. Quiet and cheap: nothing happens without a public address, and a failure waits an hour.
  */
 const ensureWebhook = async connection => {
+  // A one-click connection is covered by the app's own webhooks (declared once for every store): nothing to register.
+  if (connection.authType === 'oauth') return;
   if (connection.webhookActive || !process.env.API_PUBLIC_URL) return;
   const last = webhookTried.get(String(connection._id));
   if (last && Date.now() - last < WEBHOOK_RETRY_MS) return;
