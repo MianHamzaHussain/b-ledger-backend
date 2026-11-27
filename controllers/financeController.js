@@ -41,6 +41,12 @@ import { toPaisa, fromPaisa } from '../utils/money.js';
 import { ACCOUNT_TYPES, JOURNAL_SOURCES, PARTY_TYPES } from '../utils/constants.js';
 import { parseBusinessDate, endOfPakistanDay, pakistanDay } from '../utils/pakistanDay.js';
 import { userCan } from '../utils/permissions.js';
+import {
+  assetEntryGuard,
+  assetNameFor,
+  buyAsset,
+  markPurchaseReversed
+} from '../utils/fixedAssets.js';
 
 /** A validated, positive paisa amount, or an ErrorResponse-throwing reject. */
 const amountPaisa = raw => {
@@ -279,7 +285,6 @@ export const recordAsset = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Choose the supplier this is owed to', 400));
   await ensureChart(business);
 
-  const asset = await accountByCode(business, CODES.FIXED_ASSETS);
   const credit = onCredit
     ? {
         account: (await accountByCode(business, CODES.ACCOUNTS_PAYABLE))._id,
@@ -291,14 +296,17 @@ export const recordAsset = asyncHandler(async (req, res, next) => {
         creditPaisa: paisa
       };
 
-  await respondPosted(res, {
+  // The asset is listed by name so a later sale knows what it cost; an older app sends only a memo.
+  const { asset, entry } = await buyAsset({
     business,
+    name: assetNameFor({ name: req.body.name, memo, date }),
+    note: req.body.name ? memo : undefined,
+    costPaisa: paisa,
+    credit,
     date,
-    memo: memo || 'Fixed asset purchase',
-    source: { kind: JOURNAL_SOURCES.ASSET },
-    lines: [{ account: asset._id, debitPaisa: paisa }, credit],
     userId: req.user.id
   });
+  res.status(201).json({ success: true, data: { ...entry.toObject(), asset } });
 });
 
 /**
@@ -739,10 +747,15 @@ export const reverseJournalEntry = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Undo this on the material instead', 400));
   }
 
+  // An asset's sale is undone on the asset; a sold asset's purchase can not be reversed under it.
+  const guarded = await assetEntryGuard(entry);
+  if (guarded.refuse) return next(new ErrorResponse(guarded.refuse, 400));
+
   const reversal = await reverseEntry(entry._id, {
     userId: req.user.id,
     memo: req.body.memo
   });
+  if (guarded.asset) await markPurchaseReversed(guarded.asset, req.user.id);
   // Undoing a courier invoice reopens its CODs and the charges it billed.
   if (entry.source?.kind === JOURNAL_SOURCES.COURIER_INVOICE) {
     await undoCourierInvoice(entry._id);

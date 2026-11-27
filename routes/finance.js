@@ -14,6 +14,8 @@ import {
   salarySchema,
   manualSchema,
   assetSchema,
+  assetSellSchema,
+  assetsQuerySchema,
   loanSchema,
   depreciationSchema,
   closeSchema,
@@ -28,6 +30,13 @@ import {
 } from '../schemas/finance.js';
 import JournalEntry from '../models/JournalEntry.js';
 import Account from '../models/Account.js';
+import FixedAsset from '../models/FixedAsset.js';
+import {
+  getAssets,
+  getAsset,
+  sellFixedAsset,
+  undoFixedAssetSale
+} from '../controllers/fixedAssetController.js';
 import {
   getMoneyAccounts,
   lookupMoneyAccounts,
@@ -316,6 +325,33 @@ router.post(
   restrictBusinessToScope(),
   validate(assetSchema),
   recordAsset
+);
+
+/**
+ * @swagger
+ * /finance/assets:
+ *   get: { summary: The fixed assets of a business, with what became of each, tags: [Finance], security: [{ bearerAuth: [] }], parameters: [{ in: query, name: business, required: true, schema: { type: string } }, { in: query, name: status, schema: { type: string, enum: [in-use, sold, thrown-away] } }], responses: { 200: { description: "{ count, data: assets[] } with cost, book value and sale in rupees" } } }
+ * /finance/assets/{id}:
+ *   get: { summary: One fixed asset, tags: [Finance], security: [{ bearerAuth: [] }], responses: { 200: { description: The asset } } }
+ * /finance/assets/{id}/sell:
+ *   post: { summary: Sell an asset or throw it away — the gain or loss is booked by the app, tags: [Finance], security: [{ bearerAuth: [] }], responses: { 200: { description: The asset, with gainLoss } } }
+ * /finance/assets/{id}/undo-sale:
+ *   post: { summary: Undo a sale or throw-away, tags: [Finance], security: [{ bearerAuth: [] }], responses: { 200: { description: The asset, back in use } } }
+ */
+router.get('/assets', can('journal', 'read'), validateQuery(assetsQuerySchema), getAssets);
+router.get('/assets/:id', can('journal', 'read'), loadScoped(FixedAsset), getAsset);
+router.post(
+  '/assets/:id/sell',
+  can('journal', 'create'),
+  loadScoped(FixedAsset),
+  validate(assetSellSchema),
+  sellFixedAsset
+);
+router.post(
+  '/assets/:id/undo-sale',
+  can('journal', 'create'),
+  loadScoped(FixedAsset),
+  undoFixedAssetSale
 );
 
 /**

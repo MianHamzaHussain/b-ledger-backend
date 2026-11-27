@@ -184,7 +184,16 @@ export const JOURNAL_SOURCES = {
   // Raw material bought into stock, or written off / found at a count.
   MATERIAL: 'material',
   // Finished goods bought from a supplier, and any of them sent back.
-  GOODS_RECEIPT: 'goods-receipt'
+  GOODS_RECEIPT: 'goods-receipt',
+  // A fixed asset sold or thrown away (the purchase is `asset`).
+  ASSET_SALE: 'asset-sale'
+};
+
+/** Where a fixed asset stands. */
+export const ASSET_STATUS = {
+  IN_USE: 'in-use',
+  SOLD: 'sold',
+  THROWN_AWAY: 'thrown-away'
 };
 
 /**

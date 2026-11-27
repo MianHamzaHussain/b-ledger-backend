@@ -40,6 +40,12 @@ export const CODES = {
   // What was kept back from a customer's refund — the delivery charge and tax
   // on a parcel they sent back, or their share of the return pickup.
   CHARGES_KEPT: '4100',
+  // What customers pay us for delivery beyond what the courier charged (a swap's extra), and what an asset sold for
+  // above its book value.
+  DELIVERY_INCOME: '4200',
+  ASSET_SALE_GAIN: '4300',
+  // What an asset sold, or thrown away, for less than its book value.
+  ASSET_SALE_LOSS: '5260',
   COGS: '5000',
   RAW_MATERIAL: '5100',
   TAILORING: '5110',
@@ -112,6 +118,8 @@ export const DEFAULT_CHART = [
   { code: CODES.RETAINED_EARNINGS, name: 'Retained Earnings', type: EQUITY },
   { code: CODES.SALES, name: 'Sales', type: INCOME },
   { code: CODES.CHARGES_KEPT, name: 'Charges kept from refunds', type: INCOME },
+  { code: CODES.DELIVERY_INCOME, name: 'Delivery charged to customers', type: INCOME },
+  { code: CODES.ASSET_SALE_GAIN, name: 'Gain on selling assets', type: INCOME },
   { code: CODES.COGS, name: 'Cost of Goods Sold', type: EXPENSE },
   { code: CODES.RAW_MATERIAL, name: 'Raw Material', type: EXPENSE },
   { code: CODES.TAILORING, name: 'Tailoring', type: EXPENSE },
@@ -130,7 +138,8 @@ export const DEFAULT_CHART = [
   { code: CODES.OTHER_ADS, name: 'Other ads (TikTok, Google, influencers)', type: EXPENSE },
   { code: CODES.MISC_EXPENSE, name: 'Miscellaneous', type: EXPENSE },
   { code: CODES.CUSTOM_WRITE_OFF, name: 'Custom work written off', type: EXPENSE },
-  { code: CODES.MATERIAL_LOSS, name: 'Material wasted or lost', type: EXPENSE }
+  { code: CODES.MATERIAL_LOSS, name: 'Material wasted or lost', type: EXPENSE },
+  { code: CODES.ASSET_SALE_LOSS, name: 'Loss on selling assets', type: EXPENSE }
 ];
 
 /**
