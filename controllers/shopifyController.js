@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import ShopifyApp from '../models/ShopifyApp.js';
 import ShopifyConnection from '../models/ShopifyConnection.js';
 import ShopifyHold from '../models/ShopifyHold.js';
 import ShopifyVariantLink from '../models/ShopifyVariantLink.js';
@@ -9,6 +10,8 @@ import ErrorResponse from '../utils/errorResponse.js';
 import logger from '../utils/logger.js';
 import { decryptSecret, encryptSecret } from '../utils/secretBox.js';
 import { cleanShop, graphql, requestToken } from '../utils/shopify/client.js';
+import { assertBusinessInScope } from '../utils/shopify/connect.js';
+import { isConfigured } from '../utils/shopify/oauth.js';
 import { retryHolds } from '../utils/shopify/importer.js';
 import { actorFor, registerWebhook, syncConnection } from '../utils/shopify/sync.js';
 
@@ -25,26 +28,35 @@ import { actorFor, registerWebhook, syncConnection } from '../utils/shopify/sync
  * @route  POST   /api/v1/integrations/shopify/holds/:id/ignore     (integrations:update)
  */
 
-/** A business outside the person's own is simply not found (the same rule as every scoped list). */
-const assertInScope = (req, business) => {
-  const allowed = req.accessFilter?.business?.$in;
-  if (allowed && !allowed.map(String).includes(String(business))) {
-    throw new ErrorResponse('Not found', 404);
-  }
-};
+const assertInScope = assertBusinessInScope;
 
-const view = async connection => {
-  if (!connection) return { connected: false };
+/**
+ * Can this business press Connect Shopify? Yes when the public app is set up on the server, or when an admin gave the business
+ * an app of its own (it still needs the server's public address).
+ */
+const isReady = async business =>
+  isConfigured() ||
+  (Boolean(process.env.API_PUBLIC_URL) && Boolean(await ShopifyApp.exists({ business })));
+
+const view = async (connection, business) => {
+  const configured = await isReady(business ?? connection?.business);
+  if (!connection) return { connected: false, configured };
   const [imported, waiting] = await Promise.all([
     Order.countDocuments({ business: connection.business, shopifyOrderIds: { $exists: true } }),
     ShopifyHold.countDocuments({ business: connection.business, status: 'open' })
   ]);
+  const oauth = connection.authType === 'oauth';
   return {
     connected: true,
+    configured,
+    // One-click (`oauth`) or the old way (the business made its own app and typed its keys).
+    authType: connection.authType ?? 'client-credentials',
+    // An inactive one-click connection cannot work until it is connected again (the store removed the app, or Shopify refused).
+    needsReconnect: oauth && !connection.isActive,
     shop: connection.shop,
     shopName: connection.shopName ?? null,
-    clientId: connection.clientId,
-    hasSecret: true,
+    clientId: oauth ? null : connection.clientId,
+    hasSecret: !oauth,
     isActive: connection.isActive,
     goLiveAt: connection.goLiveAt,
     lastSyncAt: connection.lastSyncAt ?? null,
@@ -60,7 +72,7 @@ export const getShopify = asyncHandler(async (req, res) => {
   if (!business) throw new ErrorResponse('Choose a business', 400);
   assertInScope(req, business);
   const connection = await ShopifyConnection.findOne({ business });
-  res.status(200).json({ success: true, data: await view(connection) });
+  res.status(200).json({ success: true, data: await view(connection, business) });
 });
 
 export const connectShopify = asyncHandler(async (req, res) => {
@@ -86,12 +98,13 @@ export const connectShopify = asyncHandler(async (req, res) => {
         clientSecretEnc: encryptSecret(secret),
         accessTokenEnc: encryptSecret(token.accessToken),
         tokenExpiresAt: token.expiresAt,
+        authType: 'client-credentials',
         isActive: true,
         updatedBy: req.user.id
       },
       // Automation starts the day it is connected: older orders are never brought in.
       $setOnInsert: { goLiveAt: new Date(), createdBy: req.user.id },
-      $unset: { lastError: 1 }
+      $unset: { lastError: 1, refreshTokenEnc: 1, uninstalledAt: 1 }
     },
     { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   ).select('+clientSecretEnc +accessTokenEnc');

@@ -28,6 +28,8 @@ import { reminderStatus, startBookingReminders } from './utils/bookingReminders.
 import { courierSyncStatus, startCourierSync } from './utils/courierSync.js';
 import { confirmOneFromCourier } from './controllers/orderController.js';
 import { receiveShopifyWebhook } from './controllers/shopifyController.js';
+import { receiveAppWebhook } from './controllers/shopifyWebhookController.js';
+import ShopifyConnection from './models/ShopifyConnection.js';
 import { shopifySyncStatus, startShopifySync } from './utils/shopify/sync.js';
 import Role from './models/Role.js';
 import { ensureBusinessOwnerRole } from './utils/presetRoles.js';
@@ -37,6 +39,10 @@ const dirName = path.dirname(fileURLToPath(import.meta.url));
 await connectDB();
 // Role names became unique per business (Round 11): make the database's indexes match, dropping the old one on `name`.
 await Role.syncIndexes().catch(err => logger.warn({ err: err.message }, 'role indexes not synced'));
+// A store belongs to one business at a time (Round 17): make the database's index match, dropping the old plain one on `shop`.
+await ShopifyConnection.syncIndexes().catch(err =>
+  logger.warn({ err: err.message }, 'shopify connection indexes not synced')
+);
 // The predefined Business Owner role: created once if it is missing, never overwritten.
 await ensureBusinessOwnerRole()
   .then(made => made && logger.info('created the Business Owner role'))
@@ -97,6 +103,12 @@ app.post(
   '/api/v1/integrations/shopify/webhook',
   express.raw({ type: '*/*', limit: '2mb' }),
   receiveShopifyWebhook
+);
+// B Ledger's own Shopify app: one address for every store (orders, uninstall, and Shopify's privacy requests).
+app.post(
+  '/api/v1/integrations/shopify/webhooks',
+  express.raw({ type: '*/*', limit: '2mb' }),
+  receiveAppWebhook
 );
 
 app.use(express.json({ limit: '1mb' }));

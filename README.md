@@ -24,6 +24,7 @@ Node.js · Express · MongoDB · Socket.io · JWT auth.
 - [Logging](#logging)
 - [The API](#the-api)
 - [How money is recorded](#how-money-is-recorded)
+- [Connect Shopify with one click — the Shopify app](#connect-shopify-with-one-click--the-shopify-app)
 - [Deploying to production](#deploying-to-production)
 - [Troubleshooting](#troubleshooting)
 
@@ -154,6 +155,10 @@ re-checks, so a token can be revoked server-side.
 | `VAPID_PUBLIC_KEY`     |    –     | Public half — **must equal** `VITE_VAPID_PUBLIC_KEY` in the frontend.                                                                                                                                                                       |
 | `VAPID_PRIVATE_KEY`    |    –     | Private half — **secret**, never commit.                                                                                                                                                                                                    |
 | `API_PUBLIC_URL`       |    –     | The API's public address (e.g. `https://backend.bledger.org`). Lets Shopify tell us at once when an order is placed (a webhook); without it new orders still arrive within 10 minutes (with it the check drops to hourly, as a safety net). |
+| `SHOPIFY_API_KEY`      |    –     | B Ledger's Shopify app Client ID (see _Connect Shopify with one click_). With the next three it turns the one-click connection on.                                                                                                          |
+| `SHOPIFY_API_SECRET`   |    –     | That app's Client secret — **secret**, server only, never `VITE_`.                                                                                                                                                                          |
+| `SHOPIFY_SCOPES`       |    –     | What the app asks the store for (default `read_orders`).                                                                                                                                                                                    |
+| `SHOPIFY_INSTALL_URL`  |    –     | The app's install link from the Dev Dashboard (Distribution). The "Connect Shopify" button sends the browser there.                                                                                                                         |
 | `SHOPIFY_SYNC_SECONDS` |    –     | How often to ask Shopify for new orders (default 600; never below 10).                                                                                                                                                                      |
 | `VAPID_MAILTO`         |    –     | Contact URI for the push service, e.g. `mailto:admin@…`.                                                                                                                                                                                    |
 
@@ -438,6 +443,46 @@ Then `sudo reboot`, wait two minutes, and the health check must answer without
 you touching anything. Add an external uptime check (for example UptimeRobot,
 free) on `https://backend.bledger.org/api/v1/health` so an outage reaches you instead of
 your users.
+
+---
+
+## Connect Shopify with one click — the Shopify app
+
+An owner presses **Connect Shopify** in B Ledger, approves on Shopify's own screen, and is connected: no keys, no Client ID, no secret. That
+works because B Ledger is itself a Shopify app (an **unlisted public app**: only people with our install link can find it; Shopify still
+reviews it). The code is in `utils/shopify/` and `controllers/shopifyOAuthController.js`; the rules are in `CLAUDE.md` §10.11.
+
+### One-time setup (the owner, in the Shopify Dev Dashboard)
+
+1. Make an app named **B Ledger** in your Shopify Partner organization. Distribution: **Public → Unlisted**.
+2. Fill its settings from `shopify/shopify.app.toml` (change the two `https://backend.bledger.org` addresses and `client_id` first) and
+   deploy them with the Shopify CLI (`shopify app deploy`). That sets the App URL, the redirect address, the `orders/create` and
+   `app/uninstalled` webhooks and Shopify's three privacy topics, once for every store.
+3. **Protected customer data**: Dev Dashboard → _Settings → Access requests → Protected customer data_. Request Level 1 and Level 2, and the
+   fields **name, address and phone** (not email — B Ledger does not read it). Reason to give: "Cash-on-delivery orders are booked with a
+   courier, which needs the customer's name, phone and address." **Until Shopify approves this, a real store returns orders without those
+   fields** and they all land in "needs you" — so do not move a real business before approval. A development store works without it.
+4. Make a **development store**, install the app on it from the install link, and press Connect Shopify in B Ledger. Place a test order.
+5. Put the values in the API's `.env` and restart (`SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_INSTALL_URL`, `API_PUBLIC_URL`,
+   `FRONTEND_URL`). The Client secret goes nowhere else — not the repo, not the frontend.
+6. Submit the app for Shopify's review. The reviewer needs a **demo B Ledger login** with a demo business: make one and put it in the
+   submission notes. Ask Shopify Partner Support **before** submitting whether B Ledger's own subscription on its own website is allowed
+   (Shopify's rule is that public apps charge through Shopify unless it approves otherwise) — the question is in
+   `client_details/PLAN-round17-cleanup-and-shopify-app.md` §B.11.
+
+### If the review is slow or refused: a Shopify app for one business
+
+An admin can give one business an app of its own ("custom distribution": Shopify does not review it): make an app the same way (steps 1–2,
+distributed to that one store), then `PUT /api/v1/integrations/shopify/app` with `{ business, clientId, clientSecret, installUrl }`. Everything
+else works the same. The secret is saved encrypted and never returned.
+
+### What the server keeps, and for how long
+
+Tokens are saved encrypted (`COURIER_SECRET_KEY`), never returned and never logged. Shopify's access token lasts an hour and is renewed
+by itself from a refresh token (90 days; the hourly-safe order check keeps it fresh). If a store removes the app, or a renewal is refused,
+the connection stops and the card says **Reconnect**. When Shopify sends `shop/redact` (48 hours after the app is removed) B Ledger deletes
+the connection, the waiting Shopify orders and the product matches. **Orders already brought in stay** — they are the business's own
+records, like an order typed by hand. Say so in the privacy policy.
 
 ---
 
