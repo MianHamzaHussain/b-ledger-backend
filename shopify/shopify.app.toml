@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "9077e6ccb49ef49a6714b8509aea9e81"
+client_id = "0d455db243d9750908d8bb06b2c3037d"
 name = "B Ledger"
 application_url = "https://backend.bledger.org/api/v1/integrations/shopify/install"
 embedded = false
@@ -8,15 +8,18 @@ embedded = false
 [webhooks]
 api_version = "2026-10"
 
+  # "orders/create" is added here once Shopify approves this app for protected customer data (an order carries a customer). Until then
+  # new orders still arrive by the 10-minute check, a little later.
   [[webhooks.subscriptions]]
   uri = "https://backend.bledger.org/api/v1/integrations/shopify/webhooks"
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
-  topics = [ "orders/create", "app/uninstalled" ]
+  topics = [ "app/uninstalled" ]
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_orders,read_customers,read_products"
+scopes = "read_customers,read_orders,read_products"
 optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
