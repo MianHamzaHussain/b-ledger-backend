@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import ShopifyApp from '../models/ShopifyApp.js';
 import ShopifyConnection from '../models/ShopifyConnection.js';
 import ShopifyHold from '../models/ShopifyHold.js';
 import ShopifyVariantLink from '../models/ShopifyVariantLink.js';
@@ -29,8 +30,17 @@ import { actorFor, registerWebhook, syncConnection } from '../utils/shopify/sync
 
 const assertInScope = assertBusinessInScope;
 
-const view = async connection => {
-  if (!connection) return { connected: false, configured: isConfigured() };
+/**
+ * Can this business press Connect Shopify? Yes when the public app is set up on the server, or when an admin gave the business
+ * an app of its own (it still needs the server's public address).
+ */
+const isReady = async business =>
+  isConfigured() ||
+  (Boolean(process.env.API_PUBLIC_URL) && Boolean(await ShopifyApp.exists({ business })));
+
+const view = async (connection, business) => {
+  const configured = await isReady(business ?? connection?.business);
+  if (!connection) return { connected: false, configured };
   const [imported, waiting] = await Promise.all([
     Order.countDocuments({ business: connection.business, shopifyOrderIds: { $exists: true } }),
     ShopifyHold.countDocuments({ business: connection.business, status: 'open' })
@@ -38,7 +48,7 @@ const view = async connection => {
   const oauth = connection.authType === 'oauth';
   return {
     connected: true,
-    configured: isConfigured(),
+    configured,
     // One-click (`oauth`) or the old way (the business made its own app and typed its keys).
     authType: connection.authType ?? 'client-credentials',
     // An inactive one-click connection cannot work until it is connected again (the store removed the app, or Shopify refused).
@@ -62,7 +72,7 @@ export const getShopify = asyncHandler(async (req, res) => {
   if (!business) throw new ErrorResponse('Choose a business', 400);
   assertInScope(req, business);
   const connection = await ShopifyConnection.findOne({ business });
-  res.status(200).json({ success: true, data: await view(connection) });
+  res.status(200).json({ success: true, data: await view(connection, business) });
 });
 
 export const connectShopify = asyncHandler(async (req, res) => {

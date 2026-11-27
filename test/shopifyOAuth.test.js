@@ -564,3 +564,23 @@ test('the card is told how a store is connected, and when it must be connected a
   await ShopifyConnection.updateOne({ _id: conn._id }, { $set: { isActive: false } });
   assert.equal((await read()).needsReconnect, true);
 });
+
+test('a business with its own Shopify app can connect even when the public app is not set up here', async () => {
+  const read = async () =>
+    (await callHandler(getShopify, { query: { business: String(biz._id) } })).body.data;
+  delete process.env.SHOPIFY_API_SECRET;
+  assert.equal((await read()).configured, false);
+  await ShopifyApp.create({
+    business: biz._id,
+    clientId: 'own_client_1',
+    clientSecretEnc: encryptSecret('own_secret_1234'),
+    installUrl: 'https://admin.shopify.com/own-install',
+    createdBy: admin._id
+  });
+  assert.equal((await read()).configured, true);
+  // Another business without one is still told it is not set up.
+  const other = await makeBusiness({ name: 'Other Shop' });
+  const res = await callHandler(getShopify, { query: { business: String(other._id) } });
+  assert.equal(res.body.data.configured, false);
+  process.env.SHOPIFY_API_SECRET = SECRET;
+});
