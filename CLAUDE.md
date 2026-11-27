@@ -1092,6 +1092,37 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     `test/presetRoles.test.js` until it is put in one of the two lists, so an owner never silently gains it.
     **Before deploying:** list non-admin roles that hold Users/Roles permissions (their stored scope `own` now limits them), then
     create the _Business Owner_ role in the app (Users and Roles at scope **own**, plus what the owner should run) and try it.
+  - **Connect Shopify with one click (Round 17; `controllers/shopifyOAuthController.js`, `utils/shopify/{oauth,client,connect}.js`).** B Ledger is an
+    unlisted **public Shopify app**, so an owner connects without any key. It is a standalone (not embedded) app, so it uses Shopify's
+    **authorization-code flow** with **expiring tokens** (Shopify requires them for new public apps): the access token lasts an hour, the refresh
+    token 90 days and **rotates on every renewal**. `ShopifyConnection.authType` is `oauth` (one click) or `client-credentials` (the old way:
+    the business made its own app and typed its keys; kept until every business has moved).
+    - **The trip.** The button `POST /oauth/ticket` returns `/oauth/begin?ticket=` (one-time, 2 minutes). `begin` — a top-level page on our own
+      address — burns the ticket, sets the httpOnly `bl_shopify` cookie (10 minutes, `SameSite=Lax`, path `/api/v1/integrations/shopify`; only its hash
+      is saved) and sends the browser to `SHOPIFY_INSTALL_URL`. After **Install**, Shopify opens the app's App URL `GET /install`; the cookie says which
+      business began it, so no question is asked. `/install` makes a `state` and sends the browser to Shopify's approval page; Shopify returns to
+      `GET /oauth/callback`. **"Type your store address"** (`POST /oauth/start`) is the same without the cookie. An install that began on Shopify with no
+      cookie ends as a **pending** record: the callback sends the person to `/integrations/shopify/finish?ticket=`, who chooses the business
+      (`GET /oauth/pending`, `POST /oauth/claim`). `ShopifyInstall` holds each trip (hashes only, tokens encrypted, TTL: 10 minutes; pending 60).
+    - **Checks, in this order, before anything is saved:** our record of the `state` (single use, deleted before the code is traded) → Shopify's
+      **query signature** (HMAC-SHA256 with the app's secret, `timingSafeEqual`, a link older than 5 minutes refused) → the shop is only letters, digits
+      and hyphens (never a dot or slash, so a request can never be pointed at another site) → the code is traded with `expiring=1` → the granted scope
+      includes `read_orders` → the person **still** has `integrations:update` for that business (minutes have passed) → one store belongs to **one business**
+      (`assertStoreFree`, backed by a unique partial index on active connections). Every failure redirects into the web app with `?shopify=error&reason=`
+      — never a raw error page — and never leaks which part failed beyond that short reason. The three public routes have their own rate limit.
+    - **Renewal** (`oauthToken` in `client.js`): the saved token is used until five minutes before it ends; then one renewal per store at a time, saved as
+      the whole new pair in ONE conditional write on `tokenVersion` (if another renewal won, its token is used). A renewal Shopify refuses as invalid (the app
+      was removed, or 90 days passed) stops the connection (`isActive: false`, "Reconnect"); a busy Shopify is only retried. The 10-minute safety-net sync
+      keeps every refresh token fresh.
+    - **App-wide webhooks** (`POST /webhooks`, `controllers/shopifyWebhookController.js`, mounted before the JSON parser): declared once for every store in
+      `shopify/shopify.app.toml` — `orders/create` (runs the usual import), `app/uninstalled` (connection stops, tokens forgotten, a bell) and Shopify's three
+      privacy topics. The signature is checked first (401 for anything else, the same answer whatever the cause). `customers/data_request` rings a bell for a
+      person to answer; `customers/redact` deletes that customer's waiting holds; `shop/redact` deletes the connection, its holds and its variant links —
+      **orders already brought in stay** (the business's own records). A one-click connection registers no webhook of its own (`ensureWebhook` skips it).
+    - **A Shopify app for one business** (`ShopifyApp`, admin-only `PUT /app`): "custom distribution", no Shopify review. `appCredentials()` picks the
+      business's own app when it has one, otherwise the public app; the rest is identical.
+    - **Orders ask for no email** (Shopify's protected customer data): the query has only name, address and phone, which need Shopify's approval for real stores.
+    - Logs never carry a code, state, ticket, token or secret (`utils/logger.js` redaction). Tests: `shopifyOAuth`, `shopifyWebhooks` (a fake Shopify only).
   - **A tracking number typed by hand is taken over** (`utils/couriers/adopt.js`, run at the start of every
     pass and of "Refresh couriers"). A dispatched order with a typed `trackingId` and no `courierBooking`
     is looked up in PostEx's bulk tracking; it is followed only when the parcel is PostEx's, on no other
