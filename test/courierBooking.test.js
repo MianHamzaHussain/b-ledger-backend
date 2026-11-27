@@ -4,7 +4,12 @@ import { connect, clear, disconnect, userId } from './helpers/db.js';
 import Order from '../models/Order.js';
 import { getAirwayBill } from '../controllers/orderController.js';
 import { courierDeps } from '../utils/couriers/index.js';
-import { bookParcel, clearCityCache } from '../utils/couriers/booking.js';
+import {
+  bookParcel,
+  clearCityCache,
+  parcelFor,
+  parcelProblems
+} from '../utils/couriers/booking.js';
 import {
   fakePostex,
   restoreFetch,
@@ -182,4 +187,18 @@ test('an order that was not booked through a courier has no airway bill', async 
   await getAirwayBill({ resource: order }, {}, e => (error = e));
   await new Promise(r => setTimeout(r, 20));
   assert.match(error.message, /not booked through a courier/);
+});
+
+test('a swap at the door goes to PostEx as a Replacement with no COD; a normal order stays Normal', async () => {
+  fakePostex();
+  const { order } = await setup();
+  const fresh = await Order.findById(order._id);
+  assert.equal(parcelFor(fresh, '001').orderType, 'Normal');
+
+  fresh.isSwap = true;
+  assert.match(parcelProblems(fresh)[0], /no COD/, 'a reversal must not carry a COD');
+  fresh.codAmount = 0;
+  const parcel = parcelFor(fresh, '001');
+  assert.equal(parcel.orderType, 'Replacement');
+  assert.equal(parcel.invoicePayment, 0);
 });

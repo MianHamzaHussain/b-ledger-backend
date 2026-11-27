@@ -81,7 +81,6 @@ import {
 import {
   applyExchangeKeep,
   exchangeKeep,
-  recordExtraDeliveryIncome,
   settleCourierCosts,
   undoExchangeCosts,
   waiveExchangeCosts
@@ -673,7 +672,8 @@ const makeReplacement = async (original, body, userId, beforeCreate, { partial =
       newTotalPaisa: toPaisa(replacement.total),
       creditPaisa: credit?.amountPaisa ?? 0,
       isSwap: Boolean(body.isSwap),
-      freeCourier: Boolean(body.freeCourier)
+      freeCourier: Boolean(body.freeCourier),
+      agreedPaisa: toPaisa(body.deliveryCharge ?? 0)
     });
     if (body.freeCourier) {
       // The shop pays the courier: nothing is kept now and nothing comes off a later payout.
@@ -683,7 +683,18 @@ const makeReplacement = async (original, body, userId, beforeCreate, { partial =
         { kind: 'cost', text: `Delivery made free — ${body.freeReason}` }
       );
       await waiveExchangeCosts(replacement, body.freeReason, userId);
-    } else if (keep.owes) {
+    } else {
+      if (keep.agreed) {
+        logActivity(
+          replacement,
+          { id: userId },
+          {
+            kind: 'cost',
+            text: `Delivery charge agreed with the customer — ${rupees(fromPaisa(keep.keepPaisa))}`
+          }
+        );
+      }
+      // Nothing to keep (no cost known yet, or the customer is owed money) is a no-op; an agreed charge is settled here.
       await applyExchangeKeep(replacement, keep, userId);
     }
     return replacement;
@@ -776,7 +787,7 @@ export const getRefundQuote = asyncHandler(async (req, res) => {
  * @desc   What an exchange would cost the customer, before the replacement is made: the price difference plus the
  *         new parcel's courier cost. `owes` true → they pay `cod` (return first) or `pays` (swap); false → they are
  *         owed money back, less `fixed` (the costs known now) and the replacement's tax on nothing.
- * @route  GET /api/v1/orders/:id/exchange-quote?total=<replacement total, rupees>&swap=true|false  (orders:read)
+ * @route  GET /api/v1/orders/:id/exchange-quote?total=<replacement total, rupees>&swap=true|false&lines=&free=&charge=  (orders:read)
  */
 export const getExchangeQuote = asyncHandler(async (req, res, next) => {
   const original = req.resource;
@@ -813,11 +824,20 @@ export const getExchangeQuote = asyncHandler(async (req, res, next) => {
   }
   const isSwap = req.query.swap === 'true';
   const free = req.query.free === 'true';
+  // The charge agreed with the customer, in rupees (`charge=500`); absent or 0 is the usual estimate.
+  const charge = req.query.charge === undefined ? 0 : Number(req.query.charge);
+  if (!Number.isFinite(charge) || charge < 0) {
+    return next(new ErrorResponse('Give the agreed charge as a number', 400));
+  }
+  if (free && charge > 0) {
+    return next(new ErrorResponse('Choose one: an agreed charge or free delivery', 400));
+  }
   const keep = await exchangeKeep(original, {
     newTotalPaisa: toPaisa(total),
     creditPaisa,
     isSwap,
-    freeCourier: free
+    freeCourier: free,
+    agreedPaisa: toPaisa(charge)
   });
   res.status(200).json({
     success: true,
@@ -826,6 +846,7 @@ export const getExchangeQuote = asyncHandler(async (req, res, next) => {
       isSwap,
       isPartial,
       free,
+      agreed: Boolean(keep.agreed),
       credit: fromPaisa(creditPaisa),
       difference: fromPaisa(keep.diffPaisa),
       cod: fromPaisa(keep.codPaisa),
@@ -833,7 +854,12 @@ export const getExchangeQuote = asyncHandler(async (req, res, next) => {
       keep: fromPaisa(keep.keepPaisa),
       knownCosts: fromPaisa(keep.fixedPaisa),
       // If they are owed money: about this much once PostEx has billed the new parcel.
-      estimatedPayout: keep.owes ? 0 : Math.max(0, fromPaisa(-keep.basePaisa)),
+      estimatedPayout: keep.owes || keep.agreed ? 0 : Math.max(0, fromPaisa(-keep.basePaisa)),
+      // An agreed charge: what comes back at once, what the courier is expected to cost, and who bears the gap.
+      owedBack: keep.agreed ? fromPaisa(keep.owedBackPaisa) : 0,
+      costs: keep.agreed ? fromPaisa(keep.costPaisa) : 0,
+      extra: keep.agreed ? fromPaisa(keep.extraPaisa) : 0,
+      shopPays: keep.agreed ? fromPaisa(keep.shopPaysPaisa) : 0,
       lines: keep.lines.map(l => ({
         label: l.label,
         amount: fromPaisa(l.amountPaisa),
@@ -918,6 +944,19 @@ export const createReplacement = asyncHandler(async (req, res, next) => {
 export const swapOrder = asyncHandler(async (req, res, next) => {
   const original = req.resource;
 
+  // The reversal is a PostEx booking type; TCS has nothing like it. A courier tracked by hand is the shop's own business.
+  const courierParty = original.courier
+    ? await Party.findById(original.courier).select('integration.provider').lean()
+    : null;
+  if (courierParty?.integration?.provider === 'tcs') {
+    return next(
+      new ErrorResponse(
+        'A swap at the door needs PostEx — use “Item came back” for other couriers',
+        400
+      )
+    );
+  }
+
   // Only some items are swapped: their price is the credit, the rest of the order is kept (and stays Delivered).
   let picked = null;
   if (req.body.lines?.length) {
@@ -937,34 +976,21 @@ export const swapOrder = asyncHandler(async (req, res, next) => {
       (s, i) => s + toPaisa(i.unitPrice) * i.quantity,
       0
     ) + (req.body.customWork || []).reduce((s, w) => s + toPaisa(w.price), 0);
-  // What the customer pays directly: the price difference plus the new parcel's courier cost (none when it is free).
+  // What the customer pays directly: the price difference plus the new parcel's courier cost — the usual estimate, the
+  // charge agreed with them, or nothing when it is free.
   const { owes, basePaisa: duePaisa } = await exchangeKeep(original, {
     newTotalPaisa: newTotal,
     creditPaisa: credit,
     isSwap: true,
-    freeCourier: Boolean(req.body.freeCourier)
+    freeCourier: Boolean(req.body.freeCourier),
+    agreedPaisa: toPaisa(req.body.deliveryCharge ?? 0)
   });
   const paysPaisa = owes ? duePaisa : 0;
-  // What was actually handed over: at least what is due. The extra is the shop's (delivery income).
-  const receivedPaisa =
-    req.body.amountReceived === undefined ? paysPaisa : toPaisa(req.body.amountReceived);
-  if (!owes && receivedPaisa > 0) {
-    return next(new ErrorResponse('Nothing is due on this swap — the customer is owed money', 400));
-  }
-  if (owes && receivedPaisa < paysPaisa) {
-    return next(
-      new ErrorResponse(
-        `Rs ${fromPaisa(receivedPaisa)} is less than the Rs ${fromPaisa(paysPaisa)} due — choose Free delivery if the shop pays the courier`,
-        400
-      )
-    );
-  }
-  const extraPaisa = receivedPaisa - paysPaisa;
   const differenceMoney =
-    receivedPaisa > 0 && req.body.differenceAccount
+    paysPaisa > 0 && req.body.differenceAccount
       ? await resolveMoney(original.business, { account: req.body.differenceAccount }, req.user)
       : null;
-  if (receivedPaisa > 0 && !differenceMoney) {
+  if (paysPaisa > 0 && !differenceMoney) {
     return next(
       new ErrorResponse(
         'The customer pays the difference and the courier costs to you directly — choose where it came in',
@@ -1027,19 +1053,6 @@ export const swapOrder = asyncHandler(async (req, res, next) => {
       note: 'difference for the swap',
       userId: req.user.id
     });
-  }
-  // Anything beyond the courier's cost is the shop's — delivery income, not the customer's credit.
-  if (extraPaisa > 0) {
-    await recordExtraDeliveryIncome(replacement, {
-      extraPaisa,
-      money: differenceMoney,
-      userId: req.user.id
-    });
-    logActivity(replacement, req.user, {
-      kind: 'money',
-      text: `Extra delivery charge ${rupees(fromPaisa(extraPaisa))} kept by the shop`
-    });
-    await replacement.save();
   }
 
   res.status(201).json({ success: true, data: replacement });

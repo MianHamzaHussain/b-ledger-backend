@@ -1,25 +1,22 @@
 import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { connect, clear, disconnect, runHandler } from './helpers/db.js';
 import {
-  connect,
-  clear,
-  disconnect,
-  makeBusiness,
-  makeProduct,
-  makeParty,
-  runHandler
-} from './helpers/db.js';
+  setup,
+  item,
+  shakira,
+  stockOf,
+  bal,
+  lineOf,
+  everyEntryBalances,
+  swap
+} from './helpers/exchange.js';
 import Order from '../models/Order.js';
-import Product from '../models/Product.js';
-import JournalEntry from '../models/JournalEntry.js';
-import { accountByCode, CODES } from '../utils/chartOfAccounts.js';
-import { accountBalance, trialBalance } from '../utils/ledger.js';
+import { CODES } from '../utils/chartOfAccounts.js';
 import {
   createOrder,
-  updateOrderStatus,
   exchangeReturn,
   createReplacement,
-  swapOrder,
   receiveReturn,
   getExchangeQuote,
   addOrderRefund,
@@ -27,7 +24,6 @@ import {
 } from '../controllers/orderController.js';
 import {
   orderCreateSchema,
-  orderStatusSchema,
   orderExchangeReturnSchema,
   orderReplacementSchema,
   orderSwapSchema,
@@ -43,73 +39,6 @@ before(connect);
 after(disconnect);
 afterEach(clear);
 
-let seq = 0;
-
-async function setup() {
-  const biz = await makeBusiness();
-  const product = await makeProduct(biz._id, [
-    { label: 'M', costPrice: 1000, salePrice: 3000, stock: 10 },
-    { label: 'L', costPrice: 1000, salePrice: 3000, stock: 10 },
-    { label: 'S', costPrice: 1000, salePrice: 3000, stock: 10 }
-  ]);
-  const courier = await makeParty(biz._id, 'courier');
-  const acc = async code => (await accountByCode(biz._id, code))._id;
-  return { biz, product, courier, cash: String(await acc(CODES.CASH)), acc };
-}
-
-const variantId = (ctx, label) => String(ctx.product.variants.find(v => v.label === label)._id);
-const item = (ctx, label, price) => ({
-  product: String(ctx.product._id),
-  variantId: variantId(ctx, label),
-  quantity: 1,
-  unitPrice: price
-});
-
-const setStatus = (order, body) =>
-  runHandler(updateOrderStatus, { resource: order, body: orderStatusSchema.parse(body) }).then(r =>
-    Order.findById(r.body.data._id)
-  );
-
-/** Order #0204: M at 16,000 and L at 9,000, delivered with a 268.25 delivery charge. */
-async function shakira(ctx) {
-  seq += 1;
-  const out = await runHandler(createOrder, {
-    body: orderCreateSchema.parse({
-      business: String(ctx.biz._id),
-      customerName: 'Shakira Bano',
-      contactNumber: '03001112222',
-      items: [item(ctx, 'M', 16000), item(ctx, 'L', 9000)]
-    })
-  });
-  let order = await Order.findById(out.body.data._id);
-  order = await setStatus(order, {
-    status: 'dispatched',
-    courier: String(ctx.courier._id),
-    trackingId: `TRK${seq}`
-  });
-  return setStatus(order, { status: 'delivered', deliveryCharge: 268.25 });
-}
-
-const stockOf = async (ctx, label) =>
-  (await Product.findById(ctx.product._id)).variants.find(v => v.label === label).stock;
-const bal = async (ctx, code) => accountBalance(ctx.biz._id, await ctx.acc(code));
-const lineOf = (order, index) => String(order.items[index]._id);
-
-async function everyEntryBalances(ctx) {
-  for (const e of await JournalEntry.find({ business: ctx.biz._id })) {
-    const debit = e.lines.reduce((s, l) => s + l.debitPaisa, 0);
-    const credit = e.lines.reduce((s, l) => s + l.creditPaisa, 0);
-    assert.equal(debit, credit, `"${e.memo}" balances`);
-  }
-  assert.equal((await trialBalance(ctx.biz._id)).balanced, true);
-}
-
-const swap = (ctx, original, body) =>
-  runHandler(swapOrder, {
-    resource: original,
-    body: orderSwapSchema.parse({ differenceAccount: ctx.cash, ...body })
-  }).then(r => Order.findById(r.body.data._id));
-
 test('Shakira: swap one of two items for the same price — credit 16,000, pays the courier cost, extra is delivery income', async () => {
   const ctx = await setup();
   const original = await shakira(ctx);
@@ -120,7 +49,7 @@ test('Shakira: swap one of two items for the same price — credit 16,000, pays 
   const replacement = await swap(ctx, original, {
     lines: [{ line: lineOf(original, 0), quantity: 1 }],
     items: [item(ctx, 'S', 16000)],
-    amountReceived: 500
+    deliveryCharge: 500
   });
 
   // The replacement is its price, paid: 16,000 credit + 268.25 advance − 268.25 kept for the courier.
@@ -128,14 +57,14 @@ test('Shakira: swap one of two items for the same price — credit 16,000, pays 
   assert.equal(replacement.codAmount, 0, 'the rider collects nothing');
   assert.equal(replacement.isSwap, true);
   const advance = replacement.customerMoney.find(m => m.kind === 'advance');
-  assert.equal(advance.amountPaisa, 26825, 'what was due: the new parcel’s delivery charge');
+  assert.equal(advance.amountPaisa, 50000, 'what was due: the charge agreed with her');
   assert.equal(replacement.customerMoney.find(m => m.kind === 'transfer-in').amountPaisa, 1600000);
 
-  // She handed over 500: the 231.75 beyond the courier’s cost is the shop’s, delivery income.
+  // She agreed Rs 500: the 231.75 beyond the courier’s cost is the shop’s, delivery income.
   assert.equal(await bal(ctx, CODES.CASH), 50000);
   assert.equal(await bal(ctx, CODES.DELIVERY_INCOME), -23175);
   assert.equal(await bal(ctx, CODES.CHARGES_KEPT), -26825);
-  assert.ok(replacement.activity.some(a => /Extra delivery charge/.test(a.text)));
+  assert.ok(replacement.activity.some(a => /agreed with the customer/.test(a.text)));
 
   // The original is untouched except for the swapped item: still Delivered, the other item kept and sold.
   const fresh = await Order.findById(original._id);
@@ -201,28 +130,33 @@ test('the quote for some items: credit is just their price, and it says what the
   );
 });
 
-test('handing over less than is due is refused with nothing posted; free delivery lets the price difference be all', async () => {
+test('an agreed charge below the courier cost is the shop’s to bear; free delivery has the customer pay only the difference', async () => {
   const ctx = await setup();
   const original = await shakira(ctx);
   const lines = [{ line: lineOf(original, 0), quantity: 1 }];
-  const entries = await JournalEntry.countDocuments();
-  const sBefore = await stockOf(ctx, 'S');
 
-  await assert.rejects(
-    swap(ctx, original, { lines, items: [item(ctx, 'S', 16000)], amountReceived: 100 }),
-    /less than the Rs 268.25 due — choose Free delivery/
+  // Agreed Rs 100 while the courier will cost 268.25: she pays 100, all of it covers cost, the shop bears the rest.
+  const cheap = await swap(ctx, original, {
+    lines,
+    items: [item(ctx, 'S', 16000)],
+    deliveryCharge: 100
+  });
+  assert.equal(cheap.customerMoney.find(m => m.kind === 'advance').amountPaisa, 10000);
+  assert.equal(await bal(ctx, CODES.CHARGES_KEPT), -10000);
+  assert.equal(
+    await bal(ctx, CODES.DELIVERY_INCOME),
+    0,
+    'nothing extra: the charge is below the cost'
   );
-  assert.equal(await JournalEntry.countDocuments(), entries, 'nothing posted');
-  assert.equal(await stockOf(ctx, 'S'), sBefore, 'no stock taken');
-  assert.equal((await Order.findById(original._id)).returnedItems.length, 0);
+  await everyEntryBalances(ctx);
+  await runHandler(receiveReturn, { resource: await Order.findById(original._id), body: {} });
 
   // Free: the customer pays only the 1,000 difference; the shop absorbs the courier, and the reason is kept.
-  const free = await swap(ctx, original, {
-    lines,
-    items: [item(ctx, 'S', 17000)],
+  const free = await swap(ctx, await Order.findById(original._id), {
+    lines: [{ line: lineOf(original, 1), quantity: 1 }],
+    items: [item(ctx, 'S', 10000)],
     freeCourier: true,
-    freeReason: 'faulty piece',
-    amountReceived: 1000
+    freeReason: 'faulty piece'
   });
   assert.equal(free.customerMoney.find(m => m.kind === 'advance').amountPaisa, 100000);
   assert.equal(
@@ -233,11 +167,20 @@ test('handing over less than is due is refused with nothing posted; free deliver
   assert.equal(free.courierCosts.waived, true);
   assert.equal(free.courierCosts.reason, 'faulty piece');
   assert.ok(free.activity.some(a => /Delivery made free — faulty piece/.test(a.text)));
-  assert.equal(await bal(ctx, CODES.DELIVERY_INCOME), 0);
   await everyEntryBalances(ctx);
 
-  // A free delivery with no reason is refused by the schema.
+  // A free delivery with no reason is refused; so is a charge together with free delivery.
   assert.throws(() => orderSwapSchema.parse({ items: [item(ctx, 'S', 1)], freeCourier: true }));
+  assert.throws(
+    () =>
+      orderSwapSchema.parse({
+        items: [item(ctx, 'S', 1)],
+        freeCourier: true,
+        freeReason: 'faulty',
+        deliveryCharge: 300
+      }),
+    /Choose one/
+  );
 });
 
 test('return first, some items: the credit is that item’s price, and a cheaper replacement is owed the difference', async () => {
@@ -337,7 +280,6 @@ test('the rest of the order can be exchanged later; more than is left is refused
 
 test('a counter sale or an order not yet delivered can not be exchanged in part', async () => {
   const ctx = await setup();
-  seq += 1;
   const out = await runHandler(createOrder, {
     body: orderCreateSchema.parse({
       business: String(ctx.biz._id),
@@ -439,7 +381,7 @@ test('a swap whose old item has not arrived blocks the next exchange the same wa
   const sw = await swap(ctx2, o2, {
     lines: [{ line: lineOf(o2, 0), quantity: 1 }],
     items: [item(ctx2, 'S', 16000)],
-    amountReceived: 268.25
+    deliveryCharge: 268.25
   });
   assert.ok(sw);
   const after = await Order.findById(o2._id);

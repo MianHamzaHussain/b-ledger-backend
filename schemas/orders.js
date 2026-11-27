@@ -251,14 +251,27 @@ const exchangeLines = z
   .min(1, 'Choose which items are exchanged')
   .optional();
 
-/** "Free delivery": the shop pays the courier for this exchange. A reason is always kept. */
-const freeDelivery = {
+/**
+ * What the customer pays for the new parcel's delivery — one of three: the usual estimate (neither field), a charge
+ * AGREED with them (`deliveryCharge`, rupees, more than 0), or "free delivery" (the shop pays the courier; a reason is
+ * always kept).
+ */
+const deliveryChoice = {
+  deliveryCharge: z.coerce
+    .number()
+    .positive('Enter the agreed charge, or choose Free delivery')
+    .max(100000, 'That is more than a delivery charge can be')
+    .optional(),
   freeCourier: z.boolean().optional(),
   freeReason: z.string().trim().max(200, 'Keep the reason under 200 characters').optional()
 };
 const freeNeedsReason = [
   v => !v.freeCourier || (v.freeReason && v.freeReason.length >= 3),
   { message: 'Say why the delivery is free', path: ['freeReason'] }
+];
+const oneDeliveryChoice = [
+  v => !(v.freeCourier && v.deliveryCharge),
+  { message: 'Choose one: an agreed charge or free delivery', path: ['deliveryCharge'] }
 ];
 
 /**
@@ -288,7 +301,7 @@ const swapOrder = {
   deliveryAddress: z.string().optional()
 };
 /** Sent back first: the replacement may go with any courier. */
-const replacementOrder = { ...swapOrder, ...freeDelivery, courier: id.optional() };
+const replacementOrder = { ...swapOrder, ...deliveryChoice, courier: id.optional() };
 const hasSomething = [
   v => v.items.length + v.customWork.length > 0,
   { message: 'Add at least one item or custom work', path: ['items'] }
@@ -302,26 +315,23 @@ const hasSomething = [
 export const orderSwapSchema = z
   .object({
     ...swapOrder,
-    ...freeDelivery,
+    ...deliveryChoice,
     /** Only these items are swapped; the rest of the order is kept. */
     lines: exchangeLines,
     /** Where the customer paid — a money account or partner:<id>. */
     differenceAccount: z.string().min(1).optional(),
-    /**
-     * What the customer actually handed over (rupees). At least what is due; anything beyond the courier's cost is the
-     * shop's, booked as delivery income. Left out, it is exactly what is due.
-     */
-    amountReceived: money.optional(),
     reversalTrackingId,
     note: z.string().trim().max(300, 'Keep the note under 300 characters').optional()
   })
   .refine(...hasSomething)
-  .refine(...freeNeedsReason);
+  .refine(...freeNeedsReason)
+  .refine(...oneDeliveryChoice);
 
 export const orderReplacementSchema = z
   .object(replacementOrder)
   .refine(...hasSomething)
-  .refine(...freeNeedsReason);
+  .refine(...freeNeedsReason)
+  .refine(...oneDeliveryChoice);
 
 /** An advance the customer sent, or a refund we paid them. */
 export const orderMoneySchema = z.object({
