@@ -15,7 +15,7 @@ export const fakeShopify = ({
   ordersFail = false,
   webhookFail = false,
   // One-click (OAuth) connections: what the store grants, how long an access token lasts, and whether a renewal is refused.
-  grantedScope = 'read_orders',
+  grantedScope = 'read_orders,read_customers',
   accessTtl = 3600,
   codeStatus = 200,
   refreshStatus = 200,
@@ -95,6 +95,7 @@ export const fakeShopify = ({
       }
       if (query.includes('orders(')) {
         state.orderQueries += 1;
+        state.ordersQuery = query;
         if (ordersFail) return reply({}, 503);
         return reply({
           data: {

@@ -1107,7 +1107,7 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     - **Checks, in this order, before anything is saved:** our record of the `state` (single use, deleted before the code is traded) → Shopify's
       **query signature** (HMAC-SHA256 with the app's secret, `timingSafeEqual`, a link older than 5 minutes refused) → the shop is only letters, digits
       and hyphens (never a dot or slash, so a request can never be pointed at another site) → the code is traded with `expiring=1` → the granted scope
-      includes `read_orders` → the person **still** has `integrations:update` for that business (minutes have passed) → one store belongs to **one business**
+      includes `read_orders` and `read_customers` → the person **still** has `integrations:update` for that business (minutes have passed) → one store belongs to **one business**
       (`assertStoreFree`, backed by a unique partial index on active connections). Every failure redirects into the web app with `?shopify=error&reason=`
       — never a raw error page — and never leaks which part failed beyond that short reason. The three public routes have their own rate limit.
     - **Renewal** (`oauthToken` in `client.js`): the saved token is used until five minutes before it ends; then one renewal per store at a time, saved as

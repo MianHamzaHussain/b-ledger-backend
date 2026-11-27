@@ -40,8 +40,12 @@ export const isConfigured = () => {
   return Boolean(app.clientId && app.clientSecret && process.env.API_PUBLIC_URL);
 };
 
-/** What B Ledger asks the store to allow. `read_orders` is the only thing it needs: it reads, and writes nothing. */
-export const scopes = () => String(process.env.SHOPIFY_SCOPES || 'read_orders').trim();
+/**
+ * What B Ledger asks the store to allow: it reads orders (`read_orders`) and the customer on them (`read_customers` — Shopify guards
+ * the order's `customer` object with it). It writes nothing. Both are required: a store that grants less is refused.
+ */
+export const DEFAULT_SCOPES = 'read_orders,read_customers';
+export const scopes = () => String(process.env.SHOPIFY_SCOPES || DEFAULT_SCOPES).trim();
 
 /** The address Shopify sends the browser back to — it must match the one in the app's settings exactly. */
 export const callbackUrl = () =>

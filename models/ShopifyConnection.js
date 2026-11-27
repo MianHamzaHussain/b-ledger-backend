@@ -45,7 +45,7 @@ const ShopifyConnectionSchema = new mongoose.Schema(
     refreshTokenExpiresAt: { type: Date },
     /** Counts renewals: a renewal only lands if nobody else renewed first, so two never overwrite one another. */
     tokenVersion: { type: Number, default: 0 },
-    /** What the store allowed (`read_orders`). */
+    /** What the store allowed (`read_orders,read_customers`). */
     scopes: { type: String },
     /** Set when Shopify says the app was removed from the store; the connection then waits to be redacted or reconnected. */
     uninstalledAt: { type: Date },
