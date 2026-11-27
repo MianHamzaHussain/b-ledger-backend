@@ -9,7 +9,7 @@ import ShopifyConnection from '../models/ShopifyConnection.js';
 import ShopifyInstall from '../models/ShopifyInstall.js';
 import { getShopify } from '../controllers/shopifyController.js';
 import { decryptSecret, encryptSecret } from '../utils/secretBox.js';
-import { graphql } from '../utils/shopify/client.js';
+import { graphql, shopifyDeps } from '../utils/shopify/client.js';
 import { syncConnection } from '../utils/shopify/sync.js';
 import {
   beginInstall,
@@ -140,7 +140,7 @@ test('one click end to end: connected to the business that pressed it, tokens en
   const url = new URL(landed.redirectedTo);
   assert.equal(url.origin + url.pathname, 'https://test-shop.myshopify.com/admin/oauth/authorize');
   assert.equal(url.searchParams.get('client_id'), ENV.SHOPIFY_API_KEY);
-  assert.equal(url.searchParams.get('scope'), 'read_orders,read_customers');
+  assert.equal(url.searchParams.get('scope'), 'read_orders,read_customers,read_products');
   assert.equal(
     url.searchParams.get('redirect_uri'),
     'https://api.test/api/v1/integrations/shopify/oauth/callback'
@@ -163,7 +163,7 @@ test('one click end to end: connected to the business that pressed it, tokens en
   assert.equal(saved.shop, 'test-shop');
   assert.equal(saved.shopName, 'Test Store');
   assert.equal(saved.isActive, true);
-  assert.equal(saved.scopes, 'read_orders,read_customers');
+  assert.equal(saved.scopes, 'read_orders,read_customers,read_products');
   assert.equal(saved.clientId, undefined, 'no keys are involved');
   assert.match(saved.accessTokenEnc, /^v1:/);
   assert.equal(decryptSecret(saved.accessTokenEnc), 'at_1');
@@ -598,7 +598,7 @@ test('the big button is offered only when there is an install link; typing the a
 });
 
 test('a store that allowed orders but not customers is refused — the customer on an order needs both', async () => {
-  fakeShopify({ grantedScope: 'read_orders' });
+  fakeShopify({ grantedScope: 'read_orders,read_products' });
   const state = stateOf(await install({ cookie: (await press()).cookie }));
   assert.equal(reasonOf(await callback(state)), 'denied');
   assert.equal(await connections(), 0);
@@ -612,4 +612,35 @@ test('the order query asks for the customer’s name and phone, and the shipping
   assert.ok(/customer\s*\{[^}]*firstName[^}]*lastName[^}]*phone/.test(fake.ordersQuery));
   assert.ok(/shippingAddress\s*\{[^}]*name[^}]*phone[^}]*address1[^}]*city/.test(fake.ordersQuery));
   assert.ok(!/email/.test(fake.ordersQuery), 'no email (protected data B Ledger does not use)');
+});
+
+test('a store that did not allow products is refused — an order line needs them to be tied to a stock item', async () => {
+  fakeShopify({ grantedScope: 'read_orders,read_customers' });
+  const state = stateOf(await install({ cookie: (await press()).cookie }));
+  assert.equal(reasonOf(await callback(state)), 'denied');
+  assert.equal(await connections(), 0);
+});
+
+test('every refused field is reported at once, with the permission each needs', async () => {
+  const conn = await oauthConnection({ tokenExpiresAt: new Date(Date.now() + 3_000_000) });
+  shopifyDeps.fetchImpl = async () =>
+    new Response(
+      JSON.stringify({
+        errors: [
+          {
+            message: 'Access denied for variant field.',
+            extensions: { requiredAccess: '`read_products` access scope.' }
+          },
+          {
+            message: 'Access denied for customer field.',
+            extensions: { requiredAccess: '`read_customers` access scope.' }
+          }
+        ]
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  await assert.rejects(
+    graphql(conn, '{ shop { name } }'),
+    /needs: `read_products` access scope\. `read_customers` access scope\./
+  );
 });

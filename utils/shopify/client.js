@@ -251,8 +251,18 @@ export const graphql = async (connection, query, variables = {}) => {
     throw new ShopifyError('Shopify is busy. It will be tried again shortly.', { retryable: true });
   }
   if (!res.ok || body.errors?.length) {
+    // Shopify lists EVERY refused field in one answer: say them all, with the permission each needs, so a missing permission is
+    // fixed once instead of one error at a time.
+    const needs = [
+      ...new Set((body.errors ?? []).map(e => e.extensions?.requiredAccess).filter(Boolean))
+    ];
     const first = body.errors?.[0]?.message ?? `HTTP ${res.status}`;
-    throw new ShopifyError(`Shopify said: ${first}`, { status: 502 });
+    throw new ShopifyError(
+      needs.length > 1
+        ? `Shopify refused this app some fields. It needs: ${needs.join(' ')}`
+        : `Shopify said: ${first}`,
+      { status: 502 }
+    );
   }
   return body.data;
 };
