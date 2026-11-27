@@ -117,7 +117,7 @@ export const valueOf = picked => ({
   costPaisa: picked.reduce((s, p) => s + toPaisa(p.item.unitCost) * p.quantity, 0)
 });
 
-const wordsOf = picked =>
+export const wordsOf = picked =>
   picked
     .map(
       ({ item, quantity }) =>

@@ -23,7 +23,16 @@ import { orderSummary } from '../utils/orderSummary.js';
 import { refreshBusinessParcels, refreshParcel } from '../utils/courierSync.js';
 import { assertNotBlocked } from '../utils/customerBlock.js';
 import { airwayBillsFor } from '../utils/airwayBills.js';
-import { partialReturn } from '../utils/partialReturn.js';
+import {
+  assertPartlyReturnable,
+  coversWholeOrder,
+  creditPieces,
+  partialReturn,
+  pickLines,
+  takeBackPieces,
+  valueOf,
+  wordsOf
+} from '../utils/partialReturn.js';
 import {
   buildTimeline,
   itemsSummary,
@@ -64,13 +73,18 @@ import {
   convertSaleToCredit,
   receiveReturnedGoods,
   creditForReplacement,
-  markCreditMoved
+  markCreditMoved,
+  markPartialCreditMoved,
+  partialCreditFor,
+  pendingExchangeRows
 } from '../utils/exchange.js';
 import {
   applyExchangeKeep,
   exchangeKeep,
+  recordExtraDeliveryIncome,
   settleCourierCosts,
-  undoExchangeCosts
+  undoExchangeCosts,
+  waiveExchangeCosts
 } from '../utils/courierCosts.js';
 import {
   ORDER_STATUS,
@@ -616,7 +630,7 @@ const bookReturnCharge = async (order, returnCharge, userId) => {
  * Stock is reserved first, then `beforeCreate` runs (a swap turns the sale into
  * credit there); if anything fails the stock is given back and that step undone.
  */
-const makeReplacement = async (original, body, userId, beforeCreate) => {
+const makeReplacement = async (original, body, userId, beforeCreate, { partial = false } = {}) => {
   const { items = [], customWork = [], courier } = body;
   const business = original.business;
   // The replacement inherits the original's courier unless a new one is chosen.
@@ -630,7 +644,10 @@ const makeReplacement = async (original, body, userId, beforeCreate) => {
   let undo;
   try {
     undo = beforeCreate ? await beforeCreate() : null;
-    const credit = creditForReplacement(original, userId);
+    // A partial exchange carries only the credit of the items that came back; a whole one, everything held.
+    const credit = partial
+      ? partialCreditFor(original, userId)
+      : creditForReplacement(original, userId);
     const replacement = await Order.create({
       business,
       customer: original.customer,
@@ -649,14 +666,26 @@ const makeReplacement = async (original, body, userId, beforeCreate) => {
       exchangeCostRule: EXCHANGE_COST_RULE.NEW_PARCEL,
       createdBy: userId
     });
-    markCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
+    if (partial) markPartialCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
+    else markCreditMoved(original, replacement, credit?.amountPaisa ?? 0, userId);
     // The customer pays the new parcel's courier cost: kept back from the credit now, so the COD carries it.
     const keep = await exchangeKeep(original, {
       newTotalPaisa: toPaisa(replacement.total),
       creditPaisa: credit?.amountPaisa ?? 0,
-      isSwap: Boolean(body.isSwap)
+      isSwap: Boolean(body.isSwap),
+      freeCourier: Boolean(body.freeCourier)
     });
-    if (keep.owes) await applyExchangeKeep(replacement, keep, userId);
+    if (body.freeCourier) {
+      // The shop pays the courier: nothing is kept now and nothing comes off a later payout.
+      logActivity(
+        replacement,
+        { id: userId },
+        { kind: 'cost', text: `Delivery made free — ${body.freeReason}` }
+      );
+      await waiveExchangeCosts(replacement, body.freeReason, userId);
+    } else if (keep.owes) {
+      await applyExchangeKeep(replacement, keep, userId);
+    }
     return replacement;
   } catch (err) {
     await releaseStock(newItems);
@@ -673,6 +702,30 @@ const makeReplacement = async (original, body, userId, beforeCreate) => {
  */
 export const exchangeReturn = asyncHandler(async (req, res) => {
   const original = req.resource;
+
+  // Only SOME items come back: their price becomes the credit, the rest of the order is kept and stays Delivered.
+  if (req.body.lines?.length) {
+    assertPartlyReturnable(original);
+    const picked = pickLines(original, req.body.lines);
+    if (!coversWholeOrder(original, picked)) {
+      const { amountPaisa } = await creditPieces(original, picked, {
+        userId: req.user.id,
+        forExchange: true,
+        returnBy: 'customer',
+        returnCourierName: req.body.returnCourierName,
+        reversalTrackingId: req.body.reversalTrackingId,
+        note: req.body.note
+      });
+      await takeBackPieces(original, picked, req.user.id);
+      logActivity(original, req.user, {
+        kind: 'money',
+        text: `Exchange: ${wordsOf(picked)} sent back — ${rupees(fromPaisa(amountPaisa))} credit for the replacement`
+      });
+      await original.save();
+      return res.status(200).json({ success: true, data: original });
+    }
+  }
+
   assertExchangeable(original);
 
   await convertSaleToCredit(original, req.user.id);
@@ -732,20 +785,47 @@ export const getExchangeQuote = asyncHandler(async (req, res, next) => {
     return next(new ErrorResponse('Give the replacement total', 400));
   }
   // A delivered original still holds its COD as cash; once returned it is already credit on the order.
-  const creditPaisa =
+  let creditPaisa =
     heldPaisaOf(original) +
     (original.status === ORDER_STATUS.DELIVERED ? toPaisa(original.codAmount) : 0);
+  // Only some items exchanged: the credit is just their price (`lines=<lineId>:<qty>,…`).
+  let isPartial = false;
+  if (req.query.lines) {
+    const asked = String(req.query.lines)
+      .split(',')
+      .filter(Boolean)
+      .map(part => {
+        const [line, quantity] = part.split(':');
+        return { line, quantity: Number(quantity) };
+      });
+    if (asked.some(a => !a.line || !Number.isInteger(a.quantity) || a.quantity < 1)) {
+      return next(new ErrorResponse('Choose which items, and how many of each', 400));
+    }
+    const picked = pickLines(original, asked);
+    if (!coversWholeOrder(original, picked)) {
+      isPartial = true;
+      creditPaisa = valueOf(picked).amountPaisa;
+    }
+  } else if (original.status === ORDER_STATUS.DELIVERED && pendingExchangeRows(original).length) {
+    // The items are already back (return first): the credit waiting for this replacement.
+    isPartial = true;
+    creditPaisa = pendingExchangeRows(original).reduce((sum, r) => sum + r.amountPaisa, 0);
+  }
   const isSwap = req.query.swap === 'true';
+  const free = req.query.free === 'true';
   const keep = await exchangeKeep(original, {
     newTotalPaisa: toPaisa(total),
     creditPaisa,
-    isSwap
+    isSwap,
+    freeCourier: free
   });
   res.status(200).json({
     success: true,
     data: {
       owes: keep.owes,
       isSwap,
+      isPartial,
+      free,
       credit: fromPaisa(creditPaisa),
       difference: fromPaisa(keep.diffPaisa),
       cod: fromPaisa(keep.codPaisa),
@@ -811,14 +891,19 @@ export const partialReturnOrder = asyncHandler(async (req, res) => {
  */
 export const createReplacement = asyncHandler(async (req, res, next) => {
   const original = req.resource;
-  if (original.status !== ORDER_STATUS.EXCHANGED) {
+  // Some items of a delivered order came back for an exchange and nothing has carried their credit yet.
+  const partial =
+    original.status === ORDER_STATUS.DELIVERED && pendingExchangeRows(original).length > 0;
+  if (!partial && original.status !== ORDER_STATUS.EXCHANGED) {
     return next(new ErrorResponse('Record the item coming back first', 400));
   }
-  if (original.exchangedFor) {
+  if (!partial && original.exchangedFor) {
     return next(new ErrorResponse('A replacement was already sent for this order', 400));
   }
 
-  const replacement = await makeReplacement(original, req.body, req.user.id);
+  const replacement = await makeReplacement(original, req.body, req.user.id, undefined, {
+    partial
+  });
   await original.save();
   res.status(201).json({ success: true, data: replacement });
 });
@@ -832,27 +917,54 @@ export const createReplacement = asyncHandler(async (req, res, next) => {
  */
 export const swapOrder = asyncHandler(async (req, res, next) => {
   const original = req.resource;
-  assertExchangeable(original);
+
+  // Only some items are swapped: their price is the credit, the rest of the order is kept (and stays Delivered).
+  let picked = null;
+  if (req.body.lines?.length) {
+    assertPartlyReturnable(original);
+    const candidate = pickLines(original, req.body.lines);
+    if (!coversWholeOrder(original, candidate)) picked = candidate;
+  }
+  if (!picked) assertExchangeable(original);
 
   // The rider swaps at the door and collects nothing: whatever the replacement
   // costs beyond the customer's credit is paid to us directly, before it goes.
-  const credit = heldPaisaOf(original) + toPaisa(original.codAmount);
+  const credit = picked
+    ? valueOf(picked).amountPaisa
+    : heldPaisaOf(original) + toPaisa(original.codAmount);
   const newTotal =
     (await buildLineItems(original.business, req.body.items)).reduce(
       (s, i) => s + toPaisa(i.unitPrice) * i.quantity,
       0
     ) + (req.body.customWork || []).reduce((s, w) => s + toPaisa(w.price), 0);
-  // What the customer pays directly: the price difference plus the new parcel's courier cost.
-  const { owes, basePaisa: differencePaisa } = await exchangeKeep(original, {
+  // What the customer pays directly: the price difference plus the new parcel's courier cost (none when it is free).
+  const { owes, basePaisa: duePaisa } = await exchangeKeep(original, {
     newTotalPaisa: newTotal,
     creditPaisa: credit,
-    isSwap: true
+    isSwap: true,
+    freeCourier: Boolean(req.body.freeCourier)
   });
+  const paysPaisa = owes ? duePaisa : 0;
+  // What was actually handed over: at least what is due. The extra is the shop's (delivery income).
+  const receivedPaisa =
+    req.body.amountReceived === undefined ? paysPaisa : toPaisa(req.body.amountReceived);
+  if (!owes && receivedPaisa > 0) {
+    return next(new ErrorResponse('Nothing is due on this swap — the customer is owed money', 400));
+  }
+  if (owes && receivedPaisa < paysPaisa) {
+    return next(
+      new ErrorResponse(
+        `Rs ${fromPaisa(receivedPaisa)} is less than the Rs ${fromPaisa(paysPaisa)} due — choose Free delivery if the shop pays the courier`,
+        400
+      )
+    );
+  }
+  const extraPaisa = receivedPaisa - paysPaisa;
   const differenceMoney =
-    owes && req.body.differenceAccount
+    receivedPaisa > 0 && req.body.differenceAccount
       ? await resolveMoney(original.business, { account: req.body.differenceAccount }, req.user)
       : null;
-  if (owes && !differenceMoney) {
+  if (receivedPaisa > 0 && !differenceMoney) {
     return next(
       new ErrorResponse(
         'The customer pays the difference and the courier costs to you directly — choose where it came in',
@@ -865,25 +977,69 @@ export const swapOrder = asyncHandler(async (req, res, next) => {
   const body = { ...req.body, courier: undefined, isSwap: true };
   // The sale turns into credit only once the replacement stock is reserved, so
   // a shortfall leaves the original untouched.
-  const replacement = await makeReplacement(original, body, req.user.id, async () => {
-    const entry = await convertSaleToCredit(original, req.user.id);
-    return entry
-      ? () => reverseEntry(entry._id, { userId: req.user.id, memo: 'Swap not completed' })
-      : null;
-  });
+  const replacement = await makeReplacement(
+    original,
+    body,
+    req.user.id,
+    async () => {
+      if (picked) {
+        // Some items: credit them now; their stock returns when the old item arrives (`receive-return`).
+        const moneyRows = original.customerMoney.length;
+        const itemRows = original.returnedItems.length;
+        const { entry } = await creditPieces(original, picked, {
+          userId: req.user.id,
+          forExchange: true,
+          stockPending: true,
+          returnBy: 'us',
+          reversalTrackingId: req.body.reversalTrackingId,
+          note: req.body.note
+        });
+        return () => {
+          original.customerMoney.splice(moneyRows);
+          original.returnedItems.splice(itemRows);
+          original.returnedPieces = original.returnedItems.reduce((n, r) => n + r.quantity, 0);
+          return reverseEntry(entry._id, { userId: req.user.id, memo: 'Swap not completed' });
+        };
+      }
+      const entry = await convertSaleToCredit(original, req.user.id);
+      return entry
+        ? () => reverseEntry(entry._id, { userId: req.user.id, memo: 'Swap not completed' })
+        : null;
+    },
+    { partial: Boolean(picked) }
+  );
   original.awaitingReturn = true;
   if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
   original.$locals.statusNote = req.body.note;
+  if (picked) {
+    logActivity(original, req.user, {
+      kind: 'money',
+      text: `Swap: ${wordsOf(picked)} to come back — replaced by #${replacement.orderNumber}`
+    });
+  }
   await original.save();
 
-  // The difference, paid in directly: an advance on the replacement, so its COD is 0.
-  if (differenceMoney) {
+  // What is due, paid in directly: an advance on the replacement, so its COD is 0.
+  if (paysPaisa > 0) {
     await recordAdvance(replacement, {
-      amount: fromPaisa(differencePaisa),
+      amount: fromPaisa(paysPaisa),
       money: differenceMoney,
       note: 'difference for the swap',
       userId: req.user.id
     });
+  }
+  // Anything beyond the courier's cost is the shop's — delivery income, not the customer's credit.
+  if (extraPaisa > 0) {
+    await recordExtraDeliveryIncome(replacement, {
+      extraPaisa,
+      money: differenceMoney,
+      userId: req.user.id
+    });
+    logActivity(replacement, req.user, {
+      kind: 'money',
+      text: `Extra delivery charge ${rupees(fromPaisa(extraPaisa))} kept by the shop`
+    });
+    await replacement.save();
   }
 
   res.status(201).json({ success: true, data: replacement });
@@ -898,7 +1054,19 @@ export const receiveReturn = asyncHandler(async (req, res, next) => {
   if (!original.awaitingReturn) {
     return next(new ErrorResponse('This order is not waiting for an item to come back', 400));
   }
-  await receiveReturnedGoods(original, req.user.id);
+  // A swap of SOME items: only those pieces go back on the shelf. Otherwise the whole order comes back.
+  const pending = (original.returnedItems ?? []).filter(r => r.stockPending);
+  if (pending.length) {
+    await takeBackPieces(
+      original,
+      pending.map(r => ({ item: original.items.id(r.line), quantity: r.quantity })),
+      req.user.id
+    );
+    for (const row of pending) row.stockPending = undefined;
+    original.awaitingReturn = false;
+  } else {
+    await receiveReturnedGoods(original, req.user.id);
+  }
   await bookReturnCharge(original, req.body.returnCharge, req.user.id);
   if (req.body.reversalTrackingId) original.reversalTrackingId = req.body.reversalTrackingId;
   original.updatedBy = req.user.id;

@@ -607,6 +607,8 @@ router.get('/:id/refund-quote', can('orders', 'read'), loadScoped(Order), getRef
  *       - { in: path, name: id, required: true, schema: { type: string } }
  *       - { in: query, name: total, required: true, schema: { type: number }, description: The replacement's total (rupees) }
  *       - { in: query, name: swap, schema: { type: boolean }, description: A swap at the door (no COD) }
+ *       - { in: query, name: lines, schema: { type: string }, description: "Only some items: <lineId>:<qty>,… — the credit is just their price" }
+ *       - { in: query, name: free, schema: { type: boolean }, description: The shop pays the courier (the customer owes only the difference) }
  *     responses:
  *       200: { description: Whether they owe (COD or paid directly) or are owed, the cost lines, the estimate }
  * /orders/{id}/courier-costs/waive:
@@ -703,6 +705,9 @@ router.post(
  *       The original's sale becomes the customer's credit, which the replacement
  *       carries (its COD is the price difference). The old item comes back on the
  *       courier's reversal tracking number; its stock returns on receive-return.
+ *       Body may carry `lines` (only some items are swapped; the rest is kept and stays Delivered),
+ *       `amountReceived` (what the customer handed over — at least what is due; the extra is the shop's
+ *       delivery income) and `freeCourier` + `freeReason` (the shop pays the courier).
  *     tags: [Orders]
  *     security: [{ bearerAuth: [] }]
  *     parameters: [{ in: path, name: id, required: true, schema: { type: string } }]

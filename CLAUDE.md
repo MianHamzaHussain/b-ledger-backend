@@ -593,6 +593,27 @@ charged again (owner's rule, 2026-11-26; before it, both parcels were charged).
     the old item is received.
   - `awaitingReturn` stays set until the old item is received.
 - **Counter sales** aren't exchanged here — only courier parcels.
+- **Exchanging only SOME items** (Round 16 — order #0204 had two items and the customer swapped one). `exchange-return`,
+  `swap` and `exchange-quote` take `lines` (`[{ line, quantity }]`, quote: `lines=<lineId>:<qty>,…`). Left out, or covering
+  every piece of an order nothing has gone back from, it is the whole-order flow above, unchanged. Otherwise:
+  - the order stays **Delivered** and `exchangedFor` is **not** set (it means the whole order was swapped); the swapped
+    pieces' price — only theirs — becomes the credit (`creditPieces`: Dr Sales / Cr Advances, a `transfer-in` row, and
+    `returnedItems` rows with `forExchange`). The rest was kept and stays sold;
+  - **return first**: stock returns at once (`takeBackPieces`); the rows wait for a replacement
+    (`pendingExchangeRows`). `exchange-replacement` is allowed on a Delivered order that has pending rows, carries exactly
+    their credit (`partialCreditFor`) and a `transfer-out` on the original (`markPartialCreditMoved`) points each row at it;
+  - **swap**: the credit is posted at once and the rows are `stockPending`; `receive-return` then puts only those pieces
+    back on the shelf (`takeBackPieces`). If creating the replacement fails the credit entry and rows are undone;
+  - the rest can be exchanged later (even every remaining piece); a line can't go back more than is left.
+    `partialReturn` (a refund of some items) is the same steps (`pickLines`, `creditPieces`, `takeBackPieces`), unchanged.
+- **What a swap customer pays** (`swap`, Round 16). Due = price difference + the new parcel's cost (`exchangeKeep`). The
+  customer hands over `amountReceived` (default: exactly what is due; **at least** what is due, else 400). What is due is an
+  advance on the replacement, so its COD stays 0; **anything beyond it is the shop's** — Dr the money account / Cr **Delivery
+  charged to customers (4200)** (`recordExtraDeliveryIncome`), never an advance, so the replacement still reads as paid
+  exactly its price. (If that replacement is later cancelled the extra is not refunded automatically — a person does it.)
+  **Free delivery** (`freeCourier` + a required `freeReason`, swap and replacement): the shop pays the courier — the new
+  parcel's cost is 0 for the customer (a return-first COD is the plain difference, nothing grossed up) and the replacement's
+  costs are waived (`waiveExchangeCosts`), so no payout is ever reduced by them; the reason is on the timeline.
 
 ### 10.2b-3 The courier's costs are recovered (`utils/courierCosts.js`)
 
