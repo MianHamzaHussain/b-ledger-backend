@@ -31,7 +31,7 @@ const PARTY_ACCOUNT = {
  * unpaid goods, COD a courier still held, an advance a worker had); otherwise the
  * business owed them (a supplier's unpaid bill, salary due, a loan).
  */
-export const recordPartyOpening = async (party, { owesUs, amountPaisa, date, userId }) => {
+export const recordPartyOpening = async (party, { owesUs, amountPaisa, date, note, userId }) => {
   const code = PARTY_ACCOUNT[party.type];
   if (!code) throw new ErrorResponse('This kind of person has no opening balance', 400);
   if (party.type === PARTY_TYPES.LENDER && owesUs) {
@@ -40,7 +40,9 @@ export const recordPartyOpening = async (party, { owesUs, amountPaisa, date, use
   await ensureChart(party.business);
   const own = (await accountByCode(party.business, code))._id;
   const opening = (await accountByCode(party.business, CODES.OPENING_BALANCES))._id;
-  const label = owesUs ? `Opening — ${party.name} owed us` : `Opening — we owed ${party.name}`;
+  const base = owesUs ? `Opening — ${party.name} owed us` : `Opening — we owed ${party.name}`;
+  // The note says what it was for, so the Khata row explains itself.
+  const label = note ? `${base} — ${note}` : base;
   const theirs = { account: own, party: party._id, label };
   return postEntry({
     business: party.business,

@@ -49,7 +49,9 @@ export const partyOpeningSchema = z.object({
   amount: z.coerce
     .number({ error: 'Enter an amount' })
     .positive('Enter an amount greater than zero'),
-  date: z.union([z.string(), z.date()]).optional()
+  date: z.union([z.string(), z.date()]).optional(),
+  /** What it was for — shown on their Khata beside the amount. */
+  note: z.string().trim().max(120, 'Keep the note under 120 characters').optional()
 });
 
 export const partyTransactionSchema = z

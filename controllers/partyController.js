@@ -204,6 +204,7 @@ export const recordPartyOpeningBalance = asyncHandler(async (req, res) => {
     owesUs: req.body.owesUs,
     amountPaisa: toPaisa(req.body.amount),
     date: req.body.date,
+    note: req.body.note,
     userId: req.user.id
   });
   res.status(201).json({ success: true, data: entry });

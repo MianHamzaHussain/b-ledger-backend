@@ -797,7 +797,7 @@ What the business already had and owed the day it starts on B Ledger. It was
 earned or spent before, so it never moves cash or this period's profit. Every
 opening posts against **Opening balances (3200, equity)**:
 
-- **Khata** (`POST /parties/:id/opening`, `owesUs`): the person's own running
+- **Khata** (`POST /parties/:id/opening`, `owesUs`, optional `note` ≤ 120 — what it was for, on the memo and the Khata row): the person's own running
   account against 3200.
   - Accounts by type: supplier → AP, reseller/customer → AR, employee →
     Salaries payable, courier → COD receivable, lender → Loan payable.
