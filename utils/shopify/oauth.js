@@ -41,10 +41,14 @@ export const isConfigured = () => {
 };
 
 /**
- * What B Ledger asks the store to allow: it reads orders (`read_orders`) and the customer on them (`read_customers` — Shopify guards
- * the order's `customer` object with it). It writes nothing. Both are required: a store that grants less is refused.
+ * What B Ledger asks the store to allow. It reads, and writes nothing. Each permission is there because the order query was REFUSED
+ * without it (checked against a real store with `shopify app execute`, 2026-11-27 — Shopify lists every refused field at once):
+ *   read_orders     the orders themselves
+ *   read_customers  the order's `customer` object (first and last name, phone)
+ *   read_products   a line item's `variant` and `product` — the ids that tie an order line to a stock item
+ * All three are required: a store that grants less is refused, so no store connects and then fails on its first order.
  */
-export const DEFAULT_SCOPES = 'read_orders,read_customers';
+export const DEFAULT_SCOPES = 'read_orders,read_customers,read_products';
 export const scopes = () => String(process.env.SHOPIFY_SCOPES || DEFAULT_SCOPES).trim();
 
 /** The address Shopify sends the browser back to — it must match the one in the app's settings exactly. */
