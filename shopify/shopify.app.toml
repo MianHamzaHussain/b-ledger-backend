@@ -1,11 +1,11 @@
 # B Ledger's Shopify app — the settings Shopify keeps for it. Deployed by the owner with the Shopify CLI (`shopify app deploy`),
 # never by the server. There are NO secrets here: the Client ID is public, and the Client secret stays in the server's .env.
 #
-# Replace the two https://backend.bledger.org addresses and `client_id` with your own before the first deploy (README →
-# "Connect Shopify with one click — the Shopify app"). If you change a path here, change the route in routes/shopify.js too.
+# The Client ID below is B Ledger's public app (it is not secret). If you change an address or a path here, change the route in
+# routes/shopify.js too, and deploy again with `shopify app deploy`. See README → "Connect Shopify with one click — the Shopify app".
 
 name = "B Ledger"
-client_id = "PASTE-THE-CLIENT-ID-FROM-THE-DEV-DASHBOARD"
+client_id = "9077e6ccb49ef49a6714b8509aea9e81"
 
 # Shopify sends the browser here when someone presses Install. The app runs on its own site, not inside the Shopify admin.
 application_url = "https://backend.bledger.org/api/v1/integrations/shopify/install"
@@ -23,7 +23,7 @@ redirect_urls = [
 ]
 
 [webhooks]
-api_version = "2026-07"
+api_version = "2026-10"
 
   # An order was placed: B Ledger asks the store what is new.
   [[webhooks.subscriptions]]
