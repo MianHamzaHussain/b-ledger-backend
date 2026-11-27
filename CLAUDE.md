@@ -1068,7 +1068,7 @@ delivered · cancelled · unknown`. **PostEx is read code first, words second**,
     (not yet confirmed): its lines are added, its Shopify number is appended (`51486+51487`), the timeline says so and a "New Shopify order added to #…"
     notification is raised. `Order.shopifyOrderIds` is every Shopify order an order was made from (and what stops a repeat). Sending the status back to Shopify
     is **not built yet**. The same phone the same day to a _different_ address is never merged (a wrong merge ships to the wrong house); the new
-    order's note says "Same phone as order #… today, but a different address" so the caller asks. `scripts/shopifyProbe.mjs` was a throwaway; delete it.
+    order's note says "Same phone as order #… today, but a different address" so the caller asks.
   - **Order status `created` (Round 11).** `ORDER_STATUS.CREATED` is the first status of every new order; `pending` now means
     "called, no answer" and keeps its old exits (existing `pending` orders were not migrated). `created` holds stock and is editable like
     any status before dispatch (`STOCK_HELD_STATUSES`, `BEFORE_DISPATCH`, `TAKES_ADVANCE`). A cancelled order reopens to `created`; a
