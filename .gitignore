@@ -38,3 +38,6 @@ Thumbs.db
 
 # Safety copies written before a business reset (customer data)
 ops/reset-snapshots/
+
+# Shopify CLI working files (generated; per developer)
+/shopify/.shopify

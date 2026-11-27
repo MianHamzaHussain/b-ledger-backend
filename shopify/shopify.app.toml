@@ -1,41 +1,24 @@
-# B Ledger's Shopify app — the settings Shopify keeps for it. Deployed by the owner with the Shopify CLI (`shopify app deploy`),
-# never by the server. There are NO secrets here: the Client ID is public, and the Client secret stays in the server's .env.
-#
-# The Client ID below is B Ledger's public app (it is not secret). If you change an address or a path here, change the route in
-# routes/shopify.js too, and deploy again with `shopify app deploy`. See README → "Connect Shopify with one click — the Shopify app".
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-name = "B Ledger"
 client_id = "9077e6ccb49ef49a6714b8509aea9e81"
-
-# Shopify sends the browser here when someone presses Install. The app runs on its own site, not inside the Shopify admin.
+name = "B Ledger"
 application_url = "https://backend.bledger.org/api/v1/integrations/shopify/install"
 embedded = false
 
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  uri = "https://backend.bledger.org/api/v1/integrations/shopify/webhooks"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+  topics = [ "orders/create", "app/uninstalled" ]
+
 [access_scopes]
-# B Ledger only READS orders. It writes nothing to the store.
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_orders"
-# We run Shopify's authorization-code flow ourselves (the app is not embedded), so Shopify's managed install is off.
-use_legacy_install_flow = true
+optional_scopes = [ ]
 
 [auth]
 redirect_urls = [
   "https://backend.bledger.org/api/v1/integrations/shopify/oauth/callback"
 ]
-
-[webhooks]
-api_version = "2026-10"
-
-  # An order was placed: B Ledger asks the store what is new.
-  [[webhooks.subscriptions]]
-  topics = ["orders/create"]
-  uri = "https://backend.bledger.org/api/v1/integrations/shopify/webhooks"
-
-  # The owner removed the app: the connection stops and the business is told.
-  [[webhooks.subscriptions]]
-  topics = ["app/uninstalled"]
-  uri = "https://backend.bledger.org/api/v1/integrations/shopify/webhooks"
-
-  # Shopify's privacy requests, which every public app must answer.
-  [[webhooks.subscriptions]]
-  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
-  uri = "https://backend.bledger.org/api/v1/integrations/shopify/webhooks"
